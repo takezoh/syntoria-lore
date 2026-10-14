@@ -21,9 +21,9 @@ Thymesis は、複数の Personal AI が長期にわたり知識・意思決定�
 
 ## 採用アーキテクチャ（設計ベースライン）
 
-Cloudflare Workers / TypeScript + Neon PostgreSQL（pgvector, pg_trgm）+ Cloudflare Queues / Cron + 交換可能な LLM Curator。MCP は REST サービスへの薄いアダプターとする。独立した Graph DB / Vector DB は採用しない。
+**GCP Cloud Run（TypeScript/Node.js API + private Curator）+ Cloud Tasks + Cloud Scheduler + Neon PostgreSQL（pgvector, pg_trgm）**。大量・長時間再処理ではCloud Run Jobsを条件付きで利用する。LLM Curatorは交換可能、MCPはRESTへの薄いアダプター。独立したGraph DB / Vector DBは採用しない。
 
-詳細な選定理由・制約・検証条件は [ARCHITECTURE.md](ARCHITECTURE.md) に記載する。
+詳細な選定理由・制約・検証条件は [ARCHITECTURE.md](ARCHITECTURE.md) と [ADR-0001: GCP + Neon採用](docs/adr/0001-gcp-cloud-run-neon.md) に記載する。
 
 ## ステータス
 

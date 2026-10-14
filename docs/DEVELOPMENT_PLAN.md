@@ -3,6 +3,8 @@
 - Version: 1.0
 - Date: 2026-10-14
 - Status: **Ready for implementation; no tasks yet executed**
+- Infrastructure baseline: GCP Cloud Run / Cloud Tasks / Cloud Scheduler + Neon PostgreSQL
+- Architecture decision: [ADR-0001](adr/0001-gcp-cloud-run-neon.md)
 - Product requirements: [../PRODUCT.md](../PRODUCT.md)
 - Architecture: [../ARCHITECTURE.md](../ARCHITECTURE.md)
 
@@ -10,7 +12,7 @@
 
 **Goal:** 独立した長期記憶サービスThymesisを、Personal AIの実利用に供する。会話・資料・経験の取り込み、自動整理、根拠付き想起、訂正、差分取得、忘却、復旧までを一貫して実装する。
 
-**Not a technology evaluation project.** PostgreSQL/Workers/Queues/pgvectorを採用ベースラインとし、各段階で利用価値のある縦断経路を完成させる。未実装の部分を「完了」に見せない。技術比較を無期限に繰り返さない。
+**Not a technology evaluation project.** **GCP Cloud Run + Cloud Tasks + Cloud Scheduler + Neon PostgreSQL（pgvector/pg_trgm）**を採用ベースラインとし、各段階で利用価値のある縦断経路を完成させる。未実装の部分を「完了」に見せない。インフラの選定理由は[ADR-0001](adr/0001-gcp-cloud-run-neon.md)を正とし、比較PoCを無期限に繰り返さない。
 
 Release 1のDoneは **PRODUCT.md のFR群とAC-01～13の達成**。Phase 1完成を製品完成と呼ばない。設計段階では決めた契約をOpenAPI/DDL/テストへ落とし込み、変更には根拠付きADRを要求する。
 
@@ -69,7 +71,7 @@ thymesis/
     eval/
   apps/
     api/               # REST & MCP read/write entrypoints
-    worker/            # Queue consumers, scheduled handlers
+    worker/            # private Cloud Run Tasks consumer / scheduler handlers
   packages/
     contracts/         # schemas, error codes, generated types
     domain/            # policy, memory semantics, ChangeSet
@@ -78,7 +80,7 @@ thymesis/
     recall/            # hybrid retrieval + context pack
     connectors/        # optional, permissioned sources
     observability/
-  infra/               # wrangler, Neon, secrets/config templates
+  infra/               # Terraform or declarative GCP/Neon, IAM, secrets/config templates
   tests/
     unit/
     integration/
@@ -91,8 +93,11 @@ thymesis/
 Technology guidelines:
 - TypeScript strict mode、monorepo package workspaces、Vitest、ESLint/formatter、OpenAPI型生成、JSON Schema/Zod等の厳密バリデーション。
 - Drizzle等の型付きクエリ/マイグレーションを基準とし、pgvector・pg_trgm・RLSなどはレビュー可能な明示SQLを併用。すべての動的値をパラメータ化。
-- Local PostgreSQL (Docker) + Cloudflare Worker local emulation。CIで実際のPostgreSQLに対してmigration/RLS/transactionを試す。SQLite代替では認可・並列制御を評価しない。
+- Local PostgreSQL (Docker) + Node.js Cloud Run同等のHTTPサーバー + Cloud Tasks/Scheduler stub + fake LLM。CIで実際のPostgreSQLに対してmigration/RLS/transactionを試す。SQLite代替では認可・並列制御を評価しない。Google IAM/OIDCはstagingで実結合試験する。
 - CIから本番データを読ませない。テスト用の架空データと匿名化された実例だけを用いる。
+- Dev/Staging/Prodは環境単位で分離し、Cloud Runの公開APIと非公開Worker/Dispatcherを独立デプロイする。Tasks/Schedulerの呼出しはService Account OIDC+IAM、Neon資格情報はSecret Managerで管理する。
+- Cloud Tasks HTTPリクエストの最大期限は30分。長い処理はcheckpoint分割またはCloud Run Jobsに委任し、状態をDBに保存する。
+- **Cloud TasksにネイティブDLQがあると仮定しない**。失敗ジョブ、次回リトライ時刻、attempt数をPostgreSQLで追跡し、Schedulerで回収する。
 
 ## 3. Epic breakdown (issue-ready)
 
@@ -105,12 +110,14 @@ Dependencies: none.
 | Task | Deliverable / acceptance |
 | --- | --- |
 | **T-001 Repository bootstrap** | packages/appsとWorkspace、TypeScript strict、lint/typecheck/test。README起動手順と環境変数テンプレート |
-| **T-002 Local infrastructure** | PostgreSQL with pgvector/pg_trgm、Queue stub、fake LLM。ワンコマンド起動・停止 |
+| **T-002 Local infrastructure** | PostgreSQL with pgvector/pg_trgm、Cloud Tasks/Scheduler stub、fake LLM、API/WorkerのローカルHTTP実行。ワンコマンド起動・停止 |
 | **T-003 CI quality pipeline** | push/PRで静的検査、ユニット・integration・migration検証、secret scan、依存監査 |
-| **T-004 Environment/deployment** | dev/staging/prod分離、Workers/Neon/Hyperdrive/Queues/Cron構成管理と手順 |
+| **T-004 Environment/deployment** | dev/staging/prod分離、Cloud Run API/Worker、Cloud Tasks、Cloud Scheduler、Neon、Secret Manager、IAM、LoggingのIaCと手順 |
 | **T-005 API contract** | OpenAPI v1、エラー型、request_id、idempotency、cursor、scopeの型定義 |
 | **T-006 ADR and release discipline** | 技術/権限/データ変更を記録するADRテンプレ、migration review、rollback手順 |
 | **T-007 Test fixtures** | 改名/古い方針/相反する主張/経験/PII/攻撃文例を含むfixtureセット |
+| **T-008 Container build and release** | 再現可能なNode.jsコンテナ、Artifact Registry、CIからGCPへの短期認証（Workload Identity Federation）、Cloud Run canary/rollback |
+| **T-009 Internal identity contract** | Cloud Tasks/Schedulerの専用Service Account、OIDC audience、Cloud Run Invoker限定、内部API用負荷と失敗経路の検証 |
 
 **Gate G0:** 本番権限なしでCI green。空DB→最新版schema migration→rollback/restore rehearsalが再現可能。OpenAPIサンプルがschema validationを通る。
 
@@ -124,7 +131,7 @@ Dependencies: EP-00.
 | **T-011 Principals and scopes** | Owner/Principal/Scope/Grantとtoken capabilityを設計、read/write/adminを分離 |
 | **T-012 App authorization** | すべてのエンドポイントでOwner×Scope×Operation×Source rightsの検査 |
 | **T-013 PostgreSQL RLS** | RLS enable、最小権限ロール、SET LOCAL transaction context、pool leak回帰試験 |
-| **T-014 Audit and abuse controls** | 秘密を残さない監査、rate limit、request size limit、認証エラー監視 |
+| **T-014 Audit and abuse controls** | 秘密を残さない監査、rate limit、request size limit、認証エラー監視。GCP service-to-service IAMはOwner権限の代替ではない |
 | **T-015 Threat model** | prompt injection、権限昇格、token forwarding、データ残存、service impersonationを列挙/対策 |
 
 **Acceptance:** 非許可ユーザー/クライアントでの全経路403/404。コネクション再利用後にも前requestのScopeが見えない。Client A/Bの委任範囲が交差しない。
@@ -142,6 +149,7 @@ Dependencies: EP-00, EP-01 for final RLS.
 | **T-024 Provenance model** | Evidence locator、snippet rights、independent source lineage。derived summaryの再証拠化を防止 |
 | **T-025 Data dictionary** | 各カラム、機密性、更新権限、保持期間、Migration strategyを文書化 |
 | **T-026 Migration safety** | Schema変更のforward/backfill/rollback、既存件数100万負荷を想定したロック時間試験 |
+| **T-027 Neon regional and operational fit** | 使用Neonリージョン/ホストとCloud Run配置地域を記録し、RTT・外部転送料金・TLS・pool limit・PITR/backupを測定/確認 |
 
 **Acceptance:** 欠損・cross-scope Relation・不正時刻・削除済み参照などの破壊的変更を制約で拒否。migrationを再適用しても安全。
 
@@ -171,8 +179,9 @@ Dependencies: EP-03.
 | **T-041 Opaque cursor** | tokenにscope集合/offset/auth_epoch/format versionを安全に内包。改竄拒否 |
 | **T-042 Change API** | order/limit/page/next_cursor、削除Tombstone、再試行、Cursor期限切れ処理 |
 | **T-043 Multi-scope sync** | Scopeごとのcursor vector、権限変更時の無効化と再同期 |
-| **T-044 Outbox dispatcher** | DB outboxをQueueへ重複安全に配送、Cronによる取り残し回収 |
+| **T-044 Outbox dispatcher** | PostgreSQL outbox→Cloud Tasks HTTP task（job_idのみ）へ重複安全に配送。Cloud Schedulerが未配送を回収、Cloud Run専用ハンドラはOIDC認証 |
 | **T-045 Index visibility** | committed vs indexed revision、lag中の読み取りフォールバック |
+| **T-046 Dispatcher leasing and recovery** | 複数Dispatcher間のclaim/lease、task送信後のDB更新失敗、cloud task重複作成、rollbackを検証 |
 
 **Acceptance:** 2 writer×大量並列書込/rollback/pagination/reconnectでイベントの欠落・順序逆転がない。削除本文をイベントに載せない。
 
@@ -185,12 +194,12 @@ Dependencies: EP-02, EP-03, EP-04.
 | **T-050 Capture API** | Source metadata、speaker、event time、content locator、consent/scope、job_idを受理 |
 | **T-051 Source adapters contract** | chat/document/tool-result/episodeの共通入力Schema。原本連携は疎結合 |
 | **T-052 Duplicate detection** | source revision+location+content hash+operation IDで重複を吸収 |
-| **T-053 Queue consumer** | accepted/processing/held/committed/failed状態、retry/backoff、DLQ |
+| **T-053 Cloud Tasks consumer** | Private Cloud Run WorkerへOIDC認証付きHTTP taskを配送。accepted/processing/held/committed/failed、DB永続retry/backoff、Task重複時の冪等性 |
 | **T-054 Source access lifecycle** | source revision、ACL失効通知、原本不存在、再取り込み方針 |
 | **T-055 Backfill import** | 旧会話/資料を過去時点として取り込み、現在の方針を上書きしない |
 | **T-056 Provenance/audit** | 原本確認できない場合の扱い、取り込み範囲の明示と追跡 |
 
-**Acceptance:** 3回以上のQueue重複配送でもSource/Observation/Job重複なし。権限なしSourceをインデックス・Recallしない。BackfillでもTemporal correctness維持。
+**Acceptance:** 3回以上のCloud Tasks重複配送でもSource/Observation/Job重複なし。OIDC不正・無権限Invokerを拒否。権限なしSourceをインデックス・Recallしない。BackfillでもTemporal correctness維持。
 
 ### EP-06 — Curator and memory consolidation [G2]
 
@@ -222,7 +231,7 @@ Dependencies: EP-02, EP-03; Curator candidate matching requires this epic's inte
 | **T-073 Hybrid retrieval** | lexical+semantic+structured、重複削除、関連展開、適用時点/根拠の制約 |
 | **T-074 Ranking and budgets** | token budget、重要な根拠とuncertaintyを残すContext Pack |
 | **T-075 Recall modes** | precise/contextual/historical/exploratory/changesの契約とcoverage |
-| **T-076 Fallback/rebuild** | Embed遅延、Provider障害、reindex中でも正本基準で安全に回答 |
+| **T-076 Fallback/rebuild** | Embed遅延、Provider障害、reindex中でもNeon primary正本基準で安全に回答 |
 | **T-077 Retrieval evaluation** | Recall@5、誤採用率、根拠欠落、日本語検索、権限境界の測定 |
 
 **Acceptance:** sync Rememberのindex lag中のRecallが成功、仮説/Contestedを確定情報と混ぜない、権限外候補が検索に入らない。token超過でも根拠を欠落させない。
@@ -280,10 +289,11 @@ Dependencies: EP-04, EP-05, EP-06, EP-07, EP-08.
 | **T-110 Time/expiry triggers** | 記憶の時効・Source revision変化で対象のみ再評価 |
 | **T-111 Periodic review** | stale/contested/unindexed/orphanedの限定巡回、全件LLM再推論を避ける |
 | **T-112 Index repair** | 新旧Embedding generation比較、バックフィル、model migration |
-| **T-113 Queue recovery** | 不達Outbox/DLQ/失敗Jobの再投入と冪等性 |
+| **T-113 Cloud Tasks recovery** | 未配送Outbox/Cloud Tasksリトライ限界/DB失敗Jobの再投入と冪等性。ネイティブDLQに依存しない |
 | **T-114 Feedback loop** | 作業結果から知識の適用条件を改訂候補化。使用頻度≠真実性 |
+| **T-115 Bulk execution policy** | Cloud Tasksの30分期限内で処理を分割・checkpointし、超過するバックフィル/再索引はCloud Run Jobsで実行、進捗DB記録 |
 
-**Acceptance:** Provider停止・Queue失敗・Indexer遅延から正常復帰し、現行Memoryを毀損しない。Cronの再実行でも二重変更なし。
+**Acceptance:** Provider停止・Cloud Tasks失敗・Indexer遅延から正常復帰し、現行Memoryを毀損しない。Cloud Schedulerの再試行/重複呼出しでも二重変更なし。30分超の処理がHTTP taskのタイムアウトで消失しない。
 
 ### EP-12 — Quality harness and evaluation [G2→G4]
 
@@ -322,14 +332,14 @@ Dependencies: All service paths partially functional.
 
 | Task | Deliverable / acceptance |
 | --- | --- |
-| **T-130 Dashboards** | capture queue、curation failures、recall latency、DB/Index lag、purge、scope-denied、cost |
-| **T-131 Tracing/log redaction** | trace_idでAPI→Queue→DBを追跡、PII/秘密/Memory原文をログに出さない |
-| **T-132 Backup/PITR** | 取得・復元、RPO/RTOテスト、忘却再適用 |
-| **T-133 Operational runbooks** | Neon障害、Queue backlog、LLM outage、認証失効、Source revocation、Forget失敗 |
-| **T-134 Cost reporting** | provider別token、embedding、CPU/DB、Queue、storage、backup、月額総費用 |
-| **T-135 Alerts** | error budget、DLQ滞留、Outbox lag、Purge未完了、index divergenceに通知 |
-| **T-136 Load and soak tests** | 100k/500kおよび1m/5m workload（PRODUCT.md）で性能・コスト計測 |
-| **T-137 Security review** | Secrets/permission/RLS/API scope/audit/forgetをチェックし所見を閉じる |
+| **T-130 Dashboards** | Cloud Tasks queue、DB jobs/outbox lag、curation failures、recall latency、Neon/Index lag、purge、scope-denied、GCP + Neon + LLM cost |
+| **T-131 Tracing/log redaction** | Cloud Logging/Monitoringでtrace_idをCloud Run API→Cloud Tasks→Worker→Neonへ連携、PII/秘密/Memory原文をログに出さない |
+| **T-132 Neon backup/PITR** | Neonのplan別保持/復元能力を確認。バックアップ取得・復元、RPO/RTO試験、忘却再適用 |
+| **T-133 Operational runbooks** | Neon接続障害/計画停止、Cloud Tasks backlog・リトライ切れ、Cloud Scheduler停止、LLM outage、認証失効、Source revocation、Forget失敗 |
+| **T-134 Cost reporting** | provider別LLM token/Embedding、Neon compute/storage/backups、Cloud Run CPU/memory/request、Cloud Tasks/Scheduler、network egress、Cloud Logging、月額総費用 |
+| **T-135 Alerts** | error budget、DB failed jobs/Cloud Tasks backlog、Outbox lag、Purge未完了、index divergence、Neon connection pressure、Cloud Run errorに通知 |
+| **T-136 Load and soak tests** | 100k/500kおよび1m/5m workload（PRODUCT.md）でCloud Run cold start、Neon RTT/connection pooling、Cloud Tasks rate limiting、p95・コスト計測 |
+| **T-137 Security review** | Secret Manager、GCP IAM/OIDC、Neon資格情報/pooling/RLS、API scope/audit/forgetをチェックし所見を閉じる |
 
 **Acceptance:** 失敗したJob・欠落しそうなChange・削除未完了を検知でき、Runbookで復旧可能。月額総額が説明可能。
 
@@ -344,7 +354,7 @@ Dependencies: EP-00～13.
 | **T-142 Product acceptance** | PRODUCT.md AC-01～13、FRへのtraceability、未達なし |
 | **T-143 Security and privacy gate** | データ権利、Secrets、RLS、Source revoke、Forget、バックアップを検収 |
 | **T-144 Release docs** | API reference、運用手順、トラブルシュート、変更履歴 |
-| **T-145 Deployment and rollback** | 本番デプロイ、監視、スモーク、rollback/recovery rehearsal |
+| **T-145 Deployment and rollback** | Artifact Registry→Cloud Run API/WorkerとCloud Tasks/Scheduler/Neon構成の本番デプロイ、監視、スモーク、rollback/recovery rehearsal |
 | **T-146 Evidence report** | 受け入れの実測値、評価再現手順、既知の制約を署名/Commitで固定 |
 
 **Acceptance:** 全受入契約と運用ゲート達成。既知の失敗は隠さず、契約未達ならRelease不可。
@@ -384,8 +394,11 @@ Dependencies: EP-00～13.
 | Cursorのcommit-order race | 消費側で差分喪失 | Scope行ロック、rollbackと並列のテスト |
 | Source rightsの失効遅延 | プライバシー漏洩 | 検出後即時deny、定期権利確認、fail closed |
 | 忘却後の派生情報再出現 | 信頼・プライバシー破壊 | non-content tombstones、purge graph、restore reconciliation |
-| Hyperdrive pool/RLS context漏洩 | Cross-scope漏洩 | SET LOCAL transaction-only、専用権限role、統合テスト |
-| LLM/provider API障害 | Capture遅延・Recall品質低下 | outbox/retry/DLQ、read path fallback |
+| Neon connection pool/RLS context漏洩 | Cross-scope漏洩 | SET LOCAL transaction-only、Neon pooled endpoint、Cloud Run同時接続数上限、統合テスト |
+| Cloud Tasks deadline / retry exhaustion | 長いCurator処理が途中停止・失われる | 30分未満のcheckpoint処理、DBジョブ追跡、Scheduler回収、必要時Cloud Run Jobs |
+| GCP↔Neonの距離・費用 | Recall遅延と運用費超過 | 同じ地理地域に置く、RTT/egress/baseline cost計測 |
+| Cloud Run scale-to-zero cold start | p95 Recall未達 | 標準負荷測定、必要時のみmin instances>0で費用対効果検証 |
+| LLM/provider API障害 | Capture遅延・Recall品質低下 | outbox/retry/DBの失敗ジョブ追跡・回収、read path fallback |
 | 日本語の検索品質不足 | Recall@5未達 | 固定評価集、pg_trgm/lexical/vectorの重み調整 |
 | 単一Scopeのwrite lock競合 | 書き込み遅延 | 実測。高負荷で必要時に範囲分割を検討 |
 | ドキュメントと実装の乖離 | 誤利用・品質劣化 | OpenAPI/DDL/evalをCIに組み込み、ADR記録 |
@@ -406,11 +419,14 @@ Release G4の納品には次のRunbookと実演記録を含める。
 - [ ] OwnerのScope grant取り消し、source rights即時反映
 - [ ] DBバックアップ/復元と復元後Forget再適用
 - [ ] LLM停止時のCapture再試行とsafe fallback
-- [ ] Queue/DLQ/outboxの滞留復旧
+- [ ] Cloud Tasks backlog・retry exhausted DB jobs・Outboxの滞留復旧
+- [ ] Cloud Scheduler未実行/重複実行とCloud Run Jobsの中断・再実行
 - [ ] Index再生成中のRead-after-write確認
 - [ ] Forget failureの再試行と完了証跡
 - [ ] 異常なtoken/CPU/storage課金の原因特定と制限
-- [ ] RLS/Scope/Versionのschema migration
+- [ ] Neon pooled connectionでのRLS/Scope/Versionのschema migration
+- [ ] Cloud Tasks/SchedulerのOIDC service account認証・Invoker制限
+- [ ] Cloud Run cold start、Neon接続遅延、DB pool上限、月額コストの測定
 - [ ] 外部AIクライアントのOAuth/MCP connectivityチェック
 - [ ] Data export/importの本人確認と一時成果物削除
 

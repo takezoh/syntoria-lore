@@ -172,7 +172,7 @@ AIの提案がOwnerの決定を自動上書きすることはない。逆にOwne
 | Evidence refs | 500,000 | 5,000,000 |
 | Historical retention | 5+ years | 5+ years |
 
-コストは月額 **$20–$50（標準負荷の暫定目標、外部AI利用料は本サービスに直接課金される分のみ算入）**を検証する。DB費用・Worker/Queue・ストレージ・Embedding・Curator推論・監視・バックアップを分解計測し、予算超過時は品質に影響しないバッチ化/モデル選択/再計算削減を優先する。費用目標だけを満たすために根拠や忘却の保証を緩めない。
+コストは月額 **$20–$50（標準負荷の暫定目標、外部AI利用料は本サービスに直接課金される分のみ算入）**を検証する。Neon compute/storage/backup、GCP Cloud Run/Cloud Tasks/Cloud Scheduler、GCP↔Neon通信、Embedding・Curator推論・監視を分解計測し、予算超過時は品質に影響しないバッチ化/モデル選択/再計算削減を優先する。費用目標だけを満たすために根拠や忘却の保証を緩めない。
 
 ## 9. Product acceptance: end-to-end contracts
 
@@ -190,7 +190,13 @@ AIの提案がOwnerの決定を自動上書きすることはない。逆にOwne
 - **AC-12 Portability:** Exportを別環境でImportして、同じ記憶・根拠・履歴を再現できる。
 - **AC-13 Outcome:** 記憶なし/単純要約/Thymesisの比較で、代表タスクの成功率とコストを測定し、有用性を説明できる。
 
-## 10. Release policy
+## 10. Deployment decision vs product contract
+
+本書は**プロダクトの完成条件**を定める。運用基盤として **GCP Cloud Run + Cloud Tasks + Cloud Scheduler + Neon PostgreSQL（pgvector / pg_trgm）** を採用するが、これはPRODUCT.mdの機能要件を縮小するものではない。採用理由・替案・制約は [Architecture](ARCHITECTURE.md) と [ADR-0001](docs/adr/0001-gcp-cloud-run-neon.md)、実装・検証作業は [Development Plan](docs/DEVELOPMENT_PLAN.md) を正とする。
+
+GCP / Neonのサービス契約SLA、Neonリージョンの利用可能性、コストやCloud Runのcold startは、実環境で確かめるべき非機能検証項目である。GCPの選定だけをもって本書のSLO達成を宣言しない。
+
+## 11. Release policy
 
 **Release 1 = service-complete**：上記の基本Capabilityを実運用可能な品質で備える。段階的な実装は許すが、プロダクトの完成形を途中で縮小しない。実装順序、各ゲート、優先度は [Development Plan](docs/DEVELOPMENT_PLAN.md) に記載する。
 

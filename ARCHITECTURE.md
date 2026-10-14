@@ -2,39 +2,59 @@
 
 - Version: 1.0 (design baseline)
 - Date: 2026-10-14
+- Infrastructure decision: GCP Cloud Run + Cloud Tasks + Cloud Scheduler + Neon PostgreSQL (supersedes Cloudflare baseline)
+- Decision record: [ADR-0001](docs/adr/0001-gcp-cloud-run-neon.md)
 - Status: **Implementation specification; deployment/benchmarks pending**
 - Product contract: [PRODUCT.md](PRODUCT.md)
 - Delivery plan: [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)
 
 ## 1. Architecture decision
 
-**採用：Cloudflare Workers (TypeScript) + Neon PostgreSQL (pgvector + pg_trgm) + Hyperdrive + Cloudflare Queues/Cron + model-agnostic Curator + REST/Remote MCP.**
+**採用：GCP Cloud Run (TypeScript/Node.js) + Cloud Tasks + Cloud Scheduler + Neon PostgreSQL (pgvector + pg_trgm) + model-agnostic LLM Curator + REST/Remote MCP.**
 
 記憶とその履歴・関係・全文検索・ベクトルをPostgreSQLに集約し、トランザクションと認可を強固にする。専用Graph DBや外付けVector DBは導入しない。これはMVP暫定技術ではなく、PRODUCT.mdで定義する標準・高負荷ワークロードに対応する**完成形の技術ベースライン**とする。
 
-追加サービスの導入条件は、受け入れ条件の未達を実測で示し、運用・費用・セキュリティを含めた改善が明確な場合だけとする。
+追加サービスの導入条件は、受け入れ条件の未達を実測で示し、運用・費用・セキュリティを含めた改善が明確な場合だけとする。Cloud Run Jobsは30分を超えるバッチ再処理など、通常のCloud Tasks HTTP処理では完結できない処理に限って使う。
 
 ### Technology decisions and rationale
 
 | Concern | Selected | Reason / constraint |
 | --- | --- | --- |
-| Public API | Workers + TypeScript | 低運用負荷、RESTとMCPアダプターを共用 |
-| Source of truth | Neon PostgreSQL | ACID、制約・RLS・時間/履歴・Relation管理 |
-| Semantic | pgvector | 正本と共存、Embedding更新は派生操作 |
-| Lexical | pg_trgm + optional PostgreSQL text search | 日本語の部分一致、固有名詞検索（日本語FTSは評価し調整） |
-| Relationship | Relation tables / recursive SQL | 必要な範囲の経路探索。Graph DB追加なし |
-| DB access | Hyperdrive (query cache disabled) | Connection pooling。強い可視性/RLSとの整合 |
-| Async | Cloudflare Queues + DB outbox | At-least-once配送を冪等性で吸収 |
-| Schedule | Workers Cron | 再評価・失効・未処理Outbox/ジョブ回収 |
-| LLM | Provider adapter | Curator/Ranking/Embeddingをモデル依存にしない |
-| Identity | Standards-compatible OAuth authorization server | MCPの認証情報を検証。MCP自身はresource server |
-| Scope defense | App authorization + PostgreSQL RLS | APIとDBの二重防御 |
+| Public API / Remote MCP | **GCP Cloud Run service** (TypeScript/Node.js) | コンテナによる実装自由度、scale-to-zero、同一REST CoreをMCPアダプターから利用 |
+| Private async consumer | **GCP Cloud Run service** | Cloud Tasksの認証済みHTTPターゲット。LLM呼び出し・索引更新をAPIと独立スケール |
+| Source of truth | **Neon PostgreSQL** | ACID、制約・RLS・時間/履歴・Relation管理、マネージド運用 |
+| Semantic search | **pgvector** in Neon | 正本と検索索引を同じPostgreSQLで管理。Embeddingは派生物 |
+| Lexical/relationship | **pg_trgm + typed relation tables** | 日本語検索と必要な関係探索をRDBで実現 |
+| DB access | **PostgreSQL TLS + Neon pooled endpoint** | Node.jsの標準PostgreSQLクライアントを使用。接続数を制限し、RLSをtransaction scopedに |
+| Async delivery | **Cloud Tasks + transactional DB outbox** | OIDC認証、rate limit、retry。DBに確定したジョブを消失させない |
+| Schedule / recovery | **Cloud Scheduler** | Outbox未配送回収、stale memoryの対象限定再評価、失敗ジョブの再投入 |
+| Long/bulk processing | **Cloud Run Jobs, conditional** | 通常のCloud Tasks HTTP処理の30分上限を超えるreindex/backfill等 |
+| LLM/Embedding | Provider adapter | Curator/Ranking/Embeddingをモデル依存にしない |
+| API identity | OAuth 2.1-compatible authorization provider | MCP/REST委任トークンを検証する。独立した認証基盤として実装しない |
+| Internal identity | GCP IAM + **OIDC service-account ID token** | Tasks/Scheduler → Private Cloud Runの呼出しを制限 |
+| Scope defense | App authorization + PostgreSQL RLS | 認可されたOwner/Scope/Source権限を二重防御 |
+| Secrets/observability | Secret Manager + Cloud Logging/Monitoring | 運用上の認証情報管理と障害検知。記憶本文はログへ出さない |
 
-公式参考資料（導入時に現行仕様を再確認）：
-- https://developers.cloudflare.com/workers/tutorials/postgres/
-- https://developers.cloudflare.com/hyperdrive/get-started/
-- https://developers.cloudflare.com/queues/reference/delivery-guarantees/
-- https://developers.cloudflare.com/queues/configuration/dead-letter-queues/
+**Deployment baseline**
+
+- 同一GCPプロジェクト内に公開APIと非公開Curatorを別Cloud Run serviceとして配置し、共通ドメインパッケージを利用する。デプロイ/スケーリングは独立させる。
+- APIは外部の認証済みPersonal AIのためにHTTPS公開し、OAuthのissuer/audience/scopeを検証する。Curator/Dispatcher/Scheduled maintenanceは認証付きの内部呼び出し専用とし、GCP IAMを強制する。
+- Cloud Runの`min instances=0`を標準とし、cold startがSLOを破る場合のみ最小インスタンス数を調整する。`max instances`・concurrency・request timeout・DB pool上限を明示設定する。
+- Cloud Runは日本のユーザーからの遅延と原本データの地域要件を考慮して東京 (asia-northeast1) を第一候補とする。**Neonの利用可能な実リージョン・ホストプロバイダーとデータ所在を確認し、地理的な近接を優先**する。GCP内同居やリージョン一致を仮定しない。
+- Neonは別のプロバイダーに管理されるため、通信遅延・外部通信コスト・データ地域・プール上限・PITR/バックアップ条件を環境構築時に確認する。
+- Cloud TasksのHTTP targetは**最大30分**（デフォルト10分）。長時間単位の処理はチェックポイント化、またはCloud Run Jobsで実行。Cloud Run service自体の最大リクエストタイムアウト（60分）をTasksへそのまま適用しない。
+- Cloud TasksはQueueの意味での永続的なDLQを前提にしない。失敗後もジョブのstate/last_error/retry eligibilityをDB側で保持してSchedulerから回収する。
+
+**Official references**
+
+- https://cloud.google.com/run/docs/configuring/request-timeout
+- https://cloud.google.com/run/docs/create-jobs
+- https://cloud.google.com/tasks/docs/creating-http-target-tasks
+- https://cloud.google.com/tasks/docs/configuring-queues
+- https://cloud.google.com/scheduler/docs/http-target-auth
+- https://cloud.google.com/run/docs/authenticating/service-to-service
+- https://cloud.google.com/secret-manager/docs/overview
+- https://neon.tech/docs/connect/connection-pooling
 - https://neon.com/docs/extensions/pgvector
 - https://www.postgresql.org/docs/current/pgtrgm.html
 - https://modelcontextprotocol.io/specification/
@@ -43,30 +63,30 @@
 
 ```mermaid
 flowchart TB
-    A[ChatGPT / Dots / Claude / Codex] -->|OAuth token + scope| M[MCP Adapter]
-    A -->|REST| API[Worker API]
-    M --> API
-    API --> AUTH[AuthN / AuthZ / Policy]
+    A[ChatGPT / Dots / Claude / Codex] -->|OAuth token + scopes| MCP[Remote MCP Adapter]
+    A -->|HTTPS REST| API[Public Cloud Run API]
+    MCP --> API
+    API --> AUTH[App AuthN / AuthZ / Policy]
     AUTH --> CORE[Memory Core]
     CORE --> REC[Recall Engine]
-    CORE --> CUR[Curator Orchestrator]
-    CORE --> GOV[Governance / Forget]
-    CORE --> PG[(Neon PostgreSQL)]
-    REC --> PG
-    CUR --> PG
-    CUR --> LLM[LLM and Embedding Providers]
+    CORE --> PG[(Neon PostgreSQL + pgvector)]
+    CORE --> CUR[Curator Contracts]
+    CUR --> LLM[LLM / Embedding Providers]
     PG --> OUT[Transactional Outbox]
-    OUT --> Q[Cloudflare Queues]
-    Q --> CUR
-    Q --> IDX[Index worker / Re-evaluation]
-    IDX --> PG
-    CRON[Workers Cron] --> OUT
-    CRON --> IDX
+    SCHED[Cloud Scheduler] -->|OIDC| DISP[Private Cloud Run Dispatcher]
+    DISP --> PG
+    DISP -->|Enqueue task ID only| TASKS[Cloud Tasks]
+    TASKS -->|OIDC| WORKER[Private Cloud Run Curator Worker]
+    WORKER --> PG
+    WORKER --> LLM
+    SCHED -->|OIDC| MAINT[Private Maintenance Handler]
+    MAINT --> PG
+    LONG[Conditional Cloud Run Jobs] --> PG
     EXT[Authorized source connectors] -->|Capture| API
-    A -->|independent access| AR[Ariadne state store]
+    A -->|independent access| AR[Ariadne State Store]
 ```
 
-Workers内の構成はモジュラーモノリスを基本とし、最初からマイクロサービスへ分割しない。各コンポーネントは境界が明確なモジュールとし、Queue consumerはWorkerを別エントリーポイントとして配備可能にする。
+Cloud Run APIとCuratorはTypeScript/Node.jsで共通ドメインコードを利用する**モジュラーモノリス**。Worker/Dispatcherは運用上独立したサービスまたは非公開ハンドラとして配備するが、複数のビジネスサービスへ分割しない。Dispatcher/WorkerへはIAMで認証されたCloud Tasks/Schedulerからのみ到達させ、入力した`job_id`をDBで検証する。
 
 **AriadneはMemory Serviceの下位依存ではない。** Action、タスク進捗、状態同期を本サービスに複製しない。根拠が必要な場合はAriadneのURI/IDと出来事を参照する。
 
@@ -82,6 +102,8 @@ Workers内の構成はモジュラーモノリスを基本とし、最初から�
 | Governance | Forget、retention、source ACL、export、監査 | Forget本文を監査ログへ保存 |
 | Change Feed | Scope別順序、cursor、tombstone | commit順逆転による差分欠落 |
 | Indexer | Embedding、トリグラム/全文検索、派生View更新 | 索引を正本として扱う |
+| Dispatcher | DB outboxをCloud Tasksへ配送し、送信状態を管理 | DB transactionとTask送信の原子性を仮定する |
+| Scheduler handler | 未配送/失敗ジョブ回収、期限切れ・再評価トリガー | 全Memoryの無差別LLM再処理 |
 
 ## 4. Logical data model
 
@@ -159,21 +181,27 @@ Workers内の構成はモジュラーモノリスを基本とし、最初から�
 ```mermaid
 sequenceDiagram
     participant AI as AI/Connector
-    participant API as Memory API
-    participant DB as PostgreSQL
-    participant Q as Queue
-    participant CUR as Curator
+    participant API as Cloud Run API
+    participant DB as Neon PostgreSQL
+    participant D as Outbox Dispatcher
+    participant Q as Cloud Tasks
+    participant W as Cloud Run Worker
+    participant L as LLM
     AI->>API: capture(input, idempotency_key)
-    API->>DB: insert observation + capture_job + outbox (transaction)
+    API->>DB: observation + capture_job + outbox (single transaction)
     API-->>AI: 202 Accepted + job_id
-    DB-->>Q: outbox publisher (retryable)
-    Q->>CUR: process job
-    CUR->>DB: retrieve existing memories/evidence
-    CUR->>CUR: extract / resolve / reconcile / propose
-    CUR->>DB: validate + commit ChangeSet (single transaction)
-    DB-->>Q: outbox index / maintenance
-    Q->>DB: update derived indexes
+    D->>DB: find unsent outbox rows (claim/lease)
+    D->>Q: create HTTP task(job_id, OIDC)
+    D->>DB: mark dispatched (idempotent)
+    Q->>W: authenticated HTTP POST(job_id)
+    W->>DB: claim job + read authorized source/evidence
+    W->>L: extract / resolve / reconcile / propose
+    L-->>W: structured proposal
+    W->>DB: validate and commit ChangeSet + change_log + outbox
+    W-->>Q: 2xx only after durable job status
 ```
+
+Outbox DispatcherはCloud Schedulerから最短分単位で呼び出す運用を基本とする。低遅延が必要ならAPI commit後に**best-effortの即時dispatch**を追加してもよいが、正本はOutboxであり、Schedulerによるリカバリーを必須とする。外部Tasks送信とDBへの送信済み記録の間で落ちた場合は重複送信し得るため、`outbox_event_id`と`job_id`で冪等化する。
 
 Curatorの段階：
 1. **Extract**：入力から根拠単位を抽出（観測事実と記憶候補を分離）。
@@ -181,7 +209,7 @@ Curatorの段階：
 3. **Match**：既存の同対象・関連記憶を候補として集める。
 4. **Reconcile**：CREATE / CORROBORATE / REFINE / SUPERSEDE / CONTEST / RELATE / RETRACT / NO_OPから提案。
 5. **Validate**：権限・根拠・状態遷移・対象Revision・Scope・操作スキーマ検証。
-6. **Commit**：同一DBトランザクションでMemory/Version/Relation/Evidence/ChangeLog/Outbox更新。
+6. **Commit**：同一DBトランザクションでMemory/Version/Relation/Evidence/ChangeLog/Outbox/Job state更新。
 
 FORGETはCurator一般変更操作から除外し、認証・権限を伴う専用フローに限定する。
 
@@ -205,7 +233,7 @@ LLMの出力した`authority: owner`等は信用しない。認証トークン�
 - Memory更新は`expected_revision`を必須とし、古いRevisionなら `409 REVISION_CONFLICT`。
 - ChangeSetは全操作成功または全失敗。LLMによる再照合は失敗トランザクション外で実施する。
 - 操作IDとリクエストハッシュに基づき再送に同じ結果を返す。異なる内容に同じKeyが使われた場合は409。
-- Outboxは**正本と同じDBトランザクション**で作り、Publisher/Queueは重複配信に耐える。
+- Outboxは**正本と同じDBトランザクション**で作り、Dispatcher/Cloud Tasks/Consumerは重複配信に耐える。
 
 ### Gap-free cursor semantics
 
@@ -224,7 +252,7 @@ LLMの出力した`authority: owner`等は信用しない。認証トークン�
 
 ### Read-after-write
 
-DB正本が確定した`committed_revision`と、Embedding等の`indexed_revision`を区別。明示的Remember直後のRecallは正本検索/changed-since経路を併用し、派生索引の遅延で記憶を欠落させない。Hyperdriveの**SQL query cachingを無効化**し、書き込み直後の整合性を破らない。read replica/キャッシュを将来導入する場合も契約を維持する。
+DB正本が確定した`committed_revision`と、Embedding等の`indexed_revision`を区別。明示的Remember直後のRecallは正本検索/changed-since経路を併用し、派生索引の遅延で記憶を欠落させない。Neonへの通常読み書きは整合性を保証するprimary接続を使用する。Neon pooled endpointを使う場合もtransaction内で`SET LOCAL`してRLS文脈を設定し、session状態やread replicaへの即時反映を前提としない。後からキャッシュを導入する場合も契約を維持する。
 
 ## 7. Retrieval pipeline
 
@@ -319,7 +347,9 @@ Scope単位seqは変更配信用。Memory単位revisionと区別する。複数S
 
 **Authorization:** Owner/Scope/Principal/Source-rightsの積集合が可視範囲。Application層だけでなくPostgreSQL RLSでもOwner・Scopeを限定する。Service roleとmigrationsの高権限資格情報はrequest pathから分離。
 
-**RLS + pooled connections:** DBアクセスはトランザクション開始後に`SET LOCAL app.owner_id / app.scope_ids`等を設定し、同じトランザクション内でクエリする。セッションレベルのSETはpool越しに権限が漏れる危険があるため禁止。内部ジョブも認可されたScopeを渡す。RLSをバイパスできるロールを通常APIに使わない。
+**RLS + pooled connections:** NeonのTLS/pool接続で、DBアクセスはトランザクション開始後に`SET LOCAL app.owner_id / app.scope_ids`等を設定し、同じトランザクション内でクエリする。セッションレベルのSETはpool越しに権限が漏れる危険があるため禁止。Cloud RunサービスごとのDB接続数上限と`max instances × pool size`の最悪ケースを検証する。内部ジョブもDBに記録された認可済みScopeを使用し、Cloud Tasksで届いたユーザー属性を無条件には信用しない。RLSをバイパスできるロールを通常APIに使わない。
+
+**GCP service-to-service IAM:** Cloud TasksのOIDCを専用Service Accountから発行し、Private Cloud Runの`roles/run.invoker`を最小権限で付与。Cloud Schedulerも専用Service AccountでDispatcher/MaintenanceへOIDC認証する。API側のユーザーOAuthと混同しない。Cloud Run service accountsには必要なCloud Tasks enqueue/Neon secret accessだけ付与し、Secret ManagerにDB credentialを保管する。
 
 **Source ACL changes:** コネクタの権利喪失を確認したら、対応Source/Evidenceとそこからのみ導かれる派生記憶を**安全側に即時遮断**し、再評価をキューへ投入。内容の再掲が権利違反となるときは派生要約も保護対象。
 
@@ -340,13 +370,26 @@ Scope単位seqは変更配信用。Memory単位revisionと区別する。複数S
 
 ## 11. Async delivery and recovery
 
-- Queuesはat-least-once。`capture_id`/`operation_id`/`outbox_event_id`で冪等処理。
-- Outbox publisherは一定間隔で未送信をQueueへ再投入。送信完了記録の前後で重複しても安全。
-- Queue consumerはretry/backoffし、retry限界後はDLQに入れ、運用者に通知。DLQ保持上限に依存せず、ジョブ状態/再投入可能性はDBに残す。
-- 長いLLM処理は小さな再試行単位へ分割し、Source/content hash、prompt_version、model_versionを記録。
+- Cloud TasksはHTTP taskを再試行するが、**Exactly-onceを保証しない**。`capture_id`/`operation_id`/`outbox_event_id`で冪等処理する。2xx responseはDBで処理結果を確定した後だけ返す。
+- Cloud TasksからCloud Run Workerへの通信は**専用Service AccountのOIDC**とIAMで認証。Task bodyは最小限の`job_id`/`event_id`だけとし、記憶本文・認証情報をQueueに複製しない。
+- Cloud Tasks HTTP handlerの最大dispatch deadlineは**30分**。1ジョブが長すぎる場合はチェックポイントで分割するか、Cloud Run Jobsに切り替える（Jobsは別の実行・再試行・計測契約を設ける）。
+- DBトランザクションで記録したOutboxはDispatcherがCloud Tasksへenqueue。Dispatcherはタイムアウト/部分送信後も安全に再送でき、Schedulerが定期的に取り残しを回収する。
+- Cloud Tasksで設定したretry回数/最大保持期間が尽きれば、Task自体が残るとは限らない。**Cloud TasksのネイティブDLQを仮定せず**、`capture_jobs`のattempt/status/last_error/next_retry_atと失敗監視を正本として、Schedulerから再投入する。永久障害は`held/failed`として可視化。
+- Cloud Schedulerの実行も再試行・重複可能。Dispatcher/Maintenanceは冪等かつ短時間で返し、時間のかかる処理はTasks/Jobsに委任する。
 - Index更新はMemoryVersionを照合してから反映し、古いEmbeddingが現行Versionを上書きしない。
 - Fail closed：認証・Source rights・Forget stateを検証できない場合、該当Memoryは返さない。
-- APIのread pathはCurator/Embedding API障害時も可能な範囲で正本検索にフォールバック。推測で結果を補完しない。
+- APIのread pathはCurator/Embedding API障害時も正本検索にフォールバックし、推測で結果を補完しない。
+- Cloud Run/Neon通信断はRetryを無限にループせず、指数バックオフ・サーキットブレーカー・ジョブ状態で制限し、予算超過を防ぐ。
+
+### Operational profiles
+
+| Path | Runtime | Authentication | Timeout/recovery |
+| --- | --- | --- | --- |
+| External REST/MCP | Public Cloud Run API | OAuth user/client token | 適切なAPI timeout; errors are typed |
+| Capture/Curator/Index | Private Cloud Run Worker | Cloud Tasks OIDC + IAM | Task deadline <= 30min; checkpoint/retry |
+| Outbox dispatcher | Private Cloud Run handler | Cloud Scheduler OIDC + IAM | 低レイテンシ処理、未送信を次回回収 |
+| Maintenance | Private Cloud Run handler | Cloud Scheduler OIDC + IAM | 対象ジョブを生成、全件LLM再推論しない |
+| Bulk import/re-embed | Optional Cloud Run Jobs | IAM service identity | 長時間バッチ、job statusをDBで追跡 |
 
 ## 12. Observability, backup and cost
 
@@ -356,22 +399,33 @@ Scope単位seqは変更配信用。Memory単位revisionと区別する。複数S
 
 - Latency p50/p95/p99（mode別）、error rate、queue lag、index lag、recall insufficiency
 - Candidate採用/保留率、重複率、矛盾率、古い記憶の誤利用、評価セット正答率
-- Token cost per Capture/Recall、embedding cost/100k Memory、固定DB/Worker費用、バックアップ費用
+- Token cost per Capture/Recall、embedding cost/100k Memory、Neon compute/storage/backup、Cloud Run CPU/memory/request、Cloud Tasks operations、Scheduler、Cloud Logging/Monitoring、ネットワーク通信費用
 - DB backups/PITR、RPO/RTO演習、復元時Forget再適用の検証
 
 ### Initial SLO / operations targets
 
-PRODUCT.mdのp95、99.9%、品質評価値、100k/1m Memory負荷を使用する。運用Runbook（シークレット失効、Source revocation、PG障害、Queue backlog、忘却失敗、コスト超過）を納品前に用意。運用障害時はOwnerにとって「どの記憶が新鮮ではないか」を把握可能にする。
+PRODUCT.mdのp95、99.9%、品質評価値、100k/1m Memory負荷を使用する。Neon/GCPの各サービスの実際のSLAとサービス目標は区別する。Cloud Run cold start、Neon起動時間、Cloud Tasks滞留、外部通信のレイテンシを標準負荷で計測し、min instances=0で目標未達なら費用対効果に基づき調整する。運用Runbook（シークレット失効、Source revocation、Neon障害、Tasks backlog、Outbox再配送、忘却失敗、コスト超過）を納品前に用意。運用障害時はOwnerにとって「どの記憶が新鮮ではないか」を把握可能にする。
 
 ## 13. Trade-offs and rejected options
 
-- **D1 + Vectorize:** 使用可能だが、完成形のVersion/Relation/多表トランザクション・ハイブリッド検索を単一DBで運用する方が単純と判断。
-- **Dedicated Graph DB:** 現在のRelation深度・件数要件に対して別DB/整合性/権限管理が過剰。
-- **Dedicated Vector DB:** Vector/関係/変更履歴の正本分離を避ける。
-- **All-in-one long Markdown:** 矛盾・根拠・時間・権限・差分の保証が困難。
-- **LLM直接DB更新:** 決定・推測の混同と競合/セキュリティ破綻を防げない。
-- **Always LLM-on-Recall:** 遅延・費用・不確実性が増加。必要な場合のみ再構成。
-- **Full event sourcing everywhere:** データ内容のForgetを複雑化する。Version+ChangeLogの限定追記で要件を満たす。
+**Decision: [ADR-0001](docs/adr/0001-gcp-cloud-run-neon.md)** — GCPを採用。完成形のMemory Serviceの運用要件を優先し、Cloudflareの低固定費/Edge配信を理由とした自動選択はしない。
+
+| Alternative | Decision / rationale |
+| --- | --- |
+| Cloudflare Workers + Queues + Cron + Neon | 不採用。APIだけなら簡潔だが、Curatorの長時間LLM処理・バックフィルと通常コンテナ実行の柔軟性はGCPのほうが高い。Edgeの利点は地域固定DBでは限定的 |
+| AWS Lambda + SQS + EventBridge + Neon | 不採用。機能要件を満たすが、既存のCloud Run中心の運用知識を再利用する方が低負荷 |
+| Railway API + Worker + Neon | 不採用。開発体験はよいが、常駐Worker費用とジョブ復旧設計が別途必要。GCPのmanaged task deliveryを優先 |
+| Railway PostgreSQL | 不採用。記憶正本の運用をNeonに集約する |
+| GCP Cloud SQL | 代替候補。GCP内完結を重視する場合に有効だが、標準利用時の固定費と専用DB管理を比較してNeonを採用 |
+| D1 + Vectorize | 不採用。Version/Relation/多表トランザクション・意味検索をPostgreSQLへ集約 |
+| Dedicated Graph DB | 不採用。要求する関係深度にはRDBのRelationで対応可能 |
+| Dedicated Vector DB | 不採用。正本と検索基盤を増やさない |
+| All-in-one long Markdown | 不採用。根拠・時間・権限・差分を保証しにくい |
+| LLM direct DB mutations | 不採用。Policy/Revision/監査を迂回するため |
+| Always LLM-on-Recall | 不採用。遅延・費用・誤生成が増える |
+| Full event sourcing everywhere | 不採用。Forgetで過去イベント中の本文を消去しにくくなる |
+
+Cloud Run + Neonは特定のクラウド1社に統一した構成ではない。GCP→Neon間のネットワーク、接続数、認証情報、バックアップの運用責任をアーキテクチャの必須検証項目とする。
 
 ## 14. Design validation gates
 
@@ -379,7 +433,7 @@ PRODUCT.mdのp95、99.9%、品質評価値、100k/1m Memory負荷を使用する
 
 1. 同一入力の並列Captureで1件に収束。
 2. Scope内change seqのcommit-order、rollback、Cursorページングで欠落なし。
-3. Different ScopeでRLS越境ゼロ。Pool再利用で権限残存ゼロ。
+3. Different ScopeでRLS越境ゼロ。Neon pooled connectionの再利用でも権限残存ゼロ。
 4. 同時変更でRevision conflict。ユーザー決定をCuratorが逆転させない。
 5. 明示Remember→即時Recall。Index遅延中も取得できる。
 6. Forget→全読み取り遮断→正本/派生物消去→復元再遮断。
@@ -387,5 +441,7 @@ PRODUCT.mdのp95、99.9%、品質評価値、100k/1m Memory負荷を使用する
 8. 標準/高負荷ワークロードのp95、品質、月次総コストを計測。
 9. MCPクライアントのOAuth flow、read-onlyからwrite不可を検証。
 10. Import/Exportとモデル/Embedding世代切替で意味・根拠を維持。
+11. Cloud TasksからPrivate Cloud RunへのIAM/OIDC認証、Cloud Schedulerの重複トリガー、Task 30分期限後のDBジョブ回収を検証。
+12. Cloud Run 0 instances→cold start、DB接続数、Neonとの配置地域/ネットワーク遅延、GCP＋Neon総コストを計測。
 
 **実装タスク、依存関係、成果物と検収ゲートは [Development Plan](docs/DEVELOPMENT_PLAN.md) を正とする。**
