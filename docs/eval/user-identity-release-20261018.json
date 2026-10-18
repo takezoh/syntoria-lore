@@ -1,0 +1,223 @@
+{
+  "format": "memory-user-identity-release@1",
+  "recordedAt": "2026-10-18T07:08:41.889298+00:00",
+  "project": "example-project",
+  "region": "asia-southeast1",
+  "database": "lore",
+  "databaseVersion": "18.6",
+  "source": {
+    "baseCommit": "968127e316f3410dc7a52c6728329312d9e767e7",
+    "includesUncommittedChanges": true,
+    "manifestSha256": "300b650e3b143d3f6d3f1b6a603bddf651586f385beb1572d422eb5f5cf3bddf",
+    "fileCount": 204,
+    "storageSource": {
+      "bucket": "example-lore-build-source",
+      "generation": "1792306227787510",
+      "object": "source/user-identity-20261018/1792306226.642121-c9aa33c579ee46779d133716a6d87a08.tgz"
+    }
+  },
+  "build": {
+    "id": "72e236ee-217b-497b-938d-768a4b8554dc",
+    "status": "SUCCESS",
+    "image": "asia-southeast1-docker.pkg.dev/example-project/lore/runtime@sha256:47e114cd67bc7e25d1378d2b905542156e34efdaac1e9a41d63d7dc257609771"
+  },
+  "backup": {
+    "fenced": {
+      "format": "memory-user-identity-release-backup@1",
+      "cipher": "AES-256-GCM",
+      "salt": "GyKgI5SKui1Ggh1v8ds6xtn-BY_YZSBUpa3GDPAQMtk",
+      "iv": "CEwjZjXKScySs6Sv",
+      "keyReference": "projects/example-project/secrets/lore-portability-master-key/versions/1",
+      "plaintextSha256": "500566fcd7a65dbe700d71fac18878980e152cd5260297a6845c5553b291eb7b",
+      "encryptedSha256": "cbe532979c646359e9ee4fcce2735c93815d930e3b0f107a45ad5876cc81e09b",
+      "encryptedBytes": 354543,
+      "sourceManifestSha256": "300b650e3b143d3f6d3f1b6a603bddf651586f385beb1572d422eb5f5cf3bddf",
+      "verifiedDecrypt": true
+    },
+    "uri": "gs://example-lore-build-source/backups/user-identity-20261018/fenced-backup.dump.aes256gcm",
+    "manifestUri": "gs://example-lore-build-source/backups/user-identity-20261018/fenced-backup-manifest.json",
+    "fullRestoreRehearsal": "passed on isolated PostgreSQL18/pgvector",
+    "nonSuperuserMigrationRehearsal": "passed, 41 migrations, reapply and helper privilege cleanup"
+  },
+  "fence": {
+    "schedulerAndQueuePausedBefore": "2026-10-18T06:55:30.656855Z",
+    "apiDisabledAt": "2026-10-18T06:55:30.656855Z",
+    "workerDisabledAt": "2026-10-18T06:55:34.777179Z",
+    "databaseFence": {
+      "at": "2026-10-18T06:56:15.424Z",
+      "fenced": true,
+      "runtime_sessions": 0,
+      "idle_connections_closed": 1,
+      "roles": [
+        {
+          "rolname": "memory_app",
+          "rolcanlogin": false
+        },
+        {
+          "rolname": "memory_worker_login",
+          "rolcanlogin": false
+        }
+      ]
+    },
+    "apiNewRevisionEnabledAt": "2026-10-18T07:02:15.622204Z",
+    "workerNewRevisionEnabledAt": "2026-10-18T07:02:16.362276Z",
+    "automaticScalingRestoredAt": "2026-10-18T07:03:58.224779Z",
+    "schedulerResumedAt": "2026-10-18T07:04:21.592381Z",
+    "oldRevisionTrafficRestored": false
+  },
+  "migration": {
+    "execution": "lore-neon-migrate-k7t9g",
+    "status": "succeeded",
+    "migrationCount": 41,
+    "reapply": "passed",
+    "priorChecksumCountPreserved": 40,
+    "allExistingTableHashesPreserved": true,
+    "tableCount": 42,
+    "normalizedBeforeTablesSha256": "bb162e2c793189a4b77ed85632f764afc25369a44d05132c654e89a28cc9eece",
+    "normalizedAfterTablesSha256": "bb162e2c793189a4b77ed85632f764afc25369a44d05132c654e89a28cc9eece",
+    "runtimeRolesNonBypassRls": true,
+    "helperCleanup": "create revoked; inherit=false,set=true",
+    "issuerCutover": "already-current; existing four principals and grants preserved"
+  },
+  "ledger": {
+    "execution": "lore-ledger-reconcile-zrddt",
+    "status": "already-current",
+    "replayed": 0,
+    "purged": 0,
+    "readiness": "ready"
+  },
+  "services": {
+    "api": {
+      "latestReadyRevision": "lore-api-00002-pkv",
+      "image": "asia-southeast1-docker.pkg.dev/example-project/lore/runtime@sha256:47e114cd67bc7e25d1378d2b905542156e34efdaac1e9a41d63d7dc257609771",
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100
+        }
+      ],
+      "scaling": "automatic",
+      "iamUnchanged": true
+    },
+    "worker": {
+      "latestReadyRevision": "lore-worker-00002-bww",
+      "image": "asia-southeast1-docker.pkg.dev/example-project/lore/runtime@sha256:47e114cd67bc7e25d1378d2b905542156e34efdaac1e9a41d63d7dc257609771",
+      "traffic": [
+        {
+          "latestRevision": true,
+          "percent": 100
+        }
+      ],
+      "scaling": "automatic",
+      "iamUnchanged": true
+    }
+  },
+  "identity": {
+    "revision": "lore-identity-00001-zsq",
+    "unchanged": true,
+    "bootstrapExecuted": false,
+    "userEnrollmentChanged": false,
+    "smokePrincipalsEnabled": false
+  },
+  "dispatch": {
+    "queue": "RUNNING",
+    "scheduler": "ENABLED",
+    "rateLimitsAndRetryUnchanged": true,
+    "scheduleAndOidcUnchanged": true,
+    "existingWorkContract": {
+      "events": [
+        {
+          "event_type": "capture.accepted",
+          "count": 2,
+          "has_legacy_identity": false
+        },
+        {
+          "event_type": "forget.accepted",
+          "count": 10,
+          "has_legacy_identity": false
+        },
+        {
+          "event_type": "memory.change",
+          "count": 14,
+          "has_legacy_identity": false
+        }
+      ],
+      "queued_tasks": 0,
+      "task_body_contract": "strict job_id-only; worker resolves current user_id from DB"
+    }
+  },
+  "httpSmoke": {
+    "at": "2026-10-18T07:06:26.950Z",
+    "checks": [
+      {
+        "name": "api anonymous denied",
+        "status": 403,
+        "expected": 403,
+        "passed": true
+      },
+      {
+        "name": "worker anonymous denied",
+        "status": 403,
+        "expected": 403,
+        "passed": true
+      },
+      {
+        "name": "api IAM OpenAPI",
+        "status": 200,
+        "expected": 200,
+        "passed": true
+      },
+      {
+        "name": "api IAM readiness",
+        "status": 200,
+        "expected": 200,
+        "passed": true
+      },
+      {
+        "name": "worker IAM readiness",
+        "status": 200,
+        "expected": 200,
+        "passed": true
+      },
+      {
+        "name": "REST missing application bearer",
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "name": "MCP missing application bearer",
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "name": "MCP invalid application bearer",
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "name": "MCP wrong issuer application bearer",
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      }
+    ]
+  },
+  "limitations": [
+    "Ordinary user sign-in and authorized OAuth/REST/MCP positive flows were not rerun; existing enrollment and disabled smoke identities were not changed.",
+    "External /healthz returned 404, with zero matching Cloud Run request logs while /readyz had six; edge interception is an inference. Prior release records do not establish whether this is new or pre-existing. /healthz is not counted as passed.",
+    "No performance, capacity, provider-quality, full recovery RPO/RTO, inherited IAM, or end-user acceptance claims."
+  ],
+  "cleanup": {
+    "productionCredentialFilesRemoved": true,
+    "plaintextBackupsRemoved": true,
+    "rehearsalContainerRemoved": true,
+    "rehearsalVolumeRemoved": true,
+    "encryptedGcsBackupsRetained": true
+  },
+  "references": {
+    "manualScaling": "https://docs.cloud.google.com/run/docs/configuring/services/manual-scaling"
+  }
+}
