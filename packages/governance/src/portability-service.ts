@@ -1,3 +1,4 @@
+import { encodePortableBundleV1, decodePortableBundleV1 } from './user-identity-v1.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -25,7 +26,7 @@ const bundleSchema = z.strictObject({
   format: z.literal(LEGACY_PORTABILITY_PAYLOAD_FORMAT),
   schema_version: z.literal(1),
   origin: z.strictObject({
-    owner_id: z.uuid(),
+    user_id: z.uuid(),
     scope_id: z.uuid(),
     export_id: z.uuid(),
     created_at: z.iso.datetime({ offset: true }),
@@ -50,7 +51,7 @@ type PortableRow = Record<string, unknown>;
 type BundleTables = z.infer<typeof bundleSchema>['tables'];
 interface ExportJob {
   readonly export_id: string;
-  readonly owner_id: string;
+  readonly user_id: string;
   readonly scope_id: string;
   readonly principal_id: string;
   readonly deletion_epoch: string | number;
@@ -98,7 +99,7 @@ type TableName = (typeof tableOrder)[number];
 const columns: Readonly<Record<TableName, readonly string[]>> = {
   sources: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'kind',
     'external_id',
@@ -112,7 +113,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
   ],
   observations: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'source_id',
     'source_revision',
@@ -131,7 +132,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
   ],
   episodes: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'source_id',
     'title',
@@ -142,7 +143,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
   ],
   evidence: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'source_id',
     'source_revision',
@@ -161,10 +162,10 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'span_end',
     'origin_lineage_root',
   ],
-  subjects: ['id', 'owner_id', 'scope_id', 'canonical_name', 'normalized_name', 'created_at'],
+  subjects: ['id', 'user_id', 'scope_id', 'canonical_name', 'normalized_name', 'created_at'],
   subject_aliases: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'subject_id',
     'alias',
@@ -175,7 +176,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
   ],
   memories: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'kind',
     'statement',
@@ -198,7 +199,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
   ],
   memory_versions: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'memory_id',
     'revision',
@@ -219,10 +220,10 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'created_at',
     'origin_provenance',
   ],
-  memory_subjects: ['owner_id', 'scope_id', 'memory_id', 'subject_id'],
-  memory_evidence: ['owner_id', 'scope_id', 'memory_id', 'evidence_id'],
+  memory_subjects: ['user_id', 'scope_id', 'memory_id', 'subject_id'],
+  memory_evidence: ['user_id', 'scope_id', 'memory_id', 'evidence_id'],
   memory_version_evidence: [
-    'owner_id',
+    'user_id',
     'scope_id',
     'memory_id',
     'revision',
@@ -232,7 +233,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
   ],
   relations: [
     'id',
-    'owner_id',
+    'user_id',
     'scope_id',
     'from_memory_id',
     'to_memory_id',
@@ -278,15 +279,15 @@ export class PortabilityService {
         parsed.error.issues,
       );
     assertIdempotencyKey(idempotencyKey);
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may export a scope');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may export a scope');
     const requestHash = portabilityPayloadHash(parsed.data);
     return withAuthorizedActor(this.pool, actor, [parsed.data.scope_id], admin, async (client) => {
-      await lockScopeWrites(client, actor.ownerId, parsed.data.scope_id);
+      await lockScopeWrites(client, actor.userId, parsed.data.scope_id);
       const prior = await client.query<ExportStatus & { request_hash: string | null }>(
         `SELECT id, state, created_at, expires_at, deletion_epoch, request_hash FROM export_jobs
-         WHERE owner_id=$1 AND scope_id=$2 AND principal_id=$3 AND idempotency_key=$4`,
-        [actor.ownerId, parsed.data.scope_id, actor.principalId, idempotencyKey],
+         WHERE user_id=$1 AND scope_id=$2 AND principal_id=$3 AND idempotency_key=$4`,
+        [actor.userId, parsed.data.scope_id, actor.principalId, idempotencyKey],
       );
       if (prior.rows[0] !== undefined) {
         if (prior.rows[0].request_hash !== requestHash)
@@ -298,22 +299,15 @@ export class PortabilityService {
         return { export_id: prior.rows[0].id, state: prior.rows[0].state };
       }
       const scope = await client.query<{ deletion_epoch: string | number }>(
-        'SELECT deletion_epoch FROM scopes WHERE owner_id=$1 AND id=$2',
-        [actor.ownerId, parsed.data.scope_id],
+        'SELECT deletion_epoch FROM scopes WHERE user_id=$1 AND id=$2',
+        [actor.userId, parsed.data.scope_id],
       );
       const epoch = scope.rows[0]?.deletion_epoch;
       if (epoch === undefined) throw new CoreError(404, 'not_found', 'Scope was not found');
       const inserted = await client.query<{ id: string }>(
-        `INSERT INTO export_jobs(owner_id, scope_id, principal_id, state, deletion_epoch, idempotency_key, request_hash)
+        `INSERT INTO export_jobs(user_id, scope_id, principal_id, state, deletion_epoch, idempotency_key, request_hash)
          VALUES ($1, $2, $3, 'accepted', $4, $5, $6) RETURNING id`,
-        [
-          actor.ownerId,
-          parsed.data.scope_id,
-          actor.principalId,
-          epoch,
-          idempotencyKey,
-          requestHash,
-        ],
+        [actor.userId, parsed.data.scope_id, actor.principalId, epoch, idempotencyKey, requestHash],
       );
       return { export_id: inserted.rows[0]!.id, state: 'accepted', content_available: false };
     });
@@ -329,9 +323,9 @@ export class PortabilityService {
         `SELECT ej.id, ej.state, ej.created_at, ej.expires_at, ej.deletion_epoch,
            ej.ready_auth_epoch, s.deletion_epoch AS current_deletion_epoch,
            s.auth_epoch AS current_auth_epoch
-         FROM export_jobs ej JOIN scopes s ON s.owner_id=ej.owner_id AND s.id=ej.scope_id
-         WHERE ej.owner_id=$1 AND ej.scope_id=$2 AND ej.id=$3`,
-        [actor.ownerId, scopeId, exportId],
+         FROM export_jobs ej JOIN scopes s ON s.user_id=ej.user_id AND s.id=ej.scope_id
+         WHERE ej.user_id=$1 AND ej.scope_id=$2 AND ej.id=$3`,
+        [actor.userId, scopeId, exportId],
       );
       const row = result.rows[0];
       if (row === undefined) throw new CoreError(404, 'not_found', 'Export job was not found');
@@ -359,20 +353,20 @@ export class PortabilityService {
     scopeId: string,
     exportId: string,
   ): Promise<{ readonly bundle: string; readonly filename: string }> {
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may download an export');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may download an export');
     return withAuthorizedActor(this.pool, actor, [scopeId], admin, async (client) => {
       const result = await client.query<
-        ExportStatus & { artifact_key: string | null; owner_id: string }
+        ExportStatus & { artifact_key: string | null; user_id: string }
       >(
-        `SELECT ej.id, ej.owner_id, ej.state, ej.created_at, ej.expires_at, ej.deletion_epoch,
+        `SELECT ej.id, ej.user_id, ej.state, ej.created_at, ej.expires_at, ej.deletion_epoch,
            ej.ready_auth_epoch, s.deletion_epoch AS current_deletion_epoch,
            s.auth_epoch AS current_auth_epoch, ej.artifact_key
-         FROM export_jobs ej JOIN scopes s ON s.owner_id=ej.owner_id AND s.id=ej.scope_id
-         WHERE ej.owner_id=$1 AND ej.scope_id=$2 AND ej.id=$3 AND s.deletion_epoch=ej.deletion_epoch
+         FROM export_jobs ej JOIN scopes s ON s.user_id=ej.user_id AND s.id=ej.scope_id
+         WHERE ej.user_id=$1 AND ej.scope_id=$2 AND ej.id=$3 AND s.deletion_epoch=ej.deletion_epoch
            AND s.auth_epoch=ej.ready_auth_epoch AND ej.state='ready'
            AND ej.expires_at > clock_timestamp()`,
-        [actor.ownerId, scopeId, exportId],
+        [actor.userId, scopeId, exportId],
       );
       const row = result.rows[0];
       if (row === undefined || row.artifact_key === null)
@@ -399,25 +393,25 @@ export class PortabilityService {
         parsed.error.issues,
       );
     assertIdempotencyKey(idempotencyKey);
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may import a scope');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may import a scope');
     let opened: unknown;
     try {
       opened = this.store.open(parsed.data.encrypted_bundle);
     } catch {
       throw new CoreError(400, 'untrusted_bundle', 'Portable bundle authentication failed');
     }
-    const payload = bundleSchema.safeParse(opened);
+    const payload = bundleSchema.safeParse(decodePortableBundleV1(opened));
     if (!payload.success)
       throw new CoreError(400, 'invalid_bundle', 'Portable bundle data is invalid');
     const bundleHash = portabilityPayloadHash(opened);
     const requestHash = portabilityPayloadHash({ bundle_hash: bundleHash, ...parsed.data });
     return withAuthorizedActor(this.pool, actor, [parsed.data.scope_id], admin, async (client) => {
-      await lockScopeWrites(client, actor.ownerId, parsed.data.scope_id);
+      await lockScopeWrites(client, actor.userId, parsed.data.scope_id);
       const prior = await client.query<ImportStatus>(
         `SELECT id, state, bundle_hash, request_hash, response, id_map FROM portability_imports
-         WHERE owner_id=$1 AND scope_id=$2 AND principal_id=$3 AND idempotency_key=$4 FOR UPDATE`,
-        [actor.ownerId, parsed.data.scope_id, actor.principalId, idempotencyKey],
+         WHERE user_id=$1 AND scope_id=$2 AND principal_id=$3 AND idempotency_key=$4 FOR UPDATE`,
+        [actor.userId, parsed.data.scope_id, actor.principalId, idempotencyKey],
       );
       if (prior.rows[0] !== undefined) {
         if (prior.rows[0].request_hash !== requestHash)
@@ -436,11 +430,11 @@ export class PortabilityService {
       }
       const importId = randomUUID();
       const receipt = await client.query<{ id: string }>(
-        `INSERT INTO portability_imports(id, owner_id, scope_id, principal_id, idempotency_key, bundle_hash, request_hash)
+        `INSERT INTO portability_imports(id, user_id, scope_id, principal_id, idempotency_key, bundle_hash, request_hash)
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [
           importId,
-          actor.ownerId,
+          actor.userId,
           parsed.data.scope_id,
           actor.principalId,
           idempotencyKey,
@@ -470,7 +464,7 @@ export class PortabilityService {
       }
       const existingSource = await hasConflictingSource(
         client,
-        actor.ownerId,
+        actor.userId,
         parsed.data.scope_id,
         tableData.sources,
       );
@@ -559,12 +553,12 @@ export class PortabilityService {
           [job.scope_id],
           admin,
           async (client) => {
-            await lockScopeWrites(client, job.owner_id, job.scope_id);
+            await lockScopeWrites(client, job.user_id, job.scope_id);
             const current = await client.query<{
               deletion_epoch: string | number;
               auth_epoch: string | number;
-            }>(`SELECT deletion_epoch, auth_epoch FROM scopes WHERE owner_id=$1 AND id=$2`, [
-              job.owner_id,
+            }>(`SELECT deletion_epoch, auth_epoch FROM scopes WHERE user_id=$1 AND id=$2`, [
+              job.user_id,
               job.scope_id,
             ]);
             if (Number(current.rows[0]?.deletion_epoch ?? -1) !== Number(job.deletion_epoch))
@@ -647,7 +641,7 @@ export class PortabilityService {
   ): Promise<{ deleted: number; pending: number }> {
     const claimed = await workerPool.query<{
       id: string;
-      owner_id: string;
+      user_id: string;
       scope_id: string;
       artifact_key: string;
     }>('SELECT * FROM app.claim_governance_file_deletions()');
@@ -673,14 +667,14 @@ export class PortabilityService {
   private async createPayload(client: PoolClient, job: ExportJob): Promise<unknown> {
     const tables = {} as Record<TableName, PortableRow[]>;
     for (const table of tableOrder)
-      tables[table] = await readTable(client, table, job.owner_id, job.scope_id);
+      tables[table] = await readTable(client, table, job.user_id, job.scope_id);
     const suppressions = await client.query<{
       object_kind: string;
       object_id: string | null;
       locator_hmac: string | null;
     }>(
-      `SELECT object_kind, object_id, locator_hmac FROM suppressions WHERE owner_id=$1 AND scope_id=$2`,
-      [job.owner_id, job.scope_id],
+      `SELECT object_kind, object_id, locator_hmac FROM suppressions WHERE user_id=$1 AND scope_id=$2`,
+      [job.user_id, job.scope_id],
     );
     const blockedMemory = new Set(
       suppressions.rows
@@ -775,11 +769,11 @@ export class PortabilityService {
       ),
     );
     const includedSubjectIds = new Set(includedSubjects.map((row) => stringValue(row['id'])));
-    return {
+    return encodePortableBundleV1({
       format: LEGACY_PORTABILITY_PAYLOAD_FORMAT,
       schema_version: 1,
       origin: {
-        owner_id: job.owner_id,
+        user_id: job.user_id,
         scope_id: job.scope_id,
         export_id: job.export_id,
         created_at: new Date().toISOString(),
@@ -818,20 +812,20 @@ export class PortabilityService {
             allowedMemoryIds.has(stringValue(row['to_memory_id'])),
         ),
       },
-    };
+    });
   }
 }
 
 async function readTable(
   client: PoolClient,
   table: TableName,
-  ownerId: string,
+  userId: string,
   scopeId: string,
 ): Promise<PortableRow[]> {
   const result = await client.query<{ rows: PortableRow[] }>(
     `SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text), '[]'::jsonb) AS rows
-     FROM (SELECT * FROM public.${table} WHERE owner_id=$1 AND scope_id=$2) r`,
-    [ownerId, scopeId],
+     FROM (SELECT * FROM public.${table} WHERE user_id=$1 AND scope_id=$2) r`,
+    [userId, scopeId],
   );
   return result.rows[0]?.rows ?? [];
 }
@@ -867,23 +861,23 @@ async function hasSuppressedPortableSource(
   }
   if (digests.length === 0) return false;
   const result = await client.query<{ present: boolean }>(
-    `SELECT EXISTS(SELECT 1 FROM suppressions WHERE owner_id=$1 AND scope_id=$2
+    `SELECT EXISTS(SELECT 1 FROM suppressions WHERE user_id=$1 AND scope_id=$2
       AND object_kind='locator_hmac' AND locator_hmac=ANY($3::text[])) AS present`,
-    [actor.ownerId, scopeId, [...new Set(digests)]],
+    [actor.userId, scopeId, [...new Set(digests)]],
   );
   return result.rows[0]?.present ?? true;
 }
 
 async function hasConflictingSource(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   sources: readonly PortableRow[],
 ): Promise<boolean> {
   for (const source of sources) {
     const exists = await client.query(
-      `SELECT 1 FROM sources WHERE owner_id=$1 AND scope_id=$2 AND kind=$3 AND external_id=$4 AND revision=$5 LIMIT 1`,
-      [ownerId, scopeId, source['kind'], source['external_id'], source['revision']],
+      `SELECT 1 FROM sources WHERE user_id=$1 AND scope_id=$2 AND kind=$3 AND external_id=$4 AND revision=$5 LIMIT 1`,
+      [userId, scopeId, source['kind'], source['external_id'], source['revision']],
     );
     if (exists.rowCount !== 0) return true;
   }
@@ -924,7 +918,7 @@ async function insertPortableTables(
   client: PoolClient,
   actor: ActorContext,
   scopeId: string,
-  origin: { owner_id: string; scope_id: string; export_id: string; created_at: string },
+  origin: { user_id: string; scope_id: string; export_id: string; created_at: string },
   importId: string,
   tables: BundleTables,
   idMap: Record<string, string>,
@@ -954,7 +948,7 @@ async function insertPortableTables(
   const base = (row: PortableRow, table: TableName): PortableRow => ({
     ...row,
     id: row['id'] === undefined ? undefined : mapId(table, row['id']),
-    owner_id: actor.ownerId,
+    user_id: actor.userId,
     scope_id: scopeId,
   });
   const insert = async (
@@ -1012,7 +1006,7 @@ async function insertPortableTables(
       authority: 'third_party_claim',
       indexed_revision: 0,
       import_provenance: {
-        origin_owner_id: origin.owner_id,
+        origin_user_id: origin.user_id,
         origin_scope_id: origin.scope_id,
         origin_export_id: origin.export_id,
         origin_memory_id: row['id'],
@@ -1032,7 +1026,7 @@ async function insertPortableTables(
       changed_by: actor.principalId,
       change_set_id: null,
       origin_provenance: {
-        origin_owner_id: origin.owner_id,
+        origin_user_id: origin.user_id,
         origin_scope_id: origin.scope_id,
         origin_memory_version_id: row['id'],
         origin_changed_by: row['changed_by'],
@@ -1080,20 +1074,20 @@ async function recordPortableImportChanges(
 ): Promise<{ change_set_id: string; sequence_from: string; sequence_to: string } | null> {
   if (memories.length === 0) return null;
   await client.query(
-    'INSERT INTO scope_offsets(owner_id, scope_id) VALUES ($1, $2) ON CONFLICT (owner_id, scope_id) DO NOTHING',
-    [actor.ownerId, scopeId],
+    'INSERT INTO scope_offsets(user_id, scope_id) VALUES ($1, $2) ON CONFLICT (user_id, scope_id) DO NOTHING',
+    [actor.userId, scopeId],
   );
   await client.query(
-    'SELECT last_seq FROM scope_offsets WHERE owner_id = $1 AND scope_id = $2 FOR UPDATE',
-    [actor.ownerId, scopeId],
+    'SELECT last_seq FROM scope_offsets WHERE user_id = $1 AND scope_id = $2 FOR UPDATE',
+    [actor.userId, scopeId],
   );
   const changeSetId = randomUUID();
   await client.query(
-    `INSERT INTO changesets(owner_id, scope_id, id, principal_id, request_id, operation_count,
+    `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
        response, status, committed_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp())`,
     [
-      actor.ownerId,
+      actor.userId,
       scopeId,
       changeSetId,
       actor.principalId,
@@ -1104,8 +1098,8 @@ async function recordPortableImportChanges(
   );
   const result = await client.query<{ last_seq: string }>(
     `UPDATE scope_offsets SET last_seq = last_seq + $3, updated_at = clock_timestamp()
-     WHERE owner_id = $1 AND scope_id = $2 RETURNING last_seq`,
-    [actor.ownerId, scopeId, memories.length],
+     WHERE user_id = $1 AND scope_id = $2 RETURNING last_seq`,
+    [actor.userId, scopeId, memories.length],
   );
   const last = BigInt(result.rows[0]?.last_seq ?? '0');
   const first = last - BigInt(memories.length) + 1n;
@@ -1115,11 +1109,11 @@ async function recordPortableImportChanges(
     const seq = (first + BigInt(index)).toString();
     const changeId = randomUUID();
     await client.query(
-      `INSERT INTO change_ops(owner_id, scope_id, change_set_id, ordinal, op, memory_id,
+      `INSERT INTO change_ops(user_id, scope_id, change_set_id, ordinal, op, memory_id,
          memory_revision, metadata)
        VALUES ($1, $2, $3, $4, 'IMPORT', $5, $6, $7::jsonb)`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeId,
         changeSetId,
         index,
@@ -1129,16 +1123,16 @@ async function recordPortableImportChanges(
       ],
     );
     await client.query(
-      `INSERT INTO change_log(owner_id, scope_id, id, seq, change_set_id, op, memory_id,
+      `INSERT INTO change_log(user_id, scope_id, id, seq, change_set_id, op, memory_id,
          memory_revision, tombstone)
        VALUES ($1, $2, $3, $4, $5, 'IMPORT', $6, $7, false)`,
-      [actor.ownerId, scopeId, changeId, seq, changeSetId, memory.id, memory.revision],
+      [actor.userId, scopeId, changeId, seq, changeSetId, memory.id, memory.revision],
     );
     await client.query(
-      `INSERT INTO outbox(owner_id, scope_id, id, event_type, aggregate_id, payload)
+      `INSERT INTO outbox(user_id, scope_id, id, event_type, aggregate_id, payload)
        VALUES ($1, $2, $3, 'memory.change', $4, $5::jsonb)`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeId,
         randomUUID(),
         changeSetId,
@@ -1155,19 +1149,19 @@ async function recordPortableImportChanges(
 
 async function loadWorkerActor(pool: Database, job: ExportJob): Promise<ActorContext | null> {
   return withTransaction(pool, async (client) => {
-    await client.query("SELECT set_config('app.owner_id',$1,true)", [job.owner_id]);
+    await client.query("SELECT set_config('app.user_id',$1,true)", [job.user_id]);
     await client.query("SELECT set_config('app.scope_ids',$1,true)", [`{${job.scope_id}}`]);
     await client.query("SELECT set_config('app.principal_id',$1,true)", [job.principal_id]);
     const access = await client.query<{ auth_epoch: string | number; capabilities: string[] }>(
-      `SELECT auth_epoch, capabilities FROM app.lock_actor_access($1,$2,'owner',ARRAY[$3::uuid])`,
-      [job.owner_id, job.principal_id, job.scope_id],
+      `SELECT auth_epoch, capabilities FROM app.lock_actor_access($1,$2,'user',ARRAY[$3::uuid])`,
+      [job.user_id, job.principal_id, job.scope_id],
     );
     const current = access.rows[0];
     if (current === undefined || !current.capabilities.includes('admin')) return null;
     return {
-      ownerId: job.owner_id,
+      userId: job.user_id,
       principalId: job.principal_id,
-      actorKind: 'owner',
+      actorKind: 'user',
       scopeIds: [job.scope_id],
       tokenScopeIds: [job.scope_id],
       capabilities: ['admin'],
@@ -1191,7 +1185,7 @@ async function finishExport(
       `SELECT app.finish_export_job($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         job.export_id,
-        job.owner_id,
+        job.user_id,
         job.scope_id,
         job.principal_id,
         job.deletion_epoch,
@@ -1208,10 +1202,10 @@ async function finishExport(
   });
 }
 
-function lockScopeWrites(client: PoolClient, ownerId: string, scopeId: string): Promise<unknown> {
+function lockScopeWrites(client: PoolClient, userId: string, scopeId: string): Promise<unknown> {
   return client.query("SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))", [
     LEGACY_SCOPE_WRITE_LOCK_PREFIX,
-    ownerId,
+    userId,
     scopeId,
   ]);
 }

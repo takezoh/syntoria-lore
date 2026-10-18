@@ -1,6 +1,6 @@
 # Infrastructure runbook
 
-This runbook lists the executable steps for building, deploying and verifying Lore on GCP and Neon. The reasons, ordering rules and preservation constraints are in [deployment](deployment.md); read them first. Commands below target the Lore resources declared in [deployment.json](../../infra/cloud/deployment.json). Until the naming cutover described there is complete, do not run them against the running Thymesis-named services, and never point a smoke at a production scope.
+This runbook lists the executable steps for building, deploying and verifying Lore on GCP and Neon. The reasons, ordering rules and preservation constraints are in [deployment](deployment.md); read them first. The Lore target is active: API, worker and identity run under Lore names, and the Neon databases are `lore` and `lore_identity`. The 37 former Thymesis cloud resources were deleted on 2026-10-18 with user authorization; see the [deletion record](../eval/cloud-verification.md#old-resource-deletion--2026-10-18). Do not recreate old services or dispatch against data written to Lore. The source fields in [deployment.json](../../infra/cloud/deployment.json) are migration history, not active endpoints. Never point a smoke at a production scope.
 
 Run each `gcloud` command on its own and write outputs only to new private directories outside the repository. Keep tokens in mode-0600 files referenced by environment variables; the scripts never print them.
 
@@ -163,21 +163,23 @@ docker build --target keycloak -t <registry>/identity-keycloak:<revision> infra/
 docker build --target proxy -t <registry>/identity-proxy:<revision> infra/keycloak
 ```
 
-Realm configuration, the owner account and synthetic smoke principals are prepared with the private bootstrap Job (actions `configure`, `ensure-smoke-user`, `delete-smoke-user`) while the public identity service is stopped. The bootstrap is idempotent. It creates the owner with a temporary password and the `UPDATE_PASSWORD` and `CONFIGURE_TOTP` required actions only when the account has no password credential, and never resets an existing one. Keycloak generates subject IDs: pass the reported `owner_subject_id` as `OWNER_SUBJECT_ID`, and `smoke_subject_id` as both `OAUTH_SMOKE_SUBJECT_ID` and `OAUTH_SMOKE_USER_ID`, to the database bootstrap. The database bootstrap creates or verifies the owner, scope, principal and grant with the reserved IDs and records the exact realm URL as issuer; it does not run migrations.
+For a first-time setup only, realm configuration, the user account and synthetic smoke principals are prepared with the private bootstrap Job (actions `configure`, `ensure-smoke-user`, `delete-smoke-user`) while the public identity service is stopped. The bootstrap creates the user with a temporary password and the `UPDATE_PASSWORD` and `CONFIGURE_TOTP` required actions only when the account has no password credential, and never resets an existing one. Keycloak generates subject IDs: pass the reported `user_subject_id` as `USER_SUBJECT_ID`, and `smoke_subject_id` as both `OAUTH_SMOKE_SUBJECT_ID` and `OAUTH_SMOKE_USER_ID`, to the database bootstrap. The database bootstrap creates or verifies the user, scope, principal and grant with the reserved IDs and records the exact realm URL as issuer; it does not run migrations.
+
+The 2026-10-18 Lore cutover is already complete and must not be repeated. Its `lore-identity-bootstrap` Job renamed the realm, scopes, clients and account URL, but its final mapper-name readback failed because of a limitation in the pinned Keycloak API; do not report that Job as succeeded. The four mapper names were then corrected offline (`applied: 4`, `retry: 0`) with IDs and configuration preserved. A separate maintenance identity-verification Job passed the exact assertions and was deleted afterward. See the current [cloud verification register](../eval/cloud-verification.md) and [identity cutover record](identity-cutover.md). Do not run the setup commands below against the active Lore identity service.
 
 ```sh
 node scripts/cloud-oauth-bootstrap.mjs configure
 node scripts/cloud-oauth-bootstrap.mjs ensure-smoke-user
-CLOUD_OWNER_BOOTSTRAP_ACTION=ensure-smoke node scripts/cloud-owner-bootstrap.mjs
+CLOUD_USER_BOOTSTRAP_ACTION=ensure-smoke node scripts/cloud-user-bootstrap.mjs
 ```
 
-`OAUTH_SMOKE_CAPABILITIES` defaults to `read`; set it to `read,write,admin` before the owner bootstrap only when a full acceptance run needs write or admin operations. After every smoke run, disable the synthetic app principal and remove its grant:
+`OAUTH_SMOKE_CAPABILITIES` defaults to `read`; set it to `read,write,admin` before the user bootstrap only when a full acceptance run needs write or admin operations. After every smoke run, disable the synthetic app principal and remove its grant:
 
 ```sh
-CLOUD_OWNER_BOOTSTRAP_ACTION=deactivate-smoke node scripts/cloud-owner-bootstrap.mjs
+CLOUD_USER_BOOTSTRAP_ACTION=deactivate-smoke node scripts/cloud-user-bootstrap.mjs
 ```
 
-Synthetic Keycloak users and the smoke client stay configured; re-enable their grants explicitly before a repeat run. The owner account and grant are never touched by smoke tooling. Renaming the realm, clients and scopes in place follows [identity cutover](identity-cutover.md).
+Synthetic Keycloak users and the smoke client stay configured; re-enable their grants explicitly before a repeat run. The user account and grant are never touched by smoke tooling. Renaming the realm, clients and scopes in place follows [identity cutover](identity-cutover.md).
 
 ## Verification harnesses
 
@@ -190,13 +192,13 @@ npm run cloud:oauth:smoke
 npm run cloud:oauth:smoke:full
 ```
 
-**Cloud Tasks.** Provide `CLOUD_SMOKE_API_URL`, `CLOUD_SMOKE_WORKER_URL`, `CLOUD_SMOKE_SCHEDULER_JOB`, `CLOUD_SMOKE_OWNER_TOKEN`, `CLOUD_SMOKE_SCOPE_ID`, `CLOUD_API_IAM_TOKEN_FILE` and `CLOUD_SMOKE_WORKER_IAM_TOKEN_FILE` (an operator ID token for the worker audience). The smoke checks anonymous rejection, creates a synthetic capture, records two Scheduler dispatch acceptances, waits for a terminal state, then calls the worker sweep twice and confirms the state does not change. It does not inject hosted failures; forced failures are covered locally by `node scripts/local-recovery-smoke.mjs`.
+**Cloud Tasks.** Provide `CLOUD_SMOKE_API_URL`, `CLOUD_SMOKE_WORKER_URL`, `CLOUD_SMOKE_SCHEDULER_JOB`, `CLOUD_SMOKE_USER_TOKEN`, `CLOUD_SMOKE_SCOPE_ID`, `CLOUD_API_IAM_TOKEN_FILE` and `CLOUD_SMOKE_WORKER_IAM_TOKEN_FILE` (an operator ID token for the worker audience). The smoke checks anonymous rejection, creates a synthetic capture, records two Scheduler dispatch acceptances, waits for a terminal state, then calls the worker sweep twice and confirms the state does not change. It does not inject hosted failures; forced failures are covered locally by `node scripts/local-recovery-smoke.mjs`.
 
 ```sh
 node scripts/cloud-tasks-smoke.mjs
 ```
 
-**Governance across owners.** Requires two disposable synthetic principals and scopes with active grants, the API token file and the Scheduler resource. It exports, imports with `grant_imported_sources: true`, recalls in the destination and Forgets both copies. It writes real Forget entries to the target ledger; use a fresh destination every run.
+**Governance across users.** Requires two disposable synthetic principals and scopes with active grants, the API token file and the Scheduler resource. It exports, imports with `grant_imported_sources: true`, recalls in the destination and Forgets both copies. It writes real Forget entries to the target ledger; use a fresh destination every run.
 
 ```sh
 npm run cloud:governance:smoke
@@ -239,6 +241,6 @@ VERTEX_LOCATION=asia-southeast1 \
 node scripts/cloud-provider-smoke.mjs
 ```
 
-**Owner sign-in diagnostic.** `npm run personal:login` is an optional local helper that checks the OIDC callback and owner subject from the same computer through `http://127.0.0.1:18970/callback`. It is not the owner's sign-in path and changes no cloud configuration.
+**User sign-in diagnostic.** `npm run personal:login` is an optional local helper that checks the OIDC callback and user subject from the same computer through `http://127.0.0.1:18970/callback`. It is not the user's sign-in path and changes no cloud configuration.
 
 Record results in the [cloud verification register](../eval/cloud-verification.md) without tokens, database URLs or source content.

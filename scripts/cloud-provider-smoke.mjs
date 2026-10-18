@@ -10,7 +10,7 @@ const observation = {
   source_revision: 'cloud-provider-smoke-v1',
   locator: 'cloud-provider-smoke/synthetic',
   content: source,
-  speaker: 'owner',
+  speaker: 'user',
   event_time: null,
   lineage_root: randomUUID(),
 };

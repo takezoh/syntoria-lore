@@ -6,7 +6,7 @@ import { verifyDuplicateWorkerSweeps } from './cloud-tasks-smoke-contract.mjs';
 const apiUrl = requiredUrl('CLOUD_SMOKE_API_URL');
 const workerUrl = requiredUrl('CLOUD_SMOKE_WORKER_URL');
 const schedulerJob = required('CLOUD_SMOKE_SCHEDULER_JOB');
-const ownerToken = required('CLOUD_SMOKE_OWNER_TOKEN');
+const userToken = required('CLOUD_SMOKE_USER_TOKEN');
 const scopeId = required('CLOUD_SMOKE_SCOPE_ID');
 const timeoutMs = positiveInteger(process.env['CLOUD_SMOKE_TIMEOUT_MS'], 1_200_000);
 const apiInvokerToken = await readOptionalBearerTokenFile(
@@ -83,7 +83,7 @@ async function run() {
       observations: [
         {
           locator: 'cloud-smoke/1',
-          speaker: 'owner',
+          speaker: 'user',
           content: 'Cloud Tasks smoke test: water freezes at zero degrees Celsius.',
         },
       ],
@@ -151,7 +151,7 @@ async function run() {
 async function captureStatus(jobId) {
   const response = await fetch(new URL(`/v1/captures/${jobId}`, apiBase), {
     headers: {
-      authorization: `Bearer ${ownerToken}`,
+      authorization: `Bearer ${userToken}`,
       ...(apiInvokerToken === undefined
         ? {}
         : { 'X-Serverless-Authorization': `Bearer ${apiInvokerToken}` }),
@@ -166,7 +166,7 @@ async function apiRequest(path, { method, body, headers = {} }) {
   const response = await fetch(new URL(path, apiBase), {
     method,
     headers: {
-      authorization: `Bearer ${ownerToken}`,
+      authorization: `Bearer ${userToken}`,
       ...(apiInvokerToken === undefined
         ? {}
         : { 'X-Serverless-Authorization': `Bearer ${apiInvokerToken}` }),

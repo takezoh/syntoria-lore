@@ -29,10 +29,10 @@ export async function readCloudIdentityConfig() {
     productDisplayName: deployment.productDisplayName,
     identityUrl: identity.url,
     realm: identity.realm,
-    ownerSubjectId: identity.existing?.ownerSubjectId,
+    userSubjectId: identity.existing?.userSubjectId,
     publicClientId: identity.publicClientId,
     smokeClientId: identity.smokeClientId,
-    ownerInitialPasswordSecret: identity.ownerInitialPasswordSecret,
+    userInitialPasswordSecret: identity.userInitialPasswordSecret,
     scopes: {
       scopeIds: migration.targetScopeIdsScopeName,
       api: targetScope(migration.sourceApiScopeName),

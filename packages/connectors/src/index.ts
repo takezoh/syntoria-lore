@@ -1,3 +1,4 @@
+import { encodeIdentityProvenanceV1 } from '@memory/contracts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   CoreError,
@@ -53,27 +54,27 @@ export class ConnectorService {
         parsed.error.issues,
       );
     }
-    if (actor.actorKind !== 'owner') {
-      throw new CoreError(403, 'owner_required', 'Only the Owner may enable a source connector');
+    if (actor.actorKind !== 'user') {
+      throw new CoreError(403, 'user_required', 'Only the User may enable a source connector');
     }
     const value = parsed.data;
     const rightsStatus = value.enabled && value.consent ? 'granted' : 'revoked';
     return withAuthorizedActor(this.pool, actor, [value.scope_id], write, async (client) => {
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))",
-        [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.ownerId, value.scope_id],
+        [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.userId, value.scope_id],
       );
       const result = await client.query<{ id: string; enabled: boolean; consent: boolean }>(
-        `INSERT INTO connector_authorizations(owner_id, scope_id, source_kind, external_id,
+        `INSERT INTO connector_authorizations(user_id, scope_id, source_kind, external_id,
            enabled, consent, rights_status, metadata, created_by, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, clock_timestamp())
-         ON CONFLICT (owner_id, scope_id, source_kind, external_id) DO UPDATE
+         ON CONFLICT (user_id, scope_id, source_kind, external_id) DO UPDATE
            SET enabled = EXCLUDED.enabled, consent = EXCLUDED.consent,
                rights_status = EXCLUDED.rights_status, metadata = EXCLUDED.metadata,
                updated_at = clock_timestamp()
          RETURNING id, enabled, consent`,
         [
-          actor.ownerId,
+          actor.userId,
           value.scope_id,
           value.source_kind,
           value.external_id,
@@ -86,10 +87,10 @@ export class ConnectorService {
       );
       await client.query(
         `UPDATE sources SET rights_status = $5, consent = $6, metadata = $7::jsonb
-         WHERE owner_id = $1 AND scope_id = $2 AND kind = $3 AND external_id = $4
+         WHERE user_id = $1 AND scope_id = $2 AND kind = $3 AND external_id = $4
            AND (rights_status IS DISTINCT FROM $5 OR consent IS DISTINCT FROM $6)`,
         [
-          actor.ownerId,
+          actor.userId,
           value.scope_id,
           value.source_kind,
           value.external_id,
@@ -148,7 +149,7 @@ export class ConnectorService {
     return withAuthorizedActor(this.pool, actor, [capture.scope_id], write, async (client) => {
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))",
-        [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.ownerId, capture.scope_id],
+        [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.userId, capture.scope_id],
       );
       const sourceDigests =
         this.forgetHmacKey === undefined
@@ -175,14 +176,14 @@ export class ConnectorService {
       const suppressed =
         this.forgetHmacKey === undefined
           ? await client.query<{ present: boolean }>(
-              `SELECT EXISTS (SELECT 1 FROM suppressions WHERE owner_id = $1 AND scope_id = $2
+              `SELECT EXISTS (SELECT 1 FROM suppressions WHERE user_id = $1 AND scope_id = $2
               AND object_kind = 'locator_hmac' AND locator_hmac IS NOT NULL) AS present`,
-              [actor.ownerId, capture.scope_id],
+              [actor.userId, capture.scope_id],
             )
           : await client.query<{ present: boolean }>(
-              `SELECT EXISTS (SELECT 1 FROM suppressions WHERE owner_id = $1 AND scope_id = $2
+              `SELECT EXISTS (SELECT 1 FROM suppressions WHERE user_id = $1 AND scope_id = $2
               AND object_kind = 'locator_hmac' AND locator_hmac = ANY($3::text[])) AS present`,
-              [actor.ownerId, capture.scope_id, sourceDigests],
+              [actor.userId, capture.scope_id, sourceDigests],
             );
       if (suppressed.rows[0]?.present === true) {
         throw new CoreError(
@@ -195,17 +196,17 @@ export class ConnectorService {
         );
       }
       const locks = [
-        `capture-operation:${actor.ownerId}:${capture.scope_id}:${actor.principalId}:${capture.operation_id}`,
-        `capture-idempotency:${actor.ownerId}:${capture.scope_id}:${actor.principalId}:${idempotencyKey}`,
+        `capture-operation:${actor.userId}:${capture.scope_id}:${actor.principalId}:${capture.operation_id}`,
+        `capture-idempotency:${actor.userId}:${capture.scope_id}:${actor.principalId}:${idempotencyKey}`,
       ].sort();
       for (const lock of locks)
         await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [lock]);
       const prior = await client.query<{ payload_hash: string; job_id: string }>(
         `SELECT payload_hash, job_id FROM capture_requests
-         WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3
+         WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3
            AND (operation_id = $4 OR idempotency_key = $5)
          FOR UPDATE`,
-        [actor.ownerId, capture.scope_id, actor.principalId, capture.operation_id, idempotencyKey],
+        [actor.userId, capture.scope_id, actor.principalId, capture.operation_id, idempotencyKey],
       );
       const priorRows = [...new Map(prior.rows.map((row) => [row.job_id, row])).values()];
       if (priorRows.length > 0) {
@@ -222,9 +223,9 @@ export class ConnectorService {
       const connector = await client.query<ConnectorRow>(
         `SELECT enabled, consent, rights_status, metadata
          FROM connector_authorizations
-         WHERE owner_id = $1 AND scope_id = $2 AND source_kind = $3 AND external_id = $4
+         WHERE user_id = $1 AND scope_id = $2 AND source_kind = $3 AND external_id = $4
          FOR UPDATE`,
-        [actor.ownerId, capture.scope_id, capture.source.kind, capture.source.external_id],
+        [actor.userId, capture.scope_id, capture.source.kind, capture.source.external_id],
       );
       const authorization = connector.rows[0];
       if (
@@ -236,18 +237,18 @@ export class ConnectorService {
         throw new CoreError(
           403,
           'source_forbidden',
-          'The Owner has not enabled this source with consent',
+          'The User has not enabled this source with consent',
         );
       }
 
       const sourceResult = await client.query<{ id: string }>(
-        `INSERT INTO sources(owner_id, scope_id, kind, external_id, revision, rights_status, consent, metadata)
+        `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent, metadata)
          VALUES ($1, $2, $3, $4, $5, 'granted', true, $6::jsonb)
-         ON CONFLICT (owner_id, scope_id, kind, external_id, revision) DO UPDATE
+         ON CONFLICT (user_id, scope_id, kind, external_id, revision) DO UPDATE
            SET rights_status = CASE WHEN sources.rights_status = 'granted' AND sources.consent THEN 'granted' ELSE 'revoked' END
          RETURNING id`,
         [
-          actor.ownerId,
+          actor.userId,
           capture.scope_id,
           capture.source.kind,
           capture.source.external_id,
@@ -259,8 +260,8 @@ export class ConnectorService {
       if (sourceId === undefined)
         throw new CoreError(500, 'internal_error', 'Capture source was not stored', true);
       const sourceRights = await client.query<{ rights_status: string; consent: boolean }>(
-        'SELECT rights_status, consent FROM sources WHERE owner_id = $1 AND scope_id = $2 AND id = $3 FOR SHARE',
-        [actor.ownerId, capture.scope_id, sourceId],
+        'SELECT rights_status, consent FROM sources WHERE user_id = $1 AND scope_id = $2 AND id = $3 FOR SHARE',
+        [actor.userId, capture.scope_id, sourceId],
       );
       if (sourceRights.rows[0]?.rights_status !== 'granted' || !sourceRights.rows[0]?.consent) {
         throw new CoreError(403, 'source_forbidden', 'Source rights were revoked');
@@ -271,13 +272,13 @@ export class ConnectorService {
         const canonicalLocator = canonicalizeLocator(observation.locator);
         const contentHash = hash(observation.content.normalize('NFKC'));
         const inserted = await client.query<{ id: string }>(
-          `INSERT INTO observations(owner_id, scope_id, source_id, source_revision, speaker,
+          `INSERT INTO observations(user_id, scope_id, source_id, source_revision, speaker,
              event_time, locator, canonical_locator, source_kind, content, content_hash, lineage_root)
            VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11, $12::uuid)
-           ON CONFLICT (owner_id, scope_id, source_id, source_revision, canonical_locator, content_hash)
+           ON CONFLICT (user_id, scope_id, source_id, source_revision, canonical_locator, content_hash)
            DO NOTHING RETURNING id`,
           [
-            actor.ownerId,
+            actor.userId,
             capture.scope_id,
             sourceId,
             capture.source.revision,
@@ -294,10 +295,10 @@ export class ConnectorService {
         let observationId = inserted.rows[0]?.id;
         if (observationId === undefined) {
           const existing = await client.query<{ id: string }>(
-            `SELECT id FROM observations WHERE owner_id = $1 AND scope_id = $2 AND source_id = $3
+            `SELECT id FROM observations WHERE user_id = $1 AND scope_id = $2 AND source_id = $3
                AND source_revision = $4 AND canonical_locator = $5 AND content_hash = $6`,
             [
-              actor.ownerId,
+              actor.userId,
               capture.scope_id,
               sourceId,
               capture.source.revision,
@@ -326,13 +327,13 @@ export class ConnectorService {
         }),
       );
       const newJob = await client.query<{ id: string }>(
-        `INSERT INTO capture_jobs(owner_id, scope_id, source_id, state, principal_id, actor_kind,
+        `INSERT INTO capture_jobs(user_id, scope_id, source_id, state, principal_id, actor_kind,
            request_hash, prompt_generation, model_id, auth_epochs, token_scope_ids, authorized_capabilities)
          VALUES ($1, $2, $3, 'accepted', $4, $5, $6, $7, $8, $9::jsonb, $10::uuid[], $11::text[])
-         ON CONFLICT (owner_id, scope_id, source_id, request_hash) WHERE request_hash IS NOT NULL
+         ON CONFLICT (user_id, scope_id, source_id, request_hash) WHERE request_hash IS NOT NULL
          DO NOTHING RETURNING id`,
         [
-          actor.ownerId,
+          actor.userId,
           capture.scope_id,
           sourceId,
           actor.principalId,
@@ -349,8 +350,8 @@ export class ConnectorService {
       let jobId = newJob.rows[0]?.id;
       if (jobId === undefined) {
         const existingJob = await client.query<{ id: string }>(
-          `SELECT id FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND source_id = $3 AND request_hash = $4`,
-          [actor.ownerId, capture.scope_id, sourceId, requestHash],
+          `SELECT id FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND source_id = $3 AND request_hash = $4`,
+          [actor.userId, capture.scope_id, sourceId, requestHash],
         );
         jobId = existingJob.rows[0]?.id;
       }
@@ -358,17 +359,17 @@ export class ConnectorService {
         throw new CoreError(500, 'internal_error', 'Capture job was not stored', true);
       for (const [ordinal, observationId] of observationIds.entries()) {
         await client.query(
-          `INSERT INTO capture_job_observations(owner_id, scope_id, job_id, observation_id, ordinal)
+          `INSERT INTO capture_job_observations(user_id, scope_id, job_id, observation_id, ordinal)
            VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-          [actor.ownerId, capture.scope_id, jobId, observationId, ordinal],
+          [actor.userId, capture.scope_id, jobId, observationId, ordinal],
         );
       }
       await client.query(
-        `INSERT INTO capture_requests(owner_id, scope_id, principal_id, operation_id,
+        `INSERT INTO capture_requests(user_id, scope_id, principal_id, operation_id,
            idempotency_key, payload_hash, job_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
-          actor.ownerId,
+          actor.userId,
           capture.scope_id,
           actor.principalId,
           capture.operation_id,
@@ -379,17 +380,17 @@ export class ConnectorService {
       );
       if (isNewJob) {
         await client.query(
-          `INSERT INTO outbox(owner_id, scope_id, id, event_type, aggregate_id, payload)
+          `INSERT INTO outbox(user_id, scope_id, id, event_type, aggregate_id, payload)
            VALUES ($1, $2, $3, 'capture.accepted', $4, $5::jsonb)
            ON CONFLICT DO NOTHING`,
-          [actor.ownerId, capture.scope_id, randomUUID(), jobId, JSON.stringify({ job_id: jobId })],
+          [actor.userId, capture.scope_id, randomUUID(), jobId, JSON.stringify({ job_id: jobId })],
         );
       }
       await client.query(
-        `INSERT INTO audit_events(owner_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
+        `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
          VALUES ($1, $2, $3, 'capture.accepted', $4::uuid, $5, $6::jsonb)`,
         [
-          actor.ownerId,
+          actor.userId,
           capture.scope_id,
           actor.principalId,
           requestId,
@@ -421,10 +422,14 @@ export function hash(value: string): string {
 }
 
 export function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  return stableJsonRaw(encodeIdentityProvenanceV1(value));
+}
+
+function stableJsonRaw(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJsonRaw).join(',')}]`;
   if (typeof value !== 'object' || value === null) return JSON.stringify(value);
   const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
     left.localeCompare(right),
   );
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`;
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJsonRaw(item)}`).join(',')}}`;
 }

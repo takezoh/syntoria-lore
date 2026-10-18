@@ -28,13 +28,13 @@ export async function withAuthorizedActor<T>(
   }
 
   return withTransaction(pool, async (client) => {
-    await client.query("SELECT set_config('app.owner_id', $1, true)", [actor.ownerId]);
+    await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
     await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
     await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
     const access = await client.query<ScopeGrantRow>(
       `SELECT scope_id, auth_epoch, capabilities
        FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,
-      [actor.ownerId, actor.principalId, actor.actorKind, scopeIds],
+      [actor.userId, actor.principalId, actor.actorKind, scopeIds],
     );
     if (access.rows.length !== scopeIds.length) {
       throw new CoreError(

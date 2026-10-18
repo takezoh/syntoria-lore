@@ -10,7 +10,7 @@ Verify the actual responsibility boundary. Unit tests establish deterministic lo
 - **PostgreSQL integration** (`npm run test:integration`): `tests/core.postgres.test.ts` against a real server and the non-bypass application role—RLS, grant intersection and expiry at authentication and operation time, idempotency, separate proposal and commit, parallel compare-and-set, rollback after a late source-rights failure, per-revision evidence, bitemporal reads, every change operation, cursor tampering and epoch expiry, append-only privileges, pooled-context reset, capture and review, Forget and purge, export and import, MCP clients. It then runs the restore-clone and fresh-database portability scripts. The runner fails when `TEST_ADMIN_URL` and `TEST_APP_URL` are missing; `npm test` alone does not prove database behavior.
 - **Local stack** (`sh scripts/local.sh smoke`, `acceptance`): signed-token REST and MCP with two principals and wrong-audience rejection, forced task and provider failures with retries and duplicate scheduler sweeps, stop/start persistence, restore reconciliation, the deterministic evaluation and a mixed-load smoke.
 - **Offline cloud contracts**: tests that drive the cloud smoke runners against fixtures. They make no network request and are not hosted evidence.
-- **Hosted smoke**: OAuth PKCE and MCP, Cloud Tasks delivery, governance across owners, GCS ledger and restore clone, Vertex provider identity. See the [infrastructure runbook](infrastructure-runbook.md).
+- **Hosted smoke**: OAuth PKCE and MCP, Cloud Tasks delivery, governance across users, GCS ledger and restore clone, Vertex provider identity. See the [infrastructure runbook](infrastructure-runbook.md).
 
 ## PostgreSQL acceptance
 
@@ -39,3 +39,14 @@ Each verification record names the source, image digest where relevant, configur
 | `node scripts/local-evidence-digest.mjs` | Reproducible digest of source, configuration and operational documentation |
 
 CI runs the PostgreSQL contract job defined in [local-contract.yml](../../.github/workflows/local-contract.yml) on push and pull request.
+
+## User identity migration regression
+
+`TEST_ADMIN_URL=... node --import tsx scripts/test-user-identity-migration.ts`
+creates and removes a disposable database on the supplied local test cluster.
+It applies the immutable preceding migrations, populates user/principal/grant,
+memory and receipt records, applies the user-name migration twice, and checks
+stable UUIDs and table OIDs, exact receipt and hash values, old signed cursors,
+forced RLS and cross-user rejection. It also checks unchanged arbitrary nested
+context and SQL NULL values. This is local PostgreSQL evidence, not a hosted
+migration or deployment check.

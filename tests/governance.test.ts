@@ -48,7 +48,7 @@ describe('local deletion ledger', () => {
       sequence: 2,
       previous_hash: firstReceipt.entry_hash,
       entry_hash: hash(firstReceipt.entry_hash, second),
-      entry: second,
+      entry: { ...second, user_id: undefined, owner_id: second.user_id, actor_kind: 'owner' },
     };
     await writeFile(join(directory, 'entry-000000000002.json'), JSON.stringify(stored), {
       mode: 0o600,
@@ -123,10 +123,10 @@ async function createLedgerDirectory(): Promise<string> {
 function ledgerEntry(requestId: string): DeletionLedgerEntry {
   return {
     request_id: requestId,
-    owner_id: '00000000-0000-4000-8000-000000000010',
+    user_id: '00000000-0000-4000-8000-000000000010',
     scope_id: '00000000-0000-4000-8000-000000000020',
     principal_id: '00000000-0000-4000-8000-000000000030',
-    actor_kind: 'owner',
+    actor_kind: 'user',
     target_memory_ids: ['00000000-0000-4000-8000-000000000040'],
     target_source_ids: [],
     target_subject_ids: [],
@@ -137,14 +137,18 @@ function ledgerEntry(requestId: string): DeletionLedgerEntry {
 
 function hash(previousHash: string, entry: DeletionLedgerEntry): string {
   return createHash('sha256')
-    .update(`${previousHash}\n${stableJson(entry)}`)
+    .update(
+      `${previousHash}\n${stableJson({ ...entry, user_id: undefined, owner_id: entry.user_id, actor_kind: 'owner' })}`,
+    )
     .digest('hex');
 }
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (typeof value === 'object' && value !== null) {
-    const record = value as Record<string, unknown>;
+    const record = Object.fromEntries(
+      Object.entries(value).filter(([, item]) => item !== undefined),
+    );
     return `{${Object.keys(record)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)

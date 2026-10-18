@@ -62,7 +62,7 @@ export async function startPersonalLogin({
             csrf: session.csrf,
             styleNonce,
             productDisplayName: config.productDisplayName,
-            ownerInitialPasswordUrl: config.ownerInitialPasswordUrl,
+            userInitialPasswordUrl: config.userInitialPasswordUrl,
             cloudProject: config.cloudProject,
           }),
         );
@@ -166,7 +166,7 @@ export async function startPersonalLogin({
         code_challenge: createHash('sha256').update(attempt.verifier).digest('base64url'),
         code_challenge_method: 'S256',
         prompt: 'login',
-        login_hint: 'owner',
+        login_hint: 'user',
       }).toString();
       redirect(target.href);
     } catch {

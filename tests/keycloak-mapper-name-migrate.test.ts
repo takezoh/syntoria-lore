@@ -67,6 +67,61 @@ const configDefinition = {
 const baseline = makeBaseline();
 const config = { ...configDefinition, baseline };
 
+describe('pinned Keycloak Liquibase lock state', () => {
+  it.each([
+    ['canonical single row', [{ id: 1, locked: false }]],
+    [
+      'pinned two-row state',
+      [
+        { id: 1, locked: false },
+        { id: 1000, locked: false },
+      ],
+    ],
+  ])('accepts the %s', async (_name, lockRows) => {
+    const fixture = makeDatabase({ lockRows });
+    await expect(
+      captureMapperNameBaseline(fixture.targetPool, fixture.controlPool, configDefinition),
+    ).rejects.toMatchObject({ code: 'KEYCLOAK_SCHEMA_VERSION_MISMATCH' });
+    expect(fixture.calls).toContain('SELECT to_jsonb(r) AS row FROM public.realm r ORDER BY r.id');
+  });
+
+  it.each([
+    ['an unknown ID', [{ id: 2, locked: false }]],
+    [
+      'duplicate IDs',
+      [
+        { id: 1, locked: false },
+        { id: 1, locked: false },
+      ],
+    ],
+    ['a held canonical lock', [{ id: 1, locked: true }]],
+    [
+      'a held pinned lock',
+      [
+        { id: 1, locked: false },
+        { id: 1000, locked: true },
+      ],
+    ],
+    [
+      'an extra row',
+      [
+        { id: 1, locked: false },
+        { id: 1000, locked: false },
+        { id: 1001, locked: false },
+      ],
+    ],
+    ['an empty table', []],
+  ])('rejects %s', async (_name, lockRows) => {
+    const fixture = makeDatabase({ lockRows });
+    await expect(
+      captureMapperNameBaseline(fixture.targetPool, fixture.controlPool, configDefinition),
+    ).rejects.toMatchObject({ code: 'KEYCLOAK_SCHEMA_VERSION_MISMATCH' });
+    expect(fixture.calls).not.toContain(
+      'SELECT to_jsonb(r) AS row FROM public.realm r ORDER BY r.id',
+    );
+  });
+});
+
 describe('offline Keycloak mapper name maintenance', () => {
   it('requires the exact Keycloak version, an immutable image, and the configured mapper set', () => {
     const deployment = makeDeployment();
@@ -89,6 +144,9 @@ describe('offline Keycloak mapper name maintenance', () => {
     expect(fixture.admissionChanges).toEqual([false, true]);
     expect(fixture.updates).toEqual([]);
     expect(fixture.calls).toContain('ROLLBACK');
+    expect(fixture.calls).toContain(
+      'SELECT id, locked FROM public.databasechangeloglock ORDER BY id',
+    );
     expect(fixture.admitted).toBe(true);
     const closeIndex = fixture.calls.indexOf(
       'ALTER DATABASE "memory_identity_test" WITH ALLOW_CONNECTIONS false',
@@ -113,7 +171,7 @@ describe('offline Keycloak mapper name maintenance', () => {
     expect(fixture.calls).not.toContain('BEGIN ISOLATION LEVEL SERIALIZABLE');
   });
 
-  it('refuses a concurrent maintenance owner before changing database admission', async () => {
+  it('refuses a concurrent maintenance user before changing database admission', async () => {
     const fixture = makeDatabase({ lockUnavailable: true });
     await expect(
       runMapperNameCutover(fixture.targetPool, fixture.controlPool, config),
@@ -218,9 +276,11 @@ describe('PostgreSQL 18 mapper maintenance isolation', () => {
           'CREATE TABLE public.databasechangelog (id text, author text, filename text, md5sum text, orderexecuted integer)',
         );
         await schemaSetup.query(
-          'CREATE TABLE public.databasechangeloglock (locked boolean NOT NULL)',
+          'CREATE TABLE public.databasechangeloglock (id integer PRIMARY KEY, locked boolean NOT NULL)',
         );
-        await schemaSetup.query('INSERT INTO public.databasechangeloglock (locked) VALUES (false)');
+        await schemaSetup.query(
+          'INSERT INTO public.databasechangeloglock (id, locked) VALUES (1, false)',
+        );
         await schemaSetup.end();
         targetPool = new Pool({ connectionString: targetUrl.toString(), max: 2 });
 
@@ -332,10 +392,6 @@ describe('PostgreSQL 18 mapper maintenance isolation', () => {
           { id: 1, locked: false },
           { id: 1000, locked: false },
         ]);
-        const removedFixtureLock = await targetPool.query(
-          'DELETE FROM public.databasechangeloglock WHERE id = 1000 AND locked = false',
-        );
-        expect(removedFixtureLock.rowCount).toBe(1);
 
         const deployment = await readCloudDeploymentConfig();
         const existingIdentity = deployment.identity.existing as
@@ -415,6 +471,7 @@ describe('PostgreSQL 18 mapper maintenance isolation', () => {
 
         const captured = await captureMapperNameBaseline(targetPool, controlPool, definition);
         expect(captured.profile).toMatchObject({ keycloakVersion: '26.8.1', changelogCount: 237 });
+        await expectPinnedLiquibaseLockRows(targetPool);
         await writeMapperNameBaseline(baselinePath, captured);
         expect((await stat(baselinePath)).mode & 0o777).toBe(0o600);
         const privateBaseline = await readMapperNameBaseline(baselinePath);
@@ -466,6 +523,7 @@ describe('PostgreSQL 18 mapper maintenance isolation', () => {
           'reverse',
         );
         expect(reverseRetry).toMatchObject({ status: 'already-applied', updatedCount: 0 });
+        await expectPinnedLiquibaseLockRows(targetPool);
 
         const unknownCommitResult = await runMapperNameCutover(
           commitAckLossPool(targetPool),
@@ -578,6 +636,16 @@ async function expectIdentityRowsMatchBaseline(
   expect(protocolMapperConfigRows.rows.map((entry) => entry.row)).toEqual(
     baseline.protocolMapperConfigRows,
   );
+}
+
+async function expectPinnedLiquibaseLockRows(pool: Pool) {
+  const lockRows = await pool.query<{ id: number; locked: boolean }>(
+    'SELECT id, locked FROM public.databasechangeloglock ORDER BY id',
+  );
+  expect(lockRows.rows).toEqual([
+    { id: 1, locked: false },
+    { id: 1000, locked: false },
+  ]);
 }
 
 function commitAckLossPool(pool: Pool): MapperNameMaintenancePool {
@@ -697,7 +765,13 @@ function makeDeployment() {
   };
 }
 
-function makeDatabase(options: { otherSessions?: number; lockUnavailable?: boolean } = {}) {
+function makeDatabase(
+  options: {
+    otherSessions?: number;
+    lockUnavailable?: boolean;
+    lockRows?: Array<{ id: number; locked: boolean }>;
+  } = {},
+) {
   const calls: string[] = [];
   const updates: string[] = [];
   const admissionChanges: boolean[] = [];
@@ -759,7 +833,14 @@ function makeDatabase(options: { otherSessions?: number; lockUnavailable?: boole
             }
             if (normalized.startsWith('SELECT table_name, column_name')) return result([]);
             if (normalized.startsWith('SELECT id, author, filename, md5sum')) return result([]);
-            if (normalized.startsWith('SELECT locked FROM')) return result([{ locked: false }]);
+            if (normalized.startsWith('SELECT id, locked FROM public.databasechangeloglock')) {
+              return result(
+                options.lockRows ?? [
+                  { id: 1, locked: false },
+                  { id: 1000, locked: false },
+                ],
+              );
+            }
             if (normalized.startsWith('SELECT to_jsonb(r)')) return result(baseline.realmRows);
             if (normalized.startsWith('SELECT id FROM public.client')) return result([]);
             if (normalized.startsWith('SELECT to_jsonb(s)'))

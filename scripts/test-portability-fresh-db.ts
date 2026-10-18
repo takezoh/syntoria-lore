@@ -32,9 +32,9 @@ const masterKey = required('PORTABILITY_MASTER_KEY');
 const hmacKey = required('FORGET_HMAC_KEY');
 const workerPassword = 'memory_worker_local_test_only_20261014';
 const appPassword = decodeURIComponent(new URL(appTemplateUrl).password);
-const sourceOwnerId = randomUUID();
+const sourceUserId = randomUUID();
 const sourceScopeId = randomUUID();
-const destinationOwnerId = randomUUID();
+const destinationUserId = randomUUID();
 const destinationScopeId = randomUUID();
 const sourceSubject = `portability-source-${randomUUID()}`;
 const destinationSubject = `portability-destination-${randomUUID()}`;
@@ -70,22 +70,22 @@ try {
   await assertWorkerMember(sourceWorker);
   await assertNobypassRls(destinationApp);
 
-  const sourcePrincipalId = await provisionOwner(
+  const sourcePrincipalId = await provisionUser(
     sourceAdmin,
-    sourceOwnerId,
+    sourceUserId,
     sourceScopeId,
     sourceSubject,
   );
-  const destinationPrincipalId = await provisionOwner(
+  const destinationPrincipalId = await provisionUser(
     destinationAdmin,
-    destinationOwnerId,
+    destinationUserId,
     destinationScopeId,
     destinationSubject,
   );
-  const sourceActor = await actorFor(sourceAdmin, sourceOwnerId, sourcePrincipalId, sourceScopeId);
+  const sourceActor = await actorFor(sourceAdmin, sourceUserId, sourcePrincipalId, sourceScopeId);
   const destinationActor = await actorFor(
     destinationAdmin,
-    destinationOwnerId,
+    destinationUserId,
     destinationPrincipalId,
     destinationScopeId,
   );
@@ -154,13 +154,13 @@ try {
   }>(
     `SELECT v.revision, v.recorded_at::text AS recorded_at, s.id AS source_id, e.id AS evidence_id
      FROM memory_versions v
-     JOIN memory_version_evidence mve ON mve.owner_id=v.owner_id AND mve.scope_id=v.scope_id
+     JOIN memory_version_evidence mve ON mve.user_id=v.user_id AND mve.scope_id=v.scope_id
        AND mve.memory_id=v.memory_id AND mve.revision=v.revision
-     JOIN evidence e ON e.owner_id=mve.owner_id AND e.scope_id=mve.scope_id AND e.id=mve.evidence_id
-     JOIN sources s ON s.owner_id=e.owner_id AND s.scope_id=e.scope_id AND s.id=e.source_id
-     WHERE v.owner_id=$1 AND v.scope_id=$2 AND v.memory_id=$3
+     JOIN evidence e ON e.user_id=mve.user_id AND e.scope_id=mve.scope_id AND e.id=mve.evidence_id
+     JOIN sources s ON s.user_id=e.user_id AND s.scope_id=e.scope_id AND s.id=e.source_id
+     WHERE v.user_id=$1 AND v.scope_id=$2 AND v.memory_id=$3
      ORDER BY v.revision`,
-    [sourceOwnerId, sourceScopeId, sourceMemoryId],
+    [sourceUserId, sourceScopeId, sourceMemoryId],
   );
   if (
     sourceHistory.rows.length !== 3 ||
@@ -250,37 +250,37 @@ try {
     version_count: string;
     source_count: string;
     evidence_count: string;
-    provenance_owner: string;
+    provenance_user: string;
     provenance_scope: string;
     first_revision_time: string;
     origin_authority: string;
     created_by: string;
   }>(
     `SELECT
-       (SELECT count(*)::text FROM memory_versions v WHERE v.owner_id=$1 AND v.scope_id=$2 AND v.memory_id=$3) AS version_count,
+       (SELECT count(*)::text FROM memory_versions v WHERE v.user_id=$1 AND v.scope_id=$2 AND v.memory_id=$3) AS version_count,
        (SELECT count(DISTINCT s.id)::text FROM memory_version_evidence mve
-         JOIN evidence e ON e.owner_id=mve.owner_id AND e.scope_id=mve.scope_id AND e.id=mve.evidence_id
-         JOIN sources s ON s.owner_id=e.owner_id AND s.scope_id=e.scope_id AND s.id=e.source_id
-         WHERE mve.owner_id=$1 AND mve.scope_id=$2 AND mve.memory_id=$3) AS source_count,
+         JOIN evidence e ON e.user_id=mve.user_id AND e.scope_id=mve.scope_id AND e.id=mve.evidence_id
+         JOIN sources s ON s.user_id=e.user_id AND s.scope_id=e.scope_id AND s.id=e.source_id
+         WHERE mve.user_id=$1 AND mve.scope_id=$2 AND mve.memory_id=$3) AS source_count,
        (SELECT count(DISTINCT e.id)::text FROM memory_version_evidence mve
-         JOIN evidence e ON e.owner_id=mve.owner_id AND e.scope_id=mve.scope_id AND e.id=mve.evidence_id
-         WHERE mve.owner_id=$1 AND mve.scope_id=$2 AND mve.memory_id=$3) AS evidence_count,
-       m.import_provenance->>'origin_owner_id' AS provenance_owner,
+         JOIN evidence e ON e.user_id=mve.user_id AND e.scope_id=mve.scope_id AND e.id=mve.evidence_id
+         WHERE mve.user_id=$1 AND mve.scope_id=$2 AND mve.memory_id=$3) AS evidence_count,
+       m.import_provenance->>'origin_user_id' AS provenance_user,
        m.import_provenance->>'origin_scope_id' AS provenance_scope,
-       (SELECT v.recorded_at::text FROM memory_versions v WHERE v.owner_id=$1 AND v.scope_id=$2
+       (SELECT v.recorded_at::text FROM memory_versions v WHERE v.user_id=$1 AND v.scope_id=$2
          AND v.memory_id=$3 AND v.revision=1) AS first_revision_time,
        (SELECT v.origin_provenance->>'origin_authority' FROM memory_versions v
-         WHERE v.owner_id=$1 AND v.scope_id=$2 AND v.memory_id=$3 AND v.revision=2) AS origin_authority,
+         WHERE v.user_id=$1 AND v.scope_id=$2 AND v.memory_id=$3 AND v.revision=2) AS origin_authority,
        m.created_by::text AS created_by
-     FROM memories m WHERE m.owner_id=$1 AND m.scope_id=$2 AND m.id=$3`,
-    [destinationOwnerId, destinationScopeId, destinationMemoryId],
+     FROM memories m WHERE m.user_id=$1 AND m.scope_id=$2 AND m.id=$3`,
+    [destinationUserId, destinationScopeId, destinationMemoryId],
   );
   const mapping = targetMappings.rows[0];
   if (
     mapping?.version_count !== '2' ||
     mapping.source_count !== '2' ||
     mapping.evidence_count !== '2' ||
-    mapping.provenance_owner !== sourceOwnerId ||
+    mapping.provenance_user !== sourceUserId ||
     mapping.provenance_scope !== sourceScopeId ||
     mapping.first_revision_time !== oldestRecordedAt ||
     mapping.created_by !== destinationPrincipalId
@@ -290,25 +290,25 @@ try {
     );
   }
   const sourceMappingRows = await sourceAdmin.query<{ id: string; external_id: string }>(
-    `SELECT id, external_id FROM sources WHERE owner_id=$1 AND scope_id=$2 AND external_id=ANY($3::text[])
+    `SELECT id, external_id FROM sources WHERE user_id=$1 AND scope_id=$2 AND external_id=ANY($3::text[])
      ORDER BY external_id`,
-    [sourceOwnerId, sourceScopeId, externalIds],
+    [sourceUserId, sourceScopeId, externalIds],
   );
   for (const row of sourceMappingRows.rows) {
     const targetId = mapped[`sources:${row.id}`];
     if (targetId === undefined || targetId === row.id)
       throw new Error('Import source mapping is missing or reuses the source identity');
     const destinationSource = await destinationAdmin.query<{ id: string; external_id: string }>(
-      'SELECT id, external_id FROM sources WHERE owner_id=$1 AND scope_id=$2 AND id=$3',
-      [destinationOwnerId, destinationScopeId, targetId],
+      'SELECT id, external_id FROM sources WHERE user_id=$1 AND scope_id=$2 AND id=$3',
+      [destinationUserId, destinationScopeId, targetId],
     );
     if (destinationSource.rows[0]?.external_id !== row.external_id)
       throw new Error('Fresh-database source mapping does not preserve source identity metadata');
   }
   const targetChange = await destinationAdmin.query<{ count: string }>(
     `SELECT count(*)::text AS count FROM change_log
-     WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3 AND op='IMPORT' AND memory_revision=2`,
-    [destinationOwnerId, destinationScopeId, destinationMemoryId],
+     WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3 AND op='IMPORT' AND memory_revision=2`,
+    [destinationUserId, destinationScopeId, destinationMemoryId],
   );
   if (targetChange.rows[0]?.count !== '1')
     throw new Error('Fresh-database import did not record a destination import change event');
@@ -335,7 +335,7 @@ try {
         history_versions: mapping.version_count,
         source_mappings: sourceMappingRows.rowCount,
         evidence_mappings: mapping.evidence_count,
-        provenance_preserved: mapping.provenance_owner === sourceOwnerId,
+        provenance_preserved: mapping.provenance_user === sourceUserId,
         authority_downgraded: attribution['authority'] === 'third_party_claim',
         origin_authority: mapping.origin_authority,
         source_recorded_at_preserved: true,
@@ -381,48 +381,48 @@ function workerUrl(template: URL, name: string): string {
   return url.toString();
 }
 
-async function provisionOwner(
+async function provisionUser(
   admin: Pool,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   subject: string,
 ): Promise<string> {
   const principalId = randomUUID();
-  await admin.query('INSERT INTO owners(id) VALUES ($1)', [ownerId]);
-  await admin.query('INSERT INTO scopes(owner_id,id,name) VALUES ($1,$2,$3)', [
-    ownerId,
+  await admin.query('INSERT INTO users(id) VALUES ($1)', [userId]);
+  await admin.query('INSERT INTO scopes(user_id,id,name) VALUES ($1,$2,$3)', [
+    userId,
     scopeId,
     `portable ${subject}`,
   ]);
   await admin.query(
-    `INSERT INTO principals(id,owner_id,issuer,subject,actor_kind)
-     VALUES ($1,$2,$3,$4,'owner')`,
-    [principalId, ownerId, issuer, subject],
+    `INSERT INTO principals(id,user_id,issuer,subject,actor_kind)
+     VALUES ($1,$2,$3,$4,'user')`,
+    [principalId, userId, issuer, subject],
   );
   await admin.query(
-    `INSERT INTO grants(owner_id,scope_id,principal_id,capabilities)
+    `INSERT INTO grants(user_id,scope_id,principal_id,capabilities)
      VALUES ($1,$2,$3,ARRAY['read','write','admin'])`,
-    [ownerId, scopeId, principalId],
+    [userId, scopeId, principalId],
   );
   return principalId;
 }
 
 async function actorFor(
   admin: Pool,
-  ownerId: string,
+  userId: string,
   principalId: string,
   scopeId: string,
 ): Promise<ActorContext> {
   const result = await admin.query<{ auth_epoch: number | string }>(
-    'SELECT auth_epoch FROM scopes WHERE owner_id=$1 AND id=$2',
-    [ownerId, scopeId],
+    'SELECT auth_epoch FROM scopes WHERE user_id=$1 AND id=$2',
+    [userId, scopeId],
   );
   const epoch = result.rows[0]?.auth_epoch;
-  if (epoch === undefined) throw new Error('Portable fixture owner scope was not provisioned');
+  if (epoch === undefined) throw new Error('Portable fixture user scope was not provisioned');
   return {
-    ownerId,
+    userId,
     principalId,
-    actorKind: 'owner',
+    actorKind: 'user',
     scopeIds: [scopeId],
     tokenScopeIds: [scopeId],
     capabilities: ['read', 'write', 'admin'],
@@ -435,7 +435,7 @@ function portableMemory(statement: string, externalId: string) {
     kind: 'fact',
     statement,
     context: { episode: { condition: { place: 'lab' }, action: 'stored', outcome: 'verified' } },
-    subjects: [{ name: 'Portable Owner', aliases: [{ name: 'Source Maintainer' }] }],
+    subjects: [{ name: 'Portable User', aliases: [{ name: 'Source Maintainer' }] }],
     evidence: [portableEvidence(externalId)],
   };
 }

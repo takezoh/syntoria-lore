@@ -1,3 +1,4 @@
+import { encodeIdentityProvenanceV1 } from '@memory/contracts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   CoreError,
@@ -38,7 +39,7 @@ interface SourceIdentity {
 
 interface PendingDeletion {
   readonly request_id: string;
-  readonly owner_id: string;
+  readonly user_id: string;
   readonly scope_id: string;
   readonly principal_id: string;
   readonly blocked_at: Date | string;
@@ -50,7 +51,7 @@ interface PendingDeletion {
 }
 
 interface RetentionCandidate {
-  readonly owner_id: string;
+  readonly user_id: string;
   readonly scope_id: string;
   readonly principal_id: string;
   readonly target_kind: 'memory' | 'source';
@@ -68,7 +69,7 @@ interface RetentionCandidate {
 }
 
 interface IndexMaintenanceActor {
-  readonly owner_id: string;
+  readonly user_id: string;
   readonly scope_id: string;
   readonly principal_id: string;
   readonly auth_epoch: string | number;
@@ -124,8 +125,8 @@ export class ForgetService {
         false,
         parsed.error.issues,
       );
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may forget scoped memories');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may forget scoped memories');
     if (idempotencyKey.length < 1 || idempotencyKey.length > 256)
       throw new CoreError(
         400,
@@ -141,20 +142,20 @@ export class ForgetService {
       [request.scope_id],
       admin,
       async (client) => {
-        await lockScopeWrites(client, actor.ownerId, request.scope_id);
+        await lockScopeWrites(client, actor.userId, request.scope_id);
         const memoryIds = await resolveTargets(
           client,
-          actor.ownerId,
+          actor.userId,
           request.scope_id,
           request.selector,
         );
         const sourceIds = sorted(request.selector.source_ids ?? []);
         const subjectIds = sorted(request.selector.subject_ids ?? []);
-        await assertSelectorIdsExist(client, actor.ownerId, request.scope_id, request.selector);
+        await assertSelectorIdsExist(client, actor.userId, request.scope_id, request.selector);
         const previous = await client.query<ForgetRow>(
           `SELECT id, status, request_hash, created_at FROM deletion_requests
-           WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3 AND idempotency_key = $4`,
-          [actor.ownerId, request.scope_id, actor.principalId, idempotencyKey],
+           WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3 AND idempotency_key = $4`,
+          [actor.userId, request.scope_id, actor.principalId, idempotencyKey],
         );
         const row = previous.rows[0];
         if (row !== undefined) {
@@ -172,14 +173,14 @@ export class ForgetService {
 
         const sources = await loadSourcesForTargets(
           client,
-          actor.ownerId,
+          actor.userId,
           request.scope_id,
           memoryIds,
           sourceIds,
         );
         const locators = await loadLocatorsForTargets(
           client,
-          actor.ownerId,
+          actor.userId,
           request.scope_id,
           memoryIds,
           sourceIds,
@@ -213,12 +214,12 @@ export class ForgetService {
         const requestId = randomUUID();
         const blockedAt = new Date().toISOString();
         await client.query(
-          `INSERT INTO deletion_requests(id, owner_id, scope_id, principal_id, selector,
+          `INSERT INTO deletion_requests(id, user_id, scope_id, principal_id, selector,
              reason_code, status, created_at, idempotency_key, request_hash)
            VALUES ($1, $2, $3, $4, $5::jsonb, $6, 'ledger_pending', $7, $8, $9)`,
           [
             requestId,
-            actor.ownerId,
+            actor.userId,
             request.scope_id,
             actor.principalId,
             JSON.stringify(request.selector),
@@ -230,7 +231,7 @@ export class ForgetService {
         );
         await insertTargets(
           client,
-          actor.ownerId,
+          actor.userId,
           request.scope_id,
           requestId,
           memoryIds,
@@ -239,7 +240,7 @@ export class ForgetService {
         );
         await insertSuppressions(
           client,
-          actor.ownerId,
+          actor.userId,
           request.scope_id,
           requestId,
           memoryIds,
@@ -248,27 +249,27 @@ export class ForgetService {
         );
         await recordForgottenMemories(client, actor, request.scope_id, requestId, memoryIds);
         await client.query('SELECT app.advance_scope_deletion_epoch($1, $2, $3, $4)', [
-          actor.ownerId,
+          actor.userId,
           request.scope_id,
           actor.principalId,
           actor.actorKind,
         ]);
         await client.query(
-          `INSERT INTO audit_events(owner_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
+          `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
            VALUES ($1, $2, $3, 'memory.forget_requested', $4, $4, jsonb_build_object('status', 'ledger_pending'))`,
-          [actor.ownerId, request.scope_id, actor.principalId, requestId],
+          [actor.userId, request.scope_id, actor.principalId, requestId],
         );
         await client.query(
-          `INSERT INTO outbox(owner_id, scope_id, event_type, aggregate_id, payload)
+          `INSERT INTO outbox(user_id, scope_id, event_type, aggregate_id, payload)
            VALUES ($1, $2, 'forget.accepted', $3, '{}'::jsonb) ON CONFLICT DO NOTHING`,
-          [actor.ownerId, request.scope_id, requestId],
+          [actor.userId, request.scope_id, requestId],
         );
         const entry: DeletionLedgerEntry = {
           request_id: requestId,
-          owner_id: actor.ownerId,
+          user_id: actor.userId,
           scope_id: request.scope_id,
           principal_id: actor.principalId,
-          actor_kind: 'owner',
+          actor_kind: 'user',
           target_memory_ids: sorted(memoryIds),
           target_source_ids: sourceIds,
           target_subject_ids: subjectIds,
@@ -310,8 +311,8 @@ export class ForgetService {
         completed_at: Date | null;
       }>(
         `SELECT status, created_at, completed_at FROM deletion_requests
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-        [actor.ownerId, scopeId, requestId],
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, scopeId, requestId],
       );
       const row = result.rows[0];
       if (row === undefined) throw new CoreError(404, 'not_found', 'Forget request was not found');
@@ -369,11 +370,11 @@ export class ForgetService {
         false,
         parsed.error.issues,
       );
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may change source rights');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may change source rights');
     const scopeId = parsed.data.scope_id;
     return withAuthorizedActor(this.pool, actor, [scopeId], admin, async (client) => {
-      await lockScopeWrites(client, actor.ownerId, scopeId);
+      await lockScopeWrites(client, actor.userId, scopeId);
       const locked = await client.query<{ present: boolean }>(
         'SELECT app.lock_source_for_share($1::uuid) AS present',
         [sourceId],
@@ -381,9 +382,9 @@ export class ForgetService {
       if (!locked.rows[0]?.present) throw new CoreError(404, 'not_found', 'Source was not found');
       const result = await client.query<{ rights_status: string; consent: boolean }>(
         `UPDATE sources SET rights_status = $4, consent = $5
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3
          RETURNING rights_status, consent`,
-        [actor.ownerId, scopeId, sourceId, parsed.data.rights_status, parsed.data.consent],
+        [actor.userId, scopeId, sourceId, parsed.data.rights_status, parsed.data.consent],
       );
       const row = result.rows[0];
       if (row === undefined) throw new CoreError(404, 'not_found', 'Source was not found');
@@ -405,11 +406,11 @@ export class ForgetService {
         false,
         parsed.error.issues,
       );
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may change grants');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may change grants');
     await withAuthorizedActor(this.pool, actor, [scopeId], admin, async (client) => {
       await client.query('SELECT app.manage_scope_grant($1, $2, $3, $4, $5::text[], $6, $7)', [
-        actor.ownerId,
+        actor.userId,
         scopeId,
         actor.principalId,
         parsed.data.principal_id,
@@ -437,14 +438,14 @@ export class ForgetService {
       );
     return withAuthorizedActor(this.pool, actor, [parsed.data.scope_id], write, async (client) => {
       const row = await client.query<{ id: string }>(
-        `INSERT INTO feedback(owner_id, scope_id, principal_id, memory_id, feedback_type, metadata)
+        `INSERT INTO feedback(user_id, scope_id, principal_id, memory_id, feedback_type, metadata)
          SELECT $1, $2, $3, m.id, $5, $6::jsonb FROM memories m
-         WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = $4
-           AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = m.owner_id
+         WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = $4
+           AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = m.user_id
              AND sp.scope_id = m.scope_id AND sp.object_kind = 'memory' AND sp.object_id = m.id)
          RETURNING id`,
         [
-          actor.ownerId,
+          actor.userId,
           parsed.data.scope_id,
           actor.principalId,
           parsed.data.memory_id,
@@ -455,9 +456,9 @@ export class ForgetService {
       const feedbackId = row.rows[0]?.id;
       if (feedbackId === undefined) throw new CoreError(404, 'not_found', 'Memory was not found');
       await client.query(
-        `INSERT INTO feedback_reassessments(owner_id, scope_id, memory_id, feedback_id, state)
-         VALUES ($1, $2, $3, $4, 'queued') ON CONFLICT (owner_id, scope_id, feedback_id) DO NOTHING`,
-        [actor.ownerId, parsed.data.scope_id, parsed.data.memory_id, feedbackId],
+        `INSERT INTO feedback_reassessments(user_id, scope_id, memory_id, feedback_id, state)
+         VALUES ($1, $2, $3, $4, 'queued') ON CONFLICT (user_id, scope_id, feedback_id) DO NOTHING`,
+        [actor.userId, parsed.data.scope_id, parsed.data.memory_id, feedbackId],
       );
       return { feedback_id: feedbackId, reassessment: 'queued' };
     });
@@ -477,16 +478,16 @@ export class ForgetService {
         false,
         parsed.error.issues,
       );
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may set retention');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may set retention');
     return withAuthorizedActor(this.pool, actor, [scopeId], admin, async (client) => {
       await client.query(
-        `INSERT INTO scope_retention_policies(owner_id, scope_id, observation_days, memory_days, updated_by)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (owner_id, scope_id) DO UPDATE
+        `INSERT INTO scope_retention_policies(user_id, scope_id, observation_days, memory_days, updated_by)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, scope_id) DO UPDATE
            SET observation_days = EXCLUDED.observation_days, memory_days = EXCLUDED.memory_days,
                updated_by = EXCLUDED.updated_by, updated_at = clock_timestamp()`,
         [
-          actor.ownerId,
+          actor.userId,
           scopeId,
           parsed.data.observation_days,
           parsed.data.memory_days ?? null,
@@ -512,10 +513,10 @@ export class ForgetService {
     for (const raw of pending.rows) {
       const entry: DeletionLedgerEntry = {
         request_id: raw.request_id,
-        owner_id: raw.owner_id,
+        user_id: raw.user_id,
         scope_id: raw.scope_id,
         principal_id: raw.principal_id,
-        actor_kind: 'owner',
+        actor_kind: 'user',
         target_memory_ids: sorted(raw.memory_ids),
         target_source_ids: sorted(raw.source_ids),
         target_subject_ids: sorted(raw.subject_ids),
@@ -525,9 +526,9 @@ export class ForgetService {
       try {
         const receipt = await this.ledger.append(entry);
         await withTransaction(workerPool, async (client) => {
-          await setActorContextForWorker(client, raw.owner_id, raw.scope_id, raw.principal_id);
+          await setActorContextForWorker(client, raw.user_id, raw.scope_id, raw.principal_id);
           await client.query('SELECT app.ack_deletion_ledger($1, $2, $3, $4, $5, $6, $7)', [
-            raw.owner_id,
+            raw.user_id,
             raw.scope_id,
             raw.request_id,
             raw.principal_id,
@@ -538,11 +539,11 @@ export class ForgetService {
           await recordVisibilityItem(client, entry, receipt);
         });
         const result = await withTransaction(workerPool, async (client) => {
-          await setActorContextForWorker(client, raw.owner_id, raw.scope_id, raw.principal_id);
+          await setActorContextForWorker(client, raw.user_id, raw.scope_id, raw.principal_id);
           return client.query<{ removed: number }>(
             `SELECT app.purge_replayed_forgotten_request($1, $2, $3, $4, $5, $6, $7) AS removed`,
             [
-              raw.owner_id,
+              raw.user_id,
               raw.scope_id,
               raw.request_id,
               raw.principal_id,
@@ -703,7 +704,7 @@ export class ForgetService {
              AS enqueue_retention_deletion`,
           [
             randomUUID(),
-            candidate.owner_id,
+            candidate.user_id,
             candidate.scope_id,
             candidate.principal_id,
             candidate.target_kind,
@@ -730,9 +731,9 @@ export class ForgetService {
       );
       for (const row of actors.rows) {
         const actor: ActorContext = {
-          ownerId: row.owner_id,
+          userId: row.user_id,
           principalId: row.principal_id,
-          actorKind: 'owner',
+          actorKind: 'user',
           scopeIds: [row.scope_id],
           tokenScopeIds: [row.scope_id],
           capabilities: ['read', 'write', 'admin'],
@@ -768,7 +769,7 @@ export class ForgetService {
                $8::uuid[], $9::text[], $10, $11, $12)`,
             [
               entry.request_id,
-              entry.owner_id,
+              entry.user_id,
               entry.scope_id,
               entry.principal_id,
               entry.blocked_at,
@@ -811,7 +812,7 @@ export class ForgetService {
 
 async function resolveTargets(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   selector: {
     memory_ids?: string[] | undefined;
@@ -821,21 +822,21 @@ async function resolveTargets(
 ): Promise<string[]> {
   const result = await client.query<{ id: string }>(
     `SELECT DISTINCT selected.id FROM (
-       SELECT m.id FROM memories m WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = ANY($3::uuid[])
+       SELECT m.id FROM memories m WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = ANY($3::uuid[])
        UNION
-       SELECT me.memory_id FROM memory_evidence me JOIN evidence e ON e.owner_id = me.owner_id
+       SELECT me.memory_id FROM memory_evidence me JOIN evidence e ON e.user_id = me.user_id
          AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-         WHERE me.owner_id = $1 AND me.scope_id = $2 AND e.source_id = ANY($4::uuid[])
+         WHERE me.user_id = $1 AND me.scope_id = $2 AND e.source_id = ANY($4::uuid[])
        UNION
-       SELECT mve.memory_id FROM memory_version_evidence mve JOIN evidence e ON e.owner_id = mve.owner_id
+       SELECT mve.memory_id FROM memory_version_evidence mve JOIN evidence e ON e.user_id = mve.user_id
          AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
-         WHERE mve.owner_id = $1 AND mve.scope_id = $2 AND e.source_id = ANY($4::uuid[])
+         WHERE mve.user_id = $1 AND mve.scope_id = $2 AND e.source_id = ANY($4::uuid[])
        UNION
        SELECT ms.memory_id FROM memory_subjects ms
-         WHERE ms.owner_id = $1 AND ms.scope_id = $2 AND ms.subject_id = ANY($5::uuid[])
+         WHERE ms.user_id = $1 AND ms.scope_id = $2 AND ms.subject_id = ANY($5::uuid[])
      ) AS selected ORDER BY selected.id`,
     [
-      ownerId,
+      userId,
       scopeId,
       selector.memory_ids ?? [],
       selector.source_ids ?? [],
@@ -847,7 +848,7 @@ async function resolveTargets(
 
 async function assertSelectorIdsExist(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   selector: {
     memory_ids?: string[] | undefined;
@@ -856,11 +857,11 @@ async function assertSelectorIdsExist(
   },
 ): Promise<void> {
   const result = await client.query<{ kind: string; id: string }>(
-    `SELECT 'memory'::text AS kind, id FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=ANY($3::uuid[])
-     UNION ALL SELECT 'source', id FROM sources WHERE owner_id=$1 AND scope_id=$2 AND id=ANY($4::uuid[])
-     UNION ALL SELECT 'subject', id FROM subjects WHERE owner_id=$1 AND scope_id=$2 AND id=ANY($5::uuid[])`,
+    `SELECT 'memory'::text AS kind, id FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=ANY($3::uuid[])
+     UNION ALL SELECT 'source', id FROM sources WHERE user_id=$1 AND scope_id=$2 AND id=ANY($4::uuid[])
+     UNION ALL SELECT 'subject', id FROM subjects WHERE user_id=$1 AND scope_id=$2 AND id=ANY($5::uuid[])`,
     [
-      ownerId,
+      userId,
       scopeId,
       selector.memory_ids ?? [],
       selector.source_ids ?? [],
@@ -879,43 +880,43 @@ async function assertSelectorIdsExist(
 
 async function loadSourcesForTargets(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   memoryIds: readonly string[],
   sourceIds: readonly string[],
 ): Promise<SourceIdentity[]> {
   const result = await client.query<SourceIdentity>(
     `SELECT DISTINCT s.id, s.kind, s.external_id, s.revision FROM sources s
-     WHERE s.owner_id=$1 AND s.scope_id=$2 AND (
+     WHERE s.user_id=$1 AND s.scope_id=$2 AND (
        s.id=ANY($4::uuid[]) OR EXISTS (SELECT 1 FROM evidence e JOIN memory_evidence me
-         ON me.owner_id=e.owner_id AND me.scope_id=e.scope_id AND me.evidence_id=e.id
-         WHERE e.owner_id=s.owner_id AND e.scope_id=s.scope_id AND e.source_id=s.id AND me.memory_id=ANY($3::uuid[]))
-       OR EXISTS (SELECT 1 FROM observations o WHERE o.owner_id=s.owner_id AND o.scope_id=s.scope_id
+         ON me.user_id=e.user_id AND me.scope_id=e.scope_id AND me.evidence_id=e.id
+         WHERE e.user_id=s.user_id AND e.scope_id=s.scope_id AND e.source_id=s.id AND me.memory_id=ANY($3::uuid[]))
+       OR EXISTS (SELECT 1 FROM observations o WHERE o.user_id=s.user_id AND o.scope_id=s.scope_id
          AND o.source_id=s.id AND s.id=ANY($4::uuid[]))) ORDER BY s.id`,
-    [ownerId, scopeId, memoryIds, sourceIds],
+    [userId, scopeId, memoryIds, sourceIds],
   );
   return result.rows;
 }
 
 async function loadLocatorsForTargets(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   memoryIds: readonly string[],
   sourceIds: readonly string[],
 ): Promise<Array<SourceIdentity & { locator: string }>> {
   const result = await client.query<SourceIdentity & { locator: string }>(
     `SELECT DISTINCT s.kind, s.external_id, s.revision, COALESCE(e.locator, o.locator) AS locator
-     FROM sources s LEFT JOIN evidence e ON e.owner_id=s.owner_id AND e.scope_id=s.scope_id
-       AND e.source_id=s.id LEFT JOIN memory_evidence me ON me.owner_id=e.owner_id
+     FROM sources s LEFT JOIN evidence e ON e.user_id=s.user_id AND e.scope_id=s.scope_id
+       AND e.source_id=s.id LEFT JOIN memory_evidence me ON me.user_id=e.user_id
        AND me.scope_id=e.scope_id AND me.evidence_id=e.id
-     LEFT JOIN observations o ON o.owner_id=s.owner_id AND o.scope_id=s.scope_id AND o.source_id=s.id
+     LEFT JOIN observations o ON o.user_id=s.user_id AND o.scope_id=s.scope_id AND o.source_id=s.id
        AND o.source_revision=s.revision AND o.locator=COALESCE(e.locator, o.locator)
-     WHERE s.owner_id=$1 AND s.scope_id=$2 AND COALESCE(e.locator,o.locator) IS NOT NULL AND (
+     WHERE s.user_id=$1 AND s.scope_id=$2 AND COALESCE(e.locator,o.locator) IS NOT NULL AND (
        s.id=ANY($4::uuid[]) OR me.memory_id=ANY($3::uuid[])
-       OR EXISTS (SELECT 1 FROM memory_version_evidence mve WHERE mve.owner_id=e.owner_id
+       OR EXISTS (SELECT 1 FROM memory_version_evidence mve WHERE mve.user_id=e.user_id
          AND mve.scope_id=e.scope_id AND mve.evidence_id=e.id AND mve.memory_id=ANY($3::uuid[])))`,
-    [ownerId, scopeId, memoryIds, sourceIds],
+    [userId, scopeId, memoryIds, sourceIds],
   );
   return result.rows;
 }
@@ -928,24 +929,24 @@ async function loadLedgerEntry(
 ): Promise<DeletionLedgerEntry> {
   const [targets, hashes] = await Promise.all([
     client.query<{ target_kind: string; target_id: string }>(
-      `SELECT target_kind, target_id FROM deletion_targets WHERE owner_id=$1 AND scope_id=$2
+      `SELECT target_kind, target_id FROM deletion_targets WHERE user_id=$1 AND scope_id=$2
        AND deletion_request_id=$3 ORDER BY target_kind, target_id`,
-      [actor.ownerId, scopeId, request.id],
+      [actor.userId, scopeId, request.id],
     ),
     client.query<{ locator_hmac: string }>(
-      `SELECT locator_hmac FROM suppressions WHERE owner_id=$1 AND scope_id=$2 AND deletion_request_id=$3
+      `SELECT locator_hmac FROM suppressions WHERE user_id=$1 AND scope_id=$2 AND deletion_request_id=$3
        AND object_kind='locator_hmac' AND locator_hmac IS NOT NULL ORDER BY locator_hmac`,
-      [actor.ownerId, scopeId, request.id],
+      [actor.userId, scopeId, request.id],
     ),
   ]);
   const byKind = (kind: string) =>
     sorted(targets.rows.filter((row) => row.target_kind === kind).map((row) => row.target_id));
   return {
     request_id: request.id,
-    owner_id: actor.ownerId,
+    user_id: actor.userId,
     scope_id: scopeId,
     principal_id: actor.principalId,
-    actor_kind: 'owner',
+    actor_kind: 'user',
     target_memory_ids: byKind('memory'),
     target_source_ids: byKind('source'),
     target_subject_ids: byKind('subject'),
@@ -956,7 +957,7 @@ async function loadLedgerEntry(
 
 async function insertTargets(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   requestId: string,
   memoryIds: readonly string[],
@@ -964,19 +965,19 @@ async function insertTargets(
   subjectIds: readonly string[],
 ): Promise<void> {
   await client.query(
-    `INSERT INTO deletion_targets(owner_id, scope_id, deletion_request_id, target_kind, target_id)
+    `INSERT INTO deletion_targets(user_id, scope_id, deletion_request_id, target_kind, target_id)
      SELECT $1, $2, $3, target_kind, target_id FROM (
        SELECT 'memory'::text AS target_kind, unnest($4::uuid[]) AS target_id
        UNION ALL SELECT 'source', unnest($5::uuid[])
        UNION ALL SELECT 'subject', unnest($6::uuid[])
      ) targets ON CONFLICT DO NOTHING`,
-    [ownerId, scopeId, requestId, memoryIds, sourceIds, subjectIds],
+    [userId, scopeId, requestId, memoryIds, sourceIds, subjectIds],
   );
 }
 
 async function insertSuppressions(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   requestId: string,
   memoryIds: readonly string[],
@@ -984,17 +985,17 @@ async function insertSuppressions(
   hashes: readonly string[],
 ): Promise<void> {
   await client.query(
-    `INSERT INTO suppressions(owner_id, scope_id, deletion_request_id, object_kind, object_id, locator_hmac)
+    `INSERT INTO suppressions(user_id, scope_id, deletion_request_id, object_kind, object_id, locator_hmac)
      SELECT $1, $2, $3, kind, id, NULL FROM (
        SELECT 'memory'::text AS kind, unnest($4::uuid[]) AS id
        UNION ALL SELECT 'source', unnest($5::uuid[])
      ) items ON CONFLICT DO NOTHING`,
-    [ownerId, scopeId, requestId, memoryIds, sourceIds],
+    [userId, scopeId, requestId, memoryIds, sourceIds],
   );
   await client.query(
-    `INSERT INTO suppressions(owner_id, scope_id, deletion_request_id, object_kind, locator_hmac)
+    `INSERT INTO suppressions(user_id, scope_id, deletion_request_id, object_kind, locator_hmac)
      SELECT $1, $2, $3, 'locator_hmac', unnest($4::text[]) ON CONFLICT DO NOTHING`,
-    [ownerId, scopeId, requestId, hashes],
+    [userId, scopeId, requestId, hashes],
   );
 }
 
@@ -1008,25 +1009,25 @@ async function recordForgottenMemories(
   if (memoryIds.length === 0) return;
   const memories = await client.query<{ id: string; revision: number }>(
     `SELECT id, coalesce(nullif(committed_revision, 0), revision) AS revision
-     FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=ANY($3::uuid[]) ORDER BY id`,
-    [actor.ownerId, scopeId, memoryIds],
+     FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=ANY($3::uuid[]) ORDER BY id`,
+    [actor.userId, scopeId, memoryIds],
   );
   if (memories.rows.length === 0) return;
   await client.query(
-    'INSERT INTO scope_offsets(owner_id, scope_id) VALUES ($1, $2) ON CONFLICT (owner_id, scope_id) DO NOTHING',
-    [actor.ownerId, scopeId],
+    'INSERT INTO scope_offsets(user_id, scope_id) VALUES ($1, $2) ON CONFLICT (user_id, scope_id) DO NOTHING',
+    [actor.userId, scopeId],
   );
   await client.query(
-    'SELECT last_seq FROM scope_offsets WHERE owner_id=$1 AND scope_id=$2 FOR UPDATE',
-    [actor.ownerId, scopeId],
+    'SELECT last_seq FROM scope_offsets WHERE user_id=$1 AND scope_id=$2 FOR UPDATE',
+    [actor.userId, scopeId],
   );
   const changeSetId = randomUUID();
   await client.query(
-    `INSERT INTO changesets(owner_id, scope_id, id, principal_id, request_id, operation_count,
+    `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
        response, status, committed_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp())`,
     [
-      actor.ownerId,
+      actor.userId,
       scopeId,
       changeSetId,
       actor.principalId,
@@ -1037,8 +1038,8 @@ async function recordForgottenMemories(
   );
   const result = await client.query<{ last_seq: string }>(
     `UPDATE scope_offsets SET last_seq=last_seq+$3, updated_at=clock_timestamp()
-     WHERE owner_id=$1 AND scope_id=$2 RETURNING last_seq`,
-    [actor.ownerId, scopeId, memories.rows.length],
+     WHERE user_id=$1 AND scope_id=$2 RETURNING last_seq`,
+    [actor.userId, scopeId, memories.rows.length],
   );
   const last = BigInt(result.rows[0]?.last_seq ?? '0');
   const first = last - BigInt(memories.rows.length) + 1n;
@@ -1048,11 +1049,11 @@ async function recordForgottenMemories(
     const sequence = (first + BigInt(index)).toString();
     const changeId = randomUUID();
     await client.query(
-      `INSERT INTO change_ops(owner_id, scope_id, change_set_id, ordinal, op, memory_id,
+      `INSERT INTO change_ops(user_id, scope_id, change_set_id, ordinal, op, memory_id,
          memory_revision, metadata)
        VALUES ($1, $2, $3, $4, 'RETRACT', $5, $6, $7::jsonb)`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeId,
         changeSetId,
         index,
@@ -1062,16 +1063,16 @@ async function recordForgottenMemories(
       ],
     );
     await client.query(
-      `INSERT INTO change_log(owner_id, scope_id, id, seq, change_set_id, op, memory_id,
+      `INSERT INTO change_log(user_id, scope_id, id, seq, change_set_id, op, memory_id,
          memory_revision, tombstone)
        VALUES ($1, $2, $3, $4, $5, 'RETRACT', $6, $7, true)`,
-      [actor.ownerId, scopeId, changeId, sequence, changeSetId, memory.id, memory.revision],
+      [actor.userId, scopeId, changeId, sequence, changeSetId, memory.id, memory.revision],
     );
     await client.query(
-      `INSERT INTO outbox(owner_id, scope_id, id, event_type, aggregate_id, payload)
+      `INSERT INTO outbox(user_id, scope_id, id, event_type, aggregate_id, payload)
        VALUES ($1, $2, $3, 'memory.change', $4, $5::jsonb)`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeId,
         randomUUID(),
         changeSetId,
@@ -1081,14 +1082,10 @@ async function recordForgottenMemories(
   }
 }
 
-async function lockScopeWrites(
-  client: PoolClient,
-  ownerId: string,
-  scopeId: string,
-): Promise<void> {
+async function lockScopeWrites(client: PoolClient, userId: string, scopeId: string): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))", [
     LEGACY_SCOPE_WRITE_LOCK_PREFIX,
-    ownerId,
+    userId,
     scopeId,
   ]);
 }
@@ -1098,7 +1095,7 @@ async function setActorContext(
   actor: ActorContext,
   scopeIds: readonly string[],
 ): Promise<void> {
-  await client.query("SELECT set_config('app.owner_id', $1, true)", [actor.ownerId]);
+  await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
   await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeIds.join(',')}}`]);
   await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
 }
@@ -1113,7 +1110,7 @@ async function recordVisibilityItem(
        $8::uuid[], $9::uuid[], $10::uuid[], $11::text[])`,
     [
       entry.request_id,
-      entry.owner_id,
+      entry.user_id,
       entry.scope_id,
       entry.principal_id,
       receipt.sequence,
@@ -1129,11 +1126,11 @@ async function recordVisibilityItem(
 
 async function setActorContextForWorker(
   client: PoolClient,
-  ownerId: string,
+  userId: string,
   scopeId: string,
   principalId: string,
 ): Promise<void> {
-  await client.query("SELECT set_config('app.owner_id', $1, true)", [ownerId]);
+  await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
   await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeId}}`]);
   await client.query("SELECT set_config('app.principal_id', $1, true)", [principalId]);
 }
@@ -1147,12 +1144,16 @@ function digest(value: string): string {
 }
 
 function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  return stableJsonRaw(encodeIdentityProvenanceV1(value));
+}
+
+function stableJsonRaw(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJsonRaw).join(',')}]`;
   if (typeof value === 'object' && value !== null) {
     const record = value as Record<string, unknown>;
     return `{${Object.keys(record)
       .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .map((key) => `${JSON.stringify(key)}:${stableJsonRaw(record[key])}`)
       .join(',')}}`;
   }
   return JSON.stringify(value);

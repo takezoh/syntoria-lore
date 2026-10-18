@@ -12,7 +12,7 @@ export const memoryKindSchema = z.enum([
   'experience',
   'procedure',
 ]);
-export const actorKindSchema = z.enum(['owner', 'client', 'connector', 'curator']);
+export const actorKindSchema = z.enum(['user', 'client', 'connector', 'curator']);
 export const capabilitySchema = z.enum(['read', 'write', 'admin']);
 export const lifecycleSchema = z.enum([
   'candidate',
@@ -23,9 +23,9 @@ export const lifecycleSchema = z.enum([
 ]);
 export const epistemicStatusSchema = z.enum(['asserted', 'observed', 'inferred', 'proposed']);
 export const authoritySchema = z.enum([
-  'owner_decision',
-  'owner_preference',
-  'owner_assertion',
+  'user_decision',
+  'user_preference',
+  'user_assertion',
   'third_party_claim',
   'observed_state',
   'ai_proposal',
@@ -199,7 +199,7 @@ export const reviewListQuerySchema = z.strictObject({
 export const reviewDecisionSchema = z.strictObject({
   expected_revision: z.number().int().positive(),
   decision: z.enum(['approve', 'reject']),
-  confirmation: z.enum(['accept_candidate', 'owner_statement']).default('accept_candidate'),
+  confirmation: z.enum(['accept_candidate', 'user_statement']).default('accept_candidate'),
   reason: z.string().trim().max(4000).optional(),
 });
 
@@ -281,7 +281,7 @@ export type EvidenceInput = z.infer<typeof evidenceInputSchema>;
 export type SubjectInput = z.infer<typeof subjectInputSchema>;
 
 export interface ActorContext {
-  readonly ownerId: string;
+  readonly userId: string;
   readonly principalId: string;
   readonly actorKind: ActorKind;
   readonly scopeIds: readonly string[];
@@ -324,3 +324,5 @@ export class CoreError extends Error {
     };
   }
 }
+
+export { encodeIdentityProvenanceV1, decodeIdentityProvenanceV1 } from './identity-v1.js';

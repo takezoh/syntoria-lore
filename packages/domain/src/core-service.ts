@@ -1,3 +1,4 @@
+import { encodeIdentityProvenanceV1 } from '@memory/contracts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   CoreError,
@@ -28,7 +29,7 @@ interface ScopeAccessRow {
 
 interface MutableMemoryRow {
   id: string;
-  owner_id: string;
+  user_id: string;
   scope_id: string;
   kind: string;
   statement: string;
@@ -85,13 +86,13 @@ export interface CuratedEvidenceAnchor {
 interface InternalCommitOptions {
   readonly writerActorKind?: ActorContext['actorKind'];
   readonly activate?: boolean;
-  readonly ownerStatement?: boolean;
+  readonly userStatement?: boolean;
   readonly anchorsByOperation?: readonly (readonly CuratedEvidenceAnchor[])[];
   readonly jobFence?: { readonly jobId: string; readonly leaseToken: string };
   readonly review?: {
     readonly id: string;
     readonly expectedRevision: number;
-    readonly confirmation: 'accept_candidate' | 'owner_statement';
+    readonly confirmation: 'accept_candidate' | 'user_statement';
     readonly reason: string | null;
     readonly principalId: string;
     readonly expectedRevisions: Readonly<Record<string, number>>;
@@ -167,12 +168,12 @@ export class CoreService {
     const payloadHash = sha256(stableJson(changeSet));
     return this.withActor(actor, [changeSet.scope_id], writeCapability, async (client) => {
       await client.query(
-        'INSERT INTO scope_offsets(owner_id, scope_id) VALUES ($1, $2) ON CONFLICT (owner_id, scope_id) DO NOTHING',
-        [actor.ownerId, changeSet.scope_id],
+        'INSERT INTO scope_offsets(user_id, scope_id) VALUES ($1, $2) ON CONFLICT (user_id, scope_id) DO NOTHING',
+        [actor.userId, changeSet.scope_id],
       );
       await client.query(
-        'SELECT last_seq FROM scope_offsets WHERE owner_id = $1 AND scope_id = $2 FOR UPDATE',
-        [actor.ownerId, changeSet.scope_id],
+        'SELECT last_seq FROM scope_offsets WHERE user_id = $1 AND scope_id = $2 FOR UPDATE',
+        [actor.userId, changeSet.scope_id],
       );
       const prior = await client.query<{
         id: string;
@@ -180,8 +181,8 @@ export class CoreService {
         response: Record<string, unknown>;
       }>(
         `SELECT id, proposal_hash, coalesce(proposal_response, response) AS response FROM changesets
-         WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3 AND proposal_idempotency_key = $4`,
-        [actor.ownerId, changeSet.scope_id, actor.principalId, idempotencyKey],
+         WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3 AND proposal_idempotency_key = $4`,
+        [actor.userId, changeSet.scope_id, actor.principalId, idempotencyKey],
       );
       const existing = prior.rows[0];
       if (existing !== undefined) {
@@ -202,11 +203,11 @@ export class CoreService {
         status: 'proposed',
       };
       await client.query(
-        `INSERT INTO changesets(owner_id, scope_id, id, principal_id, request_id, operation_count,
+        `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
            response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response)
          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb)`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           changeSetId,
           actor.principalId,
@@ -219,10 +220,10 @@ export class CoreService {
         ],
       );
       await client.query(
-        `INSERT INTO audit_events(owner_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
+        `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
          VALUES ($1, $2, $3, 'changeset.proposed', $4, $5, $6::jsonb)`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           actor.principalId,
           requestId,
@@ -248,7 +249,7 @@ export class CoreService {
     if (authorizedScopes.length === 0)
       throw new CoreError(403, 'forbidden', 'An authorized scope is required');
     const proposal = await withTransaction(this.pool, async (client) => {
-      await client.query("SELECT set_config('app.owner_id', $1, true)", [actor.ownerId]);
+      await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
       await client.query("SELECT set_config('app.scope_ids', $1, true)", [
         uuidArray(authorizedScopes),
       ]);
@@ -262,24 +263,24 @@ export class CoreService {
         held_review_id: string | null;
       }>(
         `SELECT c.scope_id, c.status, c.principal_id, c.proposal, c.response, r.id AS held_review_id
-         FROM changesets c LEFT JOIN curation_reviews r ON r.owner_id = c.owner_id AND r.scope_id = c.scope_id
+         FROM changesets c LEFT JOIN curation_reviews r ON r.user_id = c.user_id AND r.scope_id = c.scope_id
            AND r.change_set_id = c.id AND r.status = 'held'
-         WHERE c.owner_id = $1 AND c.id = $2 AND c.scope_id = ANY($3::uuid[])`,
-        [actor.ownerId, changeSetId, authorizedScopes],
+         WHERE c.user_id = $1 AND c.id = $2 AND c.scope_id = ANY($3::uuid[])`,
+        [actor.userId, changeSetId, authorizedScopes],
       );
       const row = result.rows[0];
       if (row === undefined) throw new CoreError(404, 'not_found', 'ChangeSet not found');
       if (row.held_review_id !== null)
         throw new CoreError(
           409,
-          'owner_review_required',
-          'This ChangeSet must be decided through its Owner review',
+          'user_review_required',
+          'This ChangeSet must be decided through its User review',
         );
-      if (actor.actorKind !== 'owner' && actor.principalId !== row.principal_id) {
+      if (actor.actorKind !== 'user' && actor.principalId !== row.principal_id) {
         throw new CoreError(
           403,
           'forbidden',
-          'Only the proposing principal or Owner may commit this ChangeSet',
+          'Only the proposing principal or User may commit this ChangeSet',
         );
       }
       if (row.status === 'committed')
@@ -292,8 +293,8 @@ export class CoreService {
     if (proposal.proposal === null) {
       return this.withActor(actor, [proposal.scopeId], writeCapability, async (client) => {
         const result = await client.query<{ response: Record<string, unknown> }>(
-          `SELECT response FROM changesets WHERE owner_id = $1 AND scope_id = $2 AND id = $3 AND status = 'committed'`,
-          [actor.ownerId, proposal.scopeId, changeSetId],
+          `SELECT response FROM changesets WHERE user_id = $1 AND scope_id = $2 AND id = $3 AND status = 'committed'`,
+          [actor.userId, proposal.scopeId, changeSetId],
         );
         const row = result.rows[0];
         if (row === undefined) throw new CoreError(404, 'not_found', 'ChangeSet not found');
@@ -336,11 +337,11 @@ export class CoreService {
           );
         continue;
       }
-      if (operation.op === 'SUPERSEDE' && actor.actorKind !== 'owner') {
-        throw new CoreError(403, 'forbidden', 'Only the Owner may supersede an active memory');
+      if (operation.op === 'SUPERSEDE' && actor.actorKind !== 'user') {
+        throw new CoreError(403, 'forbidden', 'Only the User may supersede an active memory');
       }
-      if (operation.op === 'RETRACT' && actor.actorKind !== 'owner') {
-        throw new CoreError(403, 'forbidden', 'Only the Owner may retract a memory');
+      if (operation.op === 'RETRACT' && actor.actorKind !== 'user') {
+        throw new CoreError(403, 'forbidden', 'Only the User may retract a memory');
       }
       const memory = await this.lockMutableMemory(
         client,
@@ -351,13 +352,13 @@ export class CoreService {
       );
       if (
         operation.op === 'REFINE' &&
-        actor.actorKind !== 'owner' &&
-        ['owner_decision', 'owner_preference', 'owner_assertion'].includes(memory.authority)
+        actor.actorKind !== 'user' &&
+        ['user_decision', 'user_preference', 'user_assertion'].includes(memory.authority)
       ) {
         throw new CoreError(
           403,
-          'owner_confirmation_required',
-          'Only the Owner may refine an Owner-attributed active memory',
+          'user_confirmation_required',
+          'Only the User may refine an User-attributed active memory',
         );
       }
       if (
@@ -388,8 +389,8 @@ export class CoreService {
     for (const item of evidence) {
       const source = await client.query<{ id: string }>(
         `SELECT id FROM sources
-         WHERE owner_id = $1 AND scope_id = $2 AND kind = $3 AND external_id = $4 AND revision = $5`,
-        [actor.ownerId, scopeId, item.source.kind, item.source.external_id, item.source.revision],
+         WHERE user_id = $1 AND scope_id = $2 AND kind = $3 AND external_id = $4 AND revision = $5`,
+        [actor.userId, scopeId, item.source.kind, item.source.external_id, item.source.revision],
       );
       const sourceId = source.rows[0]?.id;
       if (sourceId === undefined && item.source.kind === 'explicit_remember') continue;
@@ -403,8 +404,8 @@ export class CoreService {
       await this.lockSourcesForShare(client, [sourceId]);
       const rights = await client.query<{ rights_status: string; consent: boolean }>(
         `SELECT rights_status, consent FROM sources
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-        [actor.ownerId, scopeId, sourceId],
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, scopeId, sourceId],
       );
       const row = rights.rows[0];
       if (row === undefined || row.rights_status !== 'granted' || !row.consent) {
@@ -443,18 +444,18 @@ export class CoreService {
 
     return this.withActor(actor, scopeIds, writeCapability, async (client) => {
       await client.query(
-        'INSERT INTO scope_offsets(owner_id, scope_id) VALUES ($1, $2) ON CONFLICT (owner_id, scope_id) DO NOTHING',
-        [actor.ownerId, changeSet.scope_id],
+        'INSERT INTO scope_offsets(user_id, scope_id) VALUES ($1, $2) ON CONFLICT (user_id, scope_id) DO NOTHING',
+        [actor.userId, changeSet.scope_id],
       );
       await client.query(
-        'SELECT last_seq FROM scope_offsets WHERE owner_id = $1 AND scope_id = $2 FOR UPDATE',
-        [actor.ownerId, changeSet.scope_id],
+        'SELECT last_seq FROM scope_offsets WHERE user_id = $1 AND scope_id = $2 FOR UPDATE',
+        [actor.userId, changeSet.scope_id],
       );
 
       const prior = await client.query<{ payload_hash: string; response: Record<string, unknown> }>(
         `SELECT payload_hash, response FROM idempotency_keys
-         WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3 AND idempotency_key = $4`,
-        [actor.ownerId, changeSet.scope_id, actor.principalId, idempotencyKey],
+         WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3 AND idempotency_key = $4`,
+        [actor.userId, changeSet.scope_id, actor.principalId, idempotencyKey],
       );
       const existing = prior.rows[0];
       if (existing !== undefined) {
@@ -476,8 +477,8 @@ export class CoreService {
           response: Record<string, unknown>;
         }>(
           `SELECT status, proposal_hash, response FROM changesets
-           WHERE owner_id = $1 AND scope_id = $2 AND id = $3 FOR UPDATE`,
-          [actor.ownerId, changeSet.scope_id, existingProposalId],
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3 FOR UPDATE`,
+          [actor.userId, changeSet.scope_id, existingProposalId],
         );
         const row = existingProposal.rows[0];
         if (row === undefined) throw new CoreError(404, 'not_found', 'ChangeSet not found');
@@ -492,11 +493,11 @@ export class CoreService {
         changeSetId = existingProposalId;
       } else {
         await client.query(
-          `INSERT INTO changesets(owner_id, scope_id, id, principal_id, request_id, operation_count,
+          `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
              response, status, committed_at)
            VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, 'committed', clock_timestamp())`,
           [
-            actor.ownerId,
+            actor.userId,
             changeSet.scope_id,
             changeSetId,
             actor.principalId,
@@ -508,10 +509,10 @@ export class CoreService {
 
       if (internalOptions?.review !== undefined) {
         const review = await client.query<{ id: string }>(
-          `SELECT id FROM curation_reviews WHERE owner_id = $1 AND scope_id = $2 AND id = $3
+          `SELECT id FROM curation_reviews WHERE user_id = $1 AND scope_id = $2 AND id = $3
              AND change_set_id = $4 AND status = 'held' AND revision = $5 FOR UPDATE`,
           [
-            actor.ownerId,
+            actor.userId,
             changeSet.scope_id,
             internalOptions.review.id,
             changeSetId,
@@ -529,8 +530,8 @@ export class CoreService {
         ).sort(([left], [right]) => left.localeCompare(right))) {
           const current = await client.query<{ committed_revision: number }>(
             `SELECT committed_revision FROM memories
-             WHERE owner_id = $1 AND scope_id = $2 AND id = $3 FOR UPDATE`,
-            [actor.ownerId, changeSet.scope_id, memoryId],
+             WHERE user_id = $1 AND scope_id = $2 AND id = $3 FOR UPDATE`,
+            [actor.userId, changeSet.scope_id, memoryId],
           );
           if (current.rows[0]?.committed_revision !== expectedRevision)
             throw new CoreError(
@@ -567,10 +568,10 @@ export class CoreService {
         events.push(...applied.events);
         operationResults.push(applied.result);
         await client.query(
-          `INSERT INTO change_ops(owner_id, scope_id, change_set_id, ordinal, op, memory_id, memory_revision, metadata)
+          `INSERT INTO change_ops(user_id, scope_id, change_set_id, ordinal, op, memory_id, memory_revision, metadata)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
           [
-            actor.ownerId,
+            actor.userId,
             changeSet.scope_id,
             changeSetId,
             ordinal,
@@ -588,8 +589,8 @@ export class CoreService {
 
       const seqResult = await client.query<{ last_seq: string }>(
         `UPDATE scope_offsets SET last_seq = last_seq + $3, updated_at = clock_timestamp()
-         WHERE owner_id = $1 AND scope_id = $2 RETURNING last_seq`,
-        [actor.ownerId, changeSet.scope_id, events.length],
+         WHERE user_id = $1 AND scope_id = $2 RETURNING last_seq`,
+        [actor.userId, changeSet.scope_id, events.length],
       );
       const lastSeq = BigInt(seqResult.rows[0]?.last_seq ?? '0');
       const firstSeq = events.length === 0 ? null : lastSeq - BigInt(events.length) + 1n;
@@ -599,10 +600,10 @@ export class CoreService {
         const seq = (firstSeq + BigInt(index)).toString();
         const changeId = randomUUID();
         await client.query(
-          `INSERT INTO change_log(owner_id, scope_id, id, seq, change_set_id, op, memory_id, memory_revision, tombstone)
+          `INSERT INTO change_log(user_id, scope_id, id, seq, change_set_id, op, memory_id, memory_revision, tombstone)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
-            actor.ownerId,
+            actor.userId,
             changeSet.scope_id,
             changeId,
             seq,
@@ -614,10 +615,10 @@ export class CoreService {
           ],
         );
         await client.query(
-          `INSERT INTO outbox(owner_id, scope_id, id, event_type, aggregate_id, payload)
+          `INSERT INTO outbox(user_id, scope_id, id, event_type, aggregate_id, payload)
            VALUES ($1, $2, $3, 'memory.change', $4, $5::jsonb)`,
           [
-            actor.ownerId,
+            actor.userId,
             changeSet.scope_id,
             randomUUID(),
             changeSetId,
@@ -642,14 +643,14 @@ export class CoreService {
       };
       await client.query(
         `UPDATE changesets SET response = $4::jsonb, status = 'committed', proposal = NULL,
-        committed_at = clock_timestamp() WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-        [actor.ownerId, changeSet.scope_id, changeSetId, JSON.stringify(response)],
+        committed_at = clock_timestamp() WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, changeSet.scope_id, changeSetId, JSON.stringify(response)],
       );
       await client.query(
-        `INSERT INTO idempotency_keys(owner_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id)
+        `INSERT INTO idempotency_keys(user_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           actor.principalId,
           idempotencyKey,
@@ -659,10 +660,10 @@ export class CoreService {
         ],
       );
       await client.query(
-        `INSERT INTO audit_events(owner_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
+        `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
          VALUES ($1, $2, $3, 'changeset.committed', $4, $5, $6::jsonb)`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           actor.principalId,
           requestId,
@@ -678,10 +679,10 @@ export class CoreService {
         const updated = await client.query<{ id: string }>(
           `UPDATE curation_reviews SET status = 'approved', revision = revision + 1,
              decision_reason = $6, decision_by = $5, decision_at = clock_timestamp(), updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND id = $3 AND status = 'held' AND revision = $4
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3 AND status = 'held' AND revision = $4
            RETURNING id`,
           [
-            actor.ownerId,
+            actor.userId,
             changeSet.scope_id,
             review.id,
             review.expectedRevision,
@@ -696,18 +697,18 @@ export class CoreService {
             'Curation review changed before approval',
           );
         const memoryIds = operationResults.flatMap((result) => result.memory_ids);
-        if (review.confirmation === 'owner_statement') {
+        if (review.confirmation === 'user_statement') {
           await client.query(
-            `INSERT INTO owner_confirmations(owner_id, scope_id, review_id, principal_id, confirmation_type, memory_ids)
-             VALUES ($1, $2, $3, $4, 'owner_statement', $5::uuid[])`,
-            [actor.ownerId, changeSet.scope_id, review.id, actor.principalId, memoryIds],
+            `INSERT INTO user_confirmations(user_id, scope_id, review_id, principal_id, confirmation_type, memory_ids)
+             VALUES ($1, $2, $3, $4, 'user_statement', $5::uuid[])`,
+            [actor.userId, changeSet.scope_id, review.id, actor.principalId, memoryIds],
           );
         }
         await client.query(
           `UPDATE capture_jobs SET state = 'committed', lease_until = NULL, lease_token = NULL,
              next_retry_at = NULL, updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND review_id = $3`,
-          [actor.ownerId, changeSet.scope_id, review.id],
+           WHERE user_id = $1 AND scope_id = $2 AND review_id = $3`,
+          [actor.userId, changeSet.scope_id, review.id],
         );
       }
       return response;
@@ -850,12 +851,12 @@ export class CoreService {
     const payloadHash = sha256(stableJson(changeSet));
     return this.withActor(actor, [changeSet.scope_id], writeCapability, async (client) => {
       await client.query(
-        'INSERT INTO scope_offsets(owner_id, scope_id) VALUES ($1, $2) ON CONFLICT (owner_id, scope_id) DO NOTHING',
-        [actor.ownerId, changeSet.scope_id],
+        'INSERT INTO scope_offsets(user_id, scope_id) VALUES ($1, $2) ON CONFLICT (user_id, scope_id) DO NOTHING',
+        [actor.userId, changeSet.scope_id],
       );
       await client.query(
-        'SELECT last_seq FROM scope_offsets WHERE owner_id = $1 AND scope_id = $2 FOR UPDATE',
-        [actor.ownerId, changeSet.scope_id],
+        'SELECT last_seq FROM scope_offsets WHERE user_id = $1 AND scope_id = $2 FOR UPDATE',
+        [actor.userId, changeSet.scope_id],
       );
       await this.assertCurrentJobLease(
         client,
@@ -865,9 +866,9 @@ export class CoreService {
         jobFence.leaseToken,
       );
       const prior = await client.query<{ id: string; proposal_hash: string | null }>(
-        `SELECT id, proposal_hash FROM changesets WHERE owner_id = $1 AND scope_id = $2
+        `SELECT id, proposal_hash FROM changesets WHERE user_id = $1 AND scope_id = $2
          AND principal_id = $3 AND proposal_idempotency_key = $4 FOR UPDATE`,
-        [actor.ownerId, changeSet.scope_id, actor.principalId, idempotencyKey],
+        [actor.userId, changeSet.scope_id, actor.principalId, idempotencyKey],
       );
       if (prior.rows[0] !== undefined) {
         throw new CoreError(
@@ -884,11 +885,11 @@ export class CoreService {
         status: 'proposed',
       };
       await client.query(
-        `INSERT INTO changesets(owner_id, scope_id, id, principal_id, request_id, operation_count,
+        `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
            response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response)
          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb)`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           changeSetId,
           actor.principalId,
@@ -902,11 +903,11 @@ export class CoreService {
       );
       const reviewId = randomUUID();
       await client.query(
-        `INSERT INTO curation_reviews(owner_id, scope_id, id, job_id, change_set_id, reason_codes, rationale,
+        `INSERT INTO curation_reviews(user_id, scope_id, id, job_id, change_set_id, reason_codes, rationale,
            candidate_summary, evidence_anchors, expected_revisions)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb)`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           reviewId,
           jobFence.jobId,
@@ -921,10 +922,10 @@ export class CoreService {
       const held = await client.query(
         `UPDATE capture_jobs SET state = 'held', review_id = $5, checkpoint = checkpoint || $6::jsonb,
            lease_until = NULL, lease_token = NULL, next_retry_at = NULL, updated_at = clock_timestamp()
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4
            AND state = 'processing' AND lease_until > clock_timestamp()`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           jobFence.jobId,
           jobFence.leaseToken,
@@ -940,10 +941,10 @@ export class CoreService {
           true,
         );
       await client.query(
-        `INSERT INTO audit_events(owner_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
+        `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
          VALUES ($1, $2, $3, 'curation.review_held', $4::uuid, $5, $6::jsonb)`,
         [
-          actor.ownerId,
+          actor.userId,
           changeSet.scope_id,
           actor.principalId,
           requestId,
@@ -999,13 +1000,13 @@ export class CoreService {
     reviewId: string,
     expectedRevision: number,
     decision: 'approve' | 'reject',
-    confirmation: 'accept_candidate' | 'owner_statement',
+    confirmation: 'accept_candidate' | 'user_statement',
     reason: string | null,
     requestId: string,
     idempotencyKey: string,
   ): Promise<Record<string, unknown>> {
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may decide a curation review');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may decide a curation review');
     validateUuid(reviewId, 'review_id');
     validateIdempotencyKey(idempotencyKey);
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
@@ -1042,9 +1043,9 @@ export class CoreService {
         }>(
           `SELECT r.scope_id, r.change_set_id, r.status, r.revision, r.job_id, c.proposal, r.evidence_anchors,
            r.expected_revisions, r.candidate_summary
-         FROM curation_reviews r JOIN changesets c ON c.owner_id = r.owner_id AND c.scope_id = r.scope_id AND c.id = r.change_set_id
-         WHERE r.owner_id = $1 AND r.scope_id = ANY($2::uuid[]) AND r.id = $3 FOR UPDATE OF r`,
-          [actor.ownerId, authorizedScopes, reviewId],
+         FROM curation_reviews r JOIN changesets c ON c.user_id = r.user_id AND c.scope_id = r.scope_id AND c.id = r.change_set_id
+         WHERE r.user_id = $1 AND r.scope_id = ANY($2::uuid[]) AND r.id = $3 FOR UPDATE OF r`,
+          [actor.userId, authorizedScopes, reviewId],
         );
         const row = result.rows[0];
         if (row === undefined) throw new CoreError(404, 'not_found', 'Curation review not found');
@@ -1052,9 +1053,9 @@ export class CoreService {
         const sourceIdentity = await client.query<{ source_id: string }>(
           `SELECT s.id AS source_id
            FROM capture_jobs j
-           JOIN sources s ON s.owner_id = j.owner_id AND s.scope_id = j.scope_id AND s.id = j.source_id
-           WHERE j.owner_id = $1 AND j.scope_id = $2 AND j.id = $3`,
-          [actor.ownerId, row.scope_id, row.job_id],
+           JOIN sources s ON s.user_id = j.user_id AND s.scope_id = j.scope_id AND s.id = j.source_id
+           WHERE j.user_id = $1 AND j.scope_id = $2 AND j.id = $3`,
+          [actor.userId, row.scope_id, row.job_id],
         );
         const sourceId = sourceIdentity.rows[0]?.source_id;
         if (sourceId === undefined)
@@ -1064,18 +1065,18 @@ export class CoreService {
           `SELECT (s.rights_status = 'granted' AND s.consent AND ca.enabled AND ca.consent
              AND NOT EXISTS (
                SELECT 1 FROM suppressions sp
-               WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id
+               WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id
                  AND (sp.object_id = s.id OR sp.object_id IN (
                    SELECT jo.observation_id FROM capture_job_observations jo
-                   WHERE jo.owner_id = j.owner_id AND jo.scope_id = j.scope_id AND jo.job_id = j.id
+                   WHERE jo.user_id = j.user_id AND jo.scope_id = j.scope_id AND jo.job_id = j.id
                  ))
              )) AS authorized
            FROM capture_jobs j
-           JOIN sources s ON s.owner_id = j.owner_id AND s.scope_id = j.scope_id AND s.id = j.source_id
-           JOIN connector_authorizations ca ON ca.owner_id = s.owner_id AND ca.scope_id = s.scope_id
+           JOIN sources s ON s.user_id = j.user_id AND s.scope_id = j.scope_id AND s.id = j.source_id
+           JOIN connector_authorizations ca ON ca.user_id = s.user_id AND ca.scope_id = s.scope_id
              AND ca.source_kind = s.kind AND ca.external_id = s.external_id
-           WHERE j.owner_id = $1 AND j.scope_id = $2 AND j.id = $3`,
-          [actor.ownerId, row.scope_id, row.job_id],
+           WHERE j.user_id = $1 AND j.scope_id = $2 AND j.id = $3`,
+          [actor.userId, row.scope_id, row.job_id],
         );
         if (sourceRights.rows[0]?.authorized !== true)
           throw new CoreError(
@@ -1089,8 +1090,8 @@ export class CoreService {
           response: Record<string, unknown>;
         }>(
           `SELECT payload_hash, response FROM idempotency_keys
-           WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3 AND idempotency_key = $4`,
-          [actor.ownerId, row.scope_id, actor.principalId, idempotencyKey],
+           WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3 AND idempotency_key = $4`,
+          [actor.userId, row.scope_id, actor.principalId, idempotencyKey],
         );
         const existing = prior.rows[0];
         if (existing !== undefined) {
@@ -1113,20 +1114,20 @@ export class CoreService {
           await client.query(
             `UPDATE curation_reviews SET status = 'rejected', revision = revision + 1, decision_reason = $5,
              decision_by = $4, decision_at = clock_timestamp(), updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-            [actor.ownerId, row.scope_id, reviewId, actor.principalId, reason],
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+            [actor.userId, row.scope_id, reviewId, actor.principalId, reason],
           );
           await client.query(
-            `UPDATE capture_jobs SET state = 'held', last_error_code = 'owner_rejected', lease_until = NULL,
+            `UPDATE capture_jobs SET state = 'held', last_error_code = 'user_rejected', lease_until = NULL,
              lease_token = NULL, updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND review_id = $3`,
-            [actor.ownerId, row.scope_id, reviewId],
+           WHERE user_id = $1 AND scope_id = $2 AND review_id = $3`,
+            [actor.userId, row.scope_id, reviewId],
           );
           await client.query(
-            `INSERT INTO audit_events(owner_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
+            `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, object_id, metadata)
            VALUES ($1, $2, $3, 'curation.review_rejected', $4::uuid, $5, $6::jsonb)`,
             [
-              actor.ownerId,
+              actor.userId,
               row.scope_id,
               actor.principalId,
               requestId,
@@ -1136,10 +1137,10 @@ export class CoreService {
           );
           const response = { review_id: reviewId, scope_id: row.scope_id, status: 'rejected' };
           await client.query(
-            `INSERT INTO idempotency_keys(owner_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id)
+            `INSERT INTO idempotency_keys(user_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id)
              VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
             [
-              actor.ownerId,
+              actor.userId,
               row.scope_id,
               actor.principalId,
               idempotencyKey,
@@ -1166,7 +1167,7 @@ export class CoreService {
             'This candidate matched existing memories. Reject this review, then use a Core ChangeSet such as CORROBORATE or SUPERSEDE.',
           );
         if (
-          confirmation === 'owner_statement' &&
+          confirmation === 'user_statement' &&
           row.proposal.operations.some(
             (operation) =>
               operation.op !== 'CREATE' ||
@@ -1175,8 +1176,8 @@ export class CoreService {
         )
           throw new CoreError(
             400,
-            'owner_confirmation_not_allowed',
-            'Owner statement confirmation only applies to decisions and preferences',
+            'user_confirmation_not_allowed',
+            'User statement confirmation only applies to decisions and preferences',
           );
         return {
           scopeId: row.scope_id,
@@ -1197,7 +1198,7 @@ export class CoreService {
       {
         writerActorKind: 'curator',
         activate: true,
-        ownerStatement: confirmation === 'owner_statement',
+        userStatement: confirmation === 'user_statement',
         anchorsByOperation: review.anchors,
         review: {
           id: reviewId,
@@ -1255,7 +1256,7 @@ export class CoreService {
     return this.withActor(actor, scopeIds, readCapability, async (client) => {
       const normalizedQuery = normalizeName(query.query);
       const matchingRows = await client.query<MutableMemoryRow>(
-        `SELECT m.id, m.owner_id, m.scope_id,
+        `SELECT m.id, m.user_id, m.scope_id,
            coalesce(v.kind, m.kind) AS kind,
            coalesce(v.statement, m.statement) AS statement,
            coalesce(v.context, m.context) AS context,
@@ -1274,22 +1275,22 @@ export class CoreService {
          FROM memories AS m
          LEFT JOIN LATERAL (
            SELECT version.* FROM memory_versions AS version
-           WHERE version.owner_id = m.owner_id AND version.scope_id = m.scope_id
+           WHERE version.user_id = m.user_id AND version.scope_id = m.scope_id
              AND version.memory_id = m.id AND version.recorded_at <= $6
            ORDER BY version.revision DESC LIMIT 1
          ) AS v ON $6::timestamptz IS NOT NULL
-         WHERE m.owner_id = $1 AND m.scope_id = ANY($2::uuid[])
+         WHERE m.user_id = $1 AND m.scope_id = ANY($2::uuid[])
            AND ($6::timestamptz IS NULL OR v.revision IS NOT NULL)
            AND coalesce(v.lifecycle, m.lifecycle) = 'active'
            AND (lower(btrim(coalesce(v.statement, m.statement))) = lower(btrim($3)) OR EXISTS (
              SELECT 1 FROM memory_subjects AS ms
-             JOIN subjects AS sub ON sub.owner_id = ms.owner_id AND sub.scope_id = ms.scope_id AND sub.id = ms.subject_id
-             WHERE ms.owner_id = m.owner_id AND ms.scope_id = m.scope_id AND ms.memory_id = m.id
+             JOIN subjects AS sub ON sub.user_id = ms.user_id AND sub.scope_id = ms.scope_id AND sub.id = ms.subject_id
+             WHERE ms.user_id = m.user_id AND ms.scope_id = m.scope_id AND ms.memory_id = m.id
                AND sub.normalized_name = $4
            ) OR EXISTS (
              SELECT 1 FROM memory_subjects AS ms
-             JOIN subject_aliases AS sa ON sa.owner_id = ms.owner_id AND sa.scope_id = ms.scope_id AND sa.subject_id = ms.subject_id
-             WHERE ms.owner_id = m.owner_id AND ms.scope_id = m.scope_id AND ms.memory_id = m.id
+             JOIN subject_aliases AS sa ON sa.user_id = ms.user_id AND sa.scope_id = ms.scope_id AND sa.subject_id = ms.subject_id
+             WHERE ms.user_id = m.user_id AND ms.scope_id = m.scope_id AND ms.memory_id = m.id
                AND sa.normalized_alias = $4
                AND ($5::timestamptz IS NULL OR (sa.valid_from <= $5 AND (sa.valid_to IS NULL OR sa.valid_to > $5)))
            ))
@@ -1299,17 +1300,17 @@ export class CoreService {
              OR (CASE WHEN $6::timestamptz IS NULL THEN m.valid_to ELSE v.valid_to END) > $5)
            AND NOT EXISTS (
              SELECT 1 FROM memory_version_evidence AS me
-             JOIN evidence AS e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-             JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-             WHERE me.owner_id = m.owner_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
+             JOIN evidence AS e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+             JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+             WHERE me.user_id = m.user_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
                AND me.revision = coalesce(v.revision, m.revision)
                AND (src.rights_status <> 'granted' OR NOT src.consent
-                 OR EXISTS (SELECT 1 FROM suppressions AS sp WHERE sp.owner_id = src.owner_id AND sp.scope_id = src.scope_id AND sp.object_id IN (m.id, src.id, e.id)))
+                 OR EXISTS (SELECT 1 FROM suppressions AS sp WHERE sp.user_id = src.user_id AND sp.scope_id = src.scope_id AND sp.object_id IN (m.id, src.id, e.id)))
            )
          ORDER BY coalesce(v.recorded_at, m.recorded_at) DESC, m.id
          LIMIT $7`,
         [
-          actor.ownerId,
+          actor.userId,
           scopeIds,
           query.query,
           normalizedQuery,
@@ -1377,7 +1378,7 @@ export class CoreService {
         query.cursor === undefined
           ? initialCursor(actor, scopeIds)
           : this.cursors.decode(query.cursor, {
-              owner: actor.ownerId,
+              user: actor.userId,
               principal: actor.principalId,
               scopes: scopeIds,
             });
@@ -1405,18 +1406,18 @@ export class CoreService {
       }>(
         `SELECT id, scope_id, seq, op, memory_id, memory_revision, tombstone, created_at
          FROM change_log
-         WHERE owner_id = $1 AND scope_id = ANY($2::uuid[])
+         WHERE user_id = $1 AND scope_id = ANY($2::uuid[])
            AND seq > coalesce(($3::jsonb ->> scope_id::text)::bigint, 0)
          ORDER BY scope_id, seq
          LIMIT $4`,
-        [actor.ownerId, scopeIds, JSON.stringify(cursor.offsets), query.limit + 1],
+        [actor.userId, scopeIds, JSON.stringify(cursor.offsets), query.limit + 1],
       );
       const hasMore = result.rows.length > query.limit;
       const page = result.rows.slice(0, query.limit);
       const offsets: Record<string, string> = { ...cursor.offsets };
       for (const row of page) offsets[row.scope_id] = row.seq;
       const nextCursor = this.cursors.encode({
-        owner: actor.ownerId,
+        user: actor.userId,
         principal: actor.principalId,
         scopes: scopeIds,
         offsets,
@@ -1425,10 +1426,10 @@ export class CoreService {
         ),
       });
       await client.query(
-        `INSERT INTO audit_events(owner_id, scope_id, principal_id, event_type, request_id, metadata)
+        `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, metadata)
          SELECT $1, requested.scope_id, $2, 'changes.read', $3, $4::jsonb FROM unnest($5::uuid[]) AS requested(scope_id)`,
         [
-          actor.ownerId,
+          actor.userId,
           actor.principalId,
           requestId,
           JSON.stringify({ returned: page.length }),
@@ -1520,25 +1521,25 @@ export class CoreService {
           operation.expected_revision,
         );
         if (
-          actor.actorKind !== 'owner' &&
-          ['owner_decision', 'owner_preference', 'owner_assertion'].includes(memory.authority)
+          actor.actorKind !== 'user' &&
+          ['user_decision', 'user_preference', 'user_assertion'].includes(memory.authority)
         ) {
           throw new CoreError(
             403,
-            'owner_confirmation_required',
-            'Only the Owner may refine an Owner-attributed active memory',
+            'user_confirmation_required',
+            'Only the User may refine an User-attributed active memory',
           );
         }
         for (const evidence of operation.evidence)
           await this.attachEvidence(client, actor, scopeId, memory.id, evidence);
         const lifecycle =
-          actor.actorKind === 'owner' && operation.epistemic_status !== 'proposed'
+          actor.actorKind === 'user' && operation.epistemic_status !== 'proposed'
             ? memory.lifecycle === 'candidate'
               ? 'active'
               : memory.lifecycle
             : 'candidate';
         const status =
-          actor.actorKind === 'owner'
+          actor.actorKind === 'user'
             ? (operation.epistemic_status ?? memory.epistemic_status)
             : 'proposed';
         const authority = deriveAuthority(actor.actorKind, memory.kind, status);
@@ -1547,9 +1548,9 @@ export class CoreService {
           `UPDATE memories SET statement = $4, context = $5::jsonb, valid_from = $6, valid_to = $7,
              actor_kind = $8, authority = $9, epistemic_status = $10, lifecycle = $11,
              revision = $12, committed_revision = $12, updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
           [
-            actor.ownerId,
+            actor.userId,
             scopeId,
             memory.id,
             operation.statement ?? memory.statement,
@@ -1577,8 +1578,8 @@ export class CoreService {
         };
       }
       case 'SUPERSEDE': {
-        if (actor.actorKind !== 'owner')
-          throw new CoreError(403, 'forbidden', 'Only the Owner may supersede an active memory');
+        if (actor.actorKind !== 'user')
+          throw new CoreError(403, 'forbidden', 'Only the User may supersede an active memory');
         const oldMemory = await this.lockMutableMemory(
           client,
           actor,
@@ -1625,14 +1626,14 @@ export class CoreService {
           `UPDATE memories SET lifecycle = 'superseded', superseded_at = clock_timestamp(),
              valid_to = least(coalesce(valid_to, $4), $4), revision = $5, committed_revision = $5,
              updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-          [actor.ownerId, scopeId, oldMemory.id, cutover.toISOString(), oldRevision],
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+          [actor.userId, scopeId, oldMemory.id, cutover.toISOString(), oldRevision],
         );
         await this.writeVersion(client, actor, scopeId, oldMemory.id, changeSetId);
         await client.query(
-          `INSERT INTO relations(owner_id, scope_id, from_memory_id, to_memory_id, relation, context, created_by)
+          `INSERT INTO relations(user_id, scope_id, from_memory_id, to_memory_id, relation, context, created_by)
            VALUES ($1, $2, $3, $4, 'supersedes', '{}'::jsonb, $5)`,
-          [actor.ownerId, scopeId, replacementId, oldMemory.id, actor.principalId],
+          [actor.userId, scopeId, replacementId, oldMemory.id, actor.principalId],
         );
         return {
           events: [
@@ -1665,8 +1666,8 @@ export class CoreService {
         await client.query(
           `UPDATE memories SET contested = true, context = $4::jsonb, revision = $5,
              committed_revision = $5, updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-          [actor.ownerId, scopeId, memory.id, JSON.stringify(context), nextRevision],
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+          [actor.userId, scopeId, memory.id, JSON.stringify(context), nextRevision],
         );
         await this.writeVersion(client, actor, scopeId, memory.id, changeSetId);
         return {
@@ -1687,18 +1688,18 @@ export class CoreService {
           throw new CoreError(400, 'invalid_request', 'A memory cannot be related to itself');
         const rows = await client.query<MutableMemoryRow>(
           `SELECT m.* FROM memories AS m
-           WHERE owner_id = $1 AND scope_id = $2 AND id = ANY($3::uuid[])
-             AND NOT EXISTS (SELECT 1 FROM suppressions AS hidden WHERE hidden.owner_id = m.owner_id
+           WHERE user_id = $1 AND scope_id = $2 AND id = ANY($3::uuid[])
+             AND NOT EXISTS (SELECT 1 FROM suppressions AS hidden WHERE hidden.user_id = m.user_id
                AND hidden.scope_id = m.scope_id AND hidden.object_kind = 'memory' AND hidden.object_id = m.id)
              AND NOT EXISTS (
                SELECT 1 FROM memory_evidence me JOIN evidence e
-                 ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-               JOIN sources s ON s.owner_id = e.owner_id AND s.scope_id = e.scope_id AND s.id = e.source_id
-               WHERE me.owner_id = m.owner_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
+                 ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+               JOIN sources s ON s.user_id = e.user_id AND s.scope_id = e.scope_id AND s.id = e.source_id
+               WHERE me.user_id = m.user_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
                  AND (s.rights_status <> 'granted' OR NOT s.consent)
              )
            ORDER BY id FOR UPDATE`,
-          [actor.ownerId, scopeId, ids],
+          [actor.userId, scopeId, ids],
         );
         if (rows.rows.length !== 2)
           throw new CoreError(404, 'not_found', 'Related memory not found');
@@ -1715,12 +1716,12 @@ export class CoreService {
           throw new CoreError(409, 'revision_conflict', 'A related memory revision is stale', true);
         }
         const inserted = await client.query<{ id: string }>(
-          `INSERT INTO relations(owner_id, scope_id, from_memory_id, to_memory_id, relation, context, created_by)
+          `INSERT INTO relations(user_id, scope_id, from_memory_id, to_memory_id, relation, context, created_by)
            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-           ON CONFLICT (owner_id, scope_id, from_memory_id, to_memory_id, relation) DO NOTHING
+           ON CONFLICT (user_id, scope_id, from_memory_id, to_memory_id, relation) DO NOTHING
            RETURNING id`,
           [
-            actor.ownerId,
+            actor.userId,
             scopeId,
             from.id,
             to.id,
@@ -1756,8 +1757,8 @@ export class CoreService {
         };
       }
       case 'RETRACT': {
-        if (actor.actorKind !== 'owner')
-          throw new CoreError(403, 'forbidden', 'Only the Owner may retract a memory');
+        if (actor.actorKind !== 'user')
+          throw new CoreError(403, 'forbidden', 'Only the User may retract a memory');
         const memory = await this.lockMutableMemory(
           client,
           actor,
@@ -1768,8 +1769,8 @@ export class CoreService {
         const revision = memory.revision + 1;
         await client.query(
           `UPDATE memories SET lifecycle = 'retracted', revision = $4, committed_revision = $4, updated_at = clock_timestamp()
-           WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-          [actor.ownerId, scopeId, memory.id, revision],
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+          [actor.userId, scopeId, memory.id, revision],
         );
         await this.writeVersion(client, actor, scopeId, memory.id, changeSetId);
         return {
@@ -1801,25 +1802,25 @@ export class CoreService {
   ): Promise<string> {
     validateMemoryTime(input);
     const writeActorKind = internalOptions?.writerActorKind ?? actor.actorKind;
-    const epistemicStatus = internalOptions?.ownerStatement ? 'asserted' : input.epistemic_status;
+    const epistemicStatus = internalOptions?.userStatement ? 'asserted' : input.epistemic_status;
     const authority = deriveAuthority(
-      internalOptions?.ownerStatement ? 'owner' : writeActorKind,
+      internalOptions?.userStatement ? 'user' : writeActorKind,
       input.kind,
       epistemicStatus,
     );
     const lifecycle =
       internalOptions?.activate === true
         ? 'active'
-        : actor.actorKind === 'owner' && input.epistemic_status !== 'proposed'
+        : actor.actorKind === 'user' && input.epistemic_status !== 'proposed'
           ? 'active'
           : 'candidate';
     const result = await client.query<{ id: string }>(
-      `INSERT INTO memories(owner_id, scope_id, kind, statement, context, actor_kind, authority,
+      `INSERT INTO memories(user_id, scope_id, kind, statement, context, actor_kind, authority,
         epistemic_status, contested, lifecycle, valid_from, valid_to, created_by)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeId,
         input.kind,
         input.statement,
@@ -1846,8 +1847,8 @@ export class CoreService {
         input.valid_from,
       );
       await client.query(
-        'INSERT INTO memory_subjects(owner_id, scope_id, memory_id, subject_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
-        [actor.ownerId, scopeId, memoryId, subjectId],
+        'INSERT INTO memory_subjects(user_id, scope_id, memory_id, subject_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+        [actor.userId, scopeId, memoryId, subjectId],
       );
       await this.ensureAlias(client, actor, scopeId, subjectId, subject.name, null, null);
       for (const alias of subject.aliases) {
@@ -1883,24 +1884,24 @@ export class CoreService {
     const normalized = normalizeName(name);
     const at = validAt ?? new Date().toISOString();
     const existing = await client.query<{ id: string }>(
-      `SELECT id FROM subjects WHERE owner_id = $1 AND scope_id = $2 AND normalized_name = $3
+      `SELECT id FROM subjects WHERE user_id = $1 AND scope_id = $2 AND normalized_name = $3
        UNION
        SELECT subject_id AS id FROM subject_aliases
-       WHERE owner_id = $1 AND scope_id = $2 AND normalized_alias = $3
+       WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3
          AND valid_from <= $4 AND (valid_to IS NULL OR valid_to > $4)
        LIMIT 1`,
-      [actor.ownerId, scopeId, normalized, at],
+      [actor.userId, scopeId, normalized, at],
     );
     if (existing.rows[0] !== undefined) return existing.rows[0].id;
     const inserted = await client.query<{ id: string }>(
-      `INSERT INTO subjects(owner_id, scope_id, canonical_name, normalized_name)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (owner_id, scope_id, normalized_name) DO NOTHING RETURNING id`,
-      [actor.ownerId, scopeId, name.trim(), normalized],
+      `INSERT INTO subjects(user_id, scope_id, canonical_name, normalized_name)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, scope_id, normalized_name) DO NOTHING RETURNING id`,
+      [actor.userId, scopeId, name.trim(), normalized],
     );
     if (inserted.rows[0] !== undefined) return inserted.rows[0].id;
     const conflict = await client.query<{ id: string }>(
-      'SELECT id FROM subjects WHERE owner_id = $1 AND scope_id = $2 AND normalized_name = $3',
-      [actor.ownerId, scopeId, normalized],
+      'SELECT id FROM subjects WHERE user_id = $1 AND scope_id = $2 AND normalized_name = $3',
+      [actor.userId, scopeId, normalized],
     );
     if (conflict.rows[0] !== undefined) return conflict.rows[0].id;
     throw new CoreError(409, 'subject_conflict', 'The subject name overlaps an existing alias');
@@ -1926,9 +1927,9 @@ export class CoreService {
     const from = validFrom ?? '-infinity';
     const existing = await client.query<{ subject_id: string }>(
       `SELECT subject_id FROM subject_aliases
-       WHERE owner_id = $1 AND scope_id = $2 AND normalized_alias = $3
+       WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3
          AND valid_from = $4::timestamptz AND valid_to IS NOT DISTINCT FROM $5::timestamptz`,
-      [actor.ownerId, scopeId, normalized, from, validTo],
+      [actor.userId, scopeId, normalized, from, validTo],
     );
     const current = existing.rows[0];
     if (current !== undefined) {
@@ -1942,11 +1943,11 @@ export class CoreService {
     }
     const overlapping = await client.query<{ subject_id: string }>(
       `SELECT subject_id FROM subject_aliases
-       WHERE owner_id = $1 AND scope_id = $2 AND normalized_alias = $3
+       WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3
          AND tstzrange(valid_from, coalesce(valid_to, 'infinity'::timestamptz), '[)') &&
              tstzrange($4::timestamptz, coalesce($5::timestamptz, 'infinity'::timestamptz), '[)')
        LIMIT 1`,
-      [actor.ownerId, scopeId, normalized, from, validTo],
+      [actor.userId, scopeId, normalized, from, validTo],
     );
     if (overlapping.rows[0] !== undefined)
       throw new CoreError(
@@ -1955,9 +1956,9 @@ export class CoreService {
         'The alias overlaps another subject name in time',
       );
     await client.query(
-      `INSERT INTO subject_aliases(owner_id, scope_id, subject_id, alias, normalized_alias, valid_from, valid_to)
+      `INSERT INTO subject_aliases(user_id, scope_id, subject_id, alias, normalized_alias, valid_from, valid_to)
        VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz)`,
-      [actor.ownerId, scopeId, subjectId, alias.trim(), normalized, from, validTo],
+      [actor.userId, scopeId, subjectId, alias.trim(), normalized, from, validTo],
     );
   }
 
@@ -1993,14 +1994,14 @@ export class CoreService {
     const suppression =
       this.forgetHmacKey === undefined
         ? await client.query<{ present: boolean }>(
-            `SELECT EXISTS (SELECT 1 FROM suppressions WHERE owner_id = $1 AND scope_id = $2
+            `SELECT EXISTS (SELECT 1 FROM suppressions WHERE user_id = $1 AND scope_id = $2
             AND object_kind = 'locator_hmac' AND locator_hmac IS NOT NULL) AS present`,
-            [actor.ownerId, scopeId],
+            [actor.userId, scopeId],
           )
         : await client.query<{ present: boolean }>(
-            `SELECT EXISTS (SELECT 1 FROM suppressions WHERE owner_id = $1 AND scope_id = $2
+            `SELECT EXISTS (SELECT 1 FROM suppressions WHERE user_id = $1 AND scope_id = $2
             AND object_kind = 'locator_hmac' AND locator_hmac = ANY($3::text[])) AS present`,
-            [actor.ownerId, scopeId, sourceDigests],
+            [actor.userId, scopeId, sourceDigests],
           );
     if (suppression.rows[0]?.present === true) {
       throw new CoreError(
@@ -2020,16 +2021,16 @@ export class CoreService {
         lineage_root: string | null;
       }>(
         `SELECT id, rights_status, consent, lineage_root FROM sources
-       WHERE owner_id = $1 AND scope_id = $2 AND kind = $3 AND external_id = $4 AND revision = $5`,
-        [actor.ownerId, scopeId, sourceInput.kind, sourceInput.external_id, sourceInput.revision],
+       WHERE user_id = $1 AND scope_id = $2 AND kind = $3 AND external_id = $4 AND revision = $5`,
+        [actor.userId, scopeId, sourceInput.kind, sourceInput.external_id, sourceInput.revision],
       );
     let source = await sourceByIdentity();
     if (source.rows[0] === undefined && sourceInput.kind === 'explicit_remember') {
       await client.query(
-        `INSERT INTO sources(owner_id, scope_id, kind, external_id, revision, rights_status, consent)
+        `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent)
          VALUES ($1, $2, 'explicit_remember', $3, $4, 'granted', true)
-         ON CONFLICT (owner_id, scope_id, kind, external_id, revision) DO NOTHING`,
-        [actor.ownerId, scopeId, sourceInput.external_id, sourceInput.revision],
+         ON CONFLICT (user_id, scope_id, kind, external_id, revision) DO NOTHING`,
+        [actor.userId, scopeId, sourceInput.external_id, sourceInput.revision],
       );
       source = await sourceByIdentity();
     }
@@ -2043,8 +2044,8 @@ export class CoreService {
         lineage_root: string | null;
       }>(
         `SELECT id, rights_status, consent, lineage_root FROM sources
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-        [actor.ownerId, scopeId, identifiedSource.id],
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, scopeId, identifiedSource.id],
       );
     }
     const sourceRow = source.rows[0];
@@ -2065,8 +2066,8 @@ export class CoreService {
         content: string;
       }>(
         `SELECT source_id, source_revision, locator, content FROM observations
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-        [actor.ownerId, scopeId, anchor.observationId],
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, scopeId, anchor.observationId],
       );
       const observed = observation.rows[0];
       const anchoredSpan = observed?.content.slice(anchor.spanStart, anchor.spanEnd);
@@ -2102,15 +2103,15 @@ export class CoreService {
       }),
     );
     const insert = await client.query<{ id: string }>(
-      `INSERT INTO evidence(owner_id, scope_id, source_id, source_revision, locator, span, speaker,
+      `INSERT INTO evidence(user_id, scope_id, source_id, source_revision, locator, span, speaker,
          captured_at, event_time, lineage_root, snippet, snippet_allowed, content_hash,
          observation_id, span_start, span_end)
        VALUES ($1, $2, $3, $4, $5, $6, $7, coalesce($8::timestamptz, clock_timestamp()), $9,
          coalesce($10::uuid, $3::uuid), $11, $12, $13, $14, $15, $16)
-       ON CONFLICT (owner_id, scope_id, source_id, source_revision, locator, content_hash) DO NOTHING
+       ON CONFLICT (user_id, scope_id, source_id, source_revision, locator, content_hash) DO NOTHING
        RETURNING id`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeId,
         sourceRow.id,
         sourceInput.revision,
@@ -2136,10 +2137,10 @@ export class CoreService {
         span_start: number | null;
         span_end: number | null;
       }>(
-        `SELECT id, observation_id, span_start, span_end FROM evidence WHERE owner_id = $1 AND scope_id = $2 AND source_id = $3
+        `SELECT id, observation_id, span_start, span_end FROM evidence WHERE user_id = $1 AND scope_id = $2 AND source_id = $3
            AND source_revision = $4 AND locator = $5 AND content_hash = $6`,
         [
-          actor.ownerId,
+          actor.userId,
           scopeId,
           sourceRow.id,
           sourceInput.revision,
@@ -2165,9 +2166,9 @@ export class CoreService {
     if (evidenceId === undefined)
       throw new CoreError(500, 'internal_error', 'Evidence insert did not return an identifier');
     await client.query(
-      `INSERT INTO memory_evidence(owner_id, scope_id, memory_id, evidence_id)
+      `INSERT INTO memory_evidence(user_id, scope_id, memory_id, evidence_id)
        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-      [actor.ownerId, scopeId, memoryId, evidenceId],
+      [actor.userId, scopeId, memoryId, evidenceId],
     );
     return evidenceId;
   }
@@ -2181,19 +2182,19 @@ export class CoreService {
   ): Promise<MutableMemoryRow> {
     const result = await client.query<MutableMemoryRow>(
       `SELECT m.* FROM memories AS m
-       WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = $3
-         AND NOT EXISTS (SELECT 1 FROM suppressions AS hidden WHERE hidden.owner_id = m.owner_id
+       WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = $3
+         AND NOT EXISTS (SELECT 1 FROM suppressions AS hidden WHERE hidden.user_id = m.user_id
            AND hidden.scope_id = m.scope_id AND hidden.object_kind = 'memory' AND hidden.object_id = m.id)
          AND NOT EXISTS (
            SELECT 1 FROM memory_evidence AS me
-           JOIN evidence AS e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-           JOIN sources AS s ON s.owner_id = e.owner_id AND s.scope_id = e.scope_id AND s.id = e.source_id
-           WHERE me.owner_id = m.owner_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
+           JOIN evidence AS e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+           JOIN sources AS s ON s.user_id = e.user_id AND s.scope_id = e.scope_id AND s.id = e.source_id
+           WHERE me.user_id = m.user_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
              AND (s.rights_status <> 'granted' OR NOT s.consent
-               OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id AND sp.object_id IN (m.id, s.id, e.id)))
+               OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id AND sp.object_id IN (m.id, s.id, e.id)))
          )
        FOR UPDATE`,
-      [actor.ownerId, scopeId, memoryId],
+      [actor.userId, scopeId, memoryId],
     );
     const memory = result.rows[0];
     if (memory === undefined) throw new CoreError(404, 'not_found', 'Memory not found');
@@ -2227,11 +2228,11 @@ export class CoreService {
     const sourceIds = await client.query<{ source_id: string }>(
       `SELECT DISTINCT src.id AS source_id
        FROM memory_evidence AS me
-       JOIN evidence AS e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-       JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-       WHERE me.owner_id = $1 AND me.scope_id = $2 AND me.memory_id = ANY($3::uuid[])
+       JOIN evidence AS e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+       JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+       WHERE me.user_id = $1 AND me.scope_id = $2 AND me.memory_id = ANY($3::uuid[])
        ORDER BY src.id`,
-      [actor.ownerId, scopeId, memoryIds],
+      [actor.userId, scopeId, memoryIds],
     );
     await this.lockSourcesForShare(
       client,
@@ -2245,15 +2246,15 @@ export class CoreService {
       `SELECT src.rights_status, src.consent,
          EXISTS (
            SELECT 1 FROM suppressions AS sp
-           WHERE sp.owner_id = src.owner_id AND sp.scope_id = src.scope_id
+           WHERE sp.user_id = src.user_id AND sp.scope_id = src.scope_id
              AND sp.object_id IN (me.memory_id, src.id, e.id)
          ) AS suppressed
        FROM memory_evidence AS me
-       JOIN evidence AS e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-       JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-       WHERE me.owner_id = $1 AND me.scope_id = $2 AND me.memory_id = ANY($3::uuid[])
+       JOIN evidence AS e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+       JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+       WHERE me.user_id = $1 AND me.scope_id = $2 AND me.memory_id = ANY($3::uuid[])
        ORDER BY src.id, me.memory_id, e.id`,
-      [actor.ownerId, scopeId, memoryIds],
+      [actor.userId, scopeId, memoryIds],
     );
     if (
       sources.rows.some(
@@ -2282,8 +2283,8 @@ export class CoreService {
     const revision = memory.revision + 1;
     await client.query(
       `UPDATE memories SET revision = $4, committed_revision = $4, updated_at = clock_timestamp()
-       WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-      [actor.ownerId, memory.scope_id, memory.id, revision],
+       WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+      [actor.userId, memory.scope_id, memory.id, revision],
     );
     await this.writeVersion(client, actor, memory.scope_id, memory.id, changeSetId);
     return revision;
@@ -2297,23 +2298,23 @@ export class CoreService {
     changeSetId: string,
   ): Promise<void> {
     await client.query(
-      `INSERT INTO memory_versions(owner_id, scope_id, memory_id, revision, kind, statement, context,
+      `INSERT INTO memory_versions(user_id, scope_id, memory_id, revision, kind, statement, context,
          actor_kind, authority, epistemic_status, contested, lifecycle, valid_from, valid_to,
          recorded_at, superseded_at, changed_by, change_set_id)
-       SELECT owner_id, scope_id, id, revision, kind, statement, context, actor_kind, authority,
+       SELECT user_id, scope_id, id, revision, kind, statement, context, actor_kind, authority,
          epistemic_status, contested, lifecycle, valid_from, valid_to, clock_timestamp(), superseded_at, $4, $5
-       FROM memories WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-      [actor.ownerId, scopeId, memoryId, actor.principalId, changeSetId],
+       FROM memories WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+      [actor.userId, scopeId, memoryId, actor.principalId, changeSetId],
     );
     await client.query(
-      `INSERT INTO memory_version_evidence(owner_id, scope_id, memory_id, revision, evidence_id)
-       SELECT owner_id, scope_id, memory_id, revision, evidence_id
+      `INSERT INTO memory_version_evidence(user_id, scope_id, memory_id, revision, evidence_id)
+       SELECT user_id, scope_id, memory_id, revision, evidence_id
        FROM memory_versions v
-       JOIN memory_evidence me USING (owner_id, scope_id, memory_id)
-       WHERE v.owner_id = $1 AND v.scope_id = $2 AND v.memory_id = $3
-         AND v.revision = (SELECT revision FROM memories WHERE owner_id = $1 AND scope_id = $2 AND id = $3)
+       JOIN memory_evidence me USING (user_id, scope_id, memory_id)
+       WHERE v.user_id = $1 AND v.scope_id = $2 AND v.memory_id = $3
+         AND v.revision = (SELECT revision FROM memories WHERE user_id = $1 AND scope_id = $2 AND id = $3)
        ON CONFLICT DO NOTHING`,
-      [actor.ownerId, scopeId, memoryId],
+      [actor.userId, scopeId, memoryId],
     );
   }
 
@@ -2327,61 +2328,61 @@ export class CoreService {
     let row: MutableMemoryRow | undefined;
     if (query.known_at === undefined) {
       const result = await client.query<MutableMemoryRow>(
-        `SELECT m.id, m.owner_id, m.scope_id, m.kind, m.statement, m.context,
+        `SELECT m.id, m.user_id, m.scope_id, m.kind, m.statement, m.context,
            m.actor_kind, m.authority, m.epistemic_status, m.contested, m.lifecycle,
            m.valid_from, m.valid_to, coalesce(v.recorded_at, m.recorded_at) AS recorded_at,
            m.superseded_at, m.revision, m.committed_revision, m.indexed_revision
          FROM memories AS m
-         LEFT JOIN memory_versions AS v ON v.owner_id = m.owner_id AND v.scope_id = m.scope_id
+         LEFT JOIN memory_versions AS v ON v.user_id = m.user_id AND v.scope_id = m.scope_id
            AND v.memory_id = m.id AND v.revision = m.revision
-         WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = $3
+         WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = $3
            AND NOT EXISTS (
-             SELECT 1 FROM suppressions AS sp WHERE sp.owner_id = m.owner_id
+             SELECT 1 FROM suppressions AS sp WHERE sp.user_id = m.user_id
                AND sp.scope_id = m.scope_id AND sp.object_kind = 'memory' AND sp.object_id = m.id
            )
            AND ($4::timestamptz IS NULL OR m.valid_from IS NULL OR m.valid_from <= $4)
            AND ($4::timestamptz IS NULL OR m.valid_to IS NULL OR m.valid_to > $4)
            AND NOT EXISTS (
              SELECT 1 FROM memory_evidence AS me
-             JOIN evidence AS e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-             JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-             WHERE me.owner_id = m.owner_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
+             JOIN evidence AS e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+             JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+             WHERE me.user_id = m.user_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
                AND (src.rights_status <> 'granted' OR NOT src.consent
-                 OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = src.owner_id AND sp.scope_id = src.scope_id AND sp.object_id IN (m.id, src.id, e.id)))
+                 OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = src.user_id AND sp.scope_id = src.scope_id AND sp.object_id IN (m.id, src.id, e.id)))
            )`,
-        [actor.ownerId, scopeId, memoryId, query.valid_at ?? null],
+        [actor.userId, scopeId, memoryId, query.valid_at ?? null],
       );
       row = result.rows[0];
     } else {
       const result = await client.query<MutableMemoryRow>(
         `WITH latest AS (
            SELECT v.* FROM memory_versions AS v
-           WHERE v.owner_id = $1 AND v.scope_id = $2 AND v.memory_id = $3 AND v.recorded_at <= $4
+           WHERE v.user_id = $1 AND v.scope_id = $2 AND v.memory_id = $3 AND v.recorded_at <= $4
            ORDER BY v.revision DESC LIMIT 1
          )
-         SELECT m.id, m.owner_id, m.scope_id, latest.kind, latest.statement, latest.context,
+         SELECT m.id, m.user_id, m.scope_id, latest.kind, latest.statement, latest.context,
            latest.actor_kind, latest.authority, latest.epistemic_status, latest.contested,
            latest.lifecycle, latest.valid_from, latest.valid_to, latest.recorded_at,
            latest.superseded_at, latest.revision, latest.revision AS committed_revision,
            0 AS indexed_revision
          FROM latest JOIN memories AS m
-           ON m.owner_id = latest.owner_id AND m.scope_id = latest.scope_id AND m.id = latest.memory_id
+           ON m.user_id = latest.user_id AND m.scope_id = latest.scope_id AND m.id = latest.memory_id
          WHERE ($5::timestamptz IS NULL OR latest.valid_from IS NULL OR latest.valid_from <= $5)
            AND ($5::timestamptz IS NULL OR latest.valid_to IS NULL OR latest.valid_to > $5)
            AND NOT EXISTS (
-             SELECT 1 FROM suppressions AS sp WHERE sp.owner_id = m.owner_id
+             SELECT 1 FROM suppressions AS sp WHERE sp.user_id = m.user_id
                AND sp.scope_id = m.scope_id AND sp.object_kind = 'memory' AND sp.object_id = m.id
            )
            AND NOT EXISTS (
              SELECT 1 FROM memory_version_evidence AS mve
-             JOIN evidence AS e ON e.owner_id = mve.owner_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
-             JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-             WHERE mve.owner_id = latest.owner_id AND mve.scope_id = latest.scope_id
+             JOIN evidence AS e ON e.user_id = mve.user_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
+             JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+             WHERE mve.user_id = latest.user_id AND mve.scope_id = latest.scope_id
                AND mve.memory_id = latest.memory_id AND mve.revision = latest.revision
                AND (src.rights_status <> 'granted' OR NOT src.consent
-                 OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = src.owner_id AND sp.scope_id = src.scope_id AND sp.object_id IN (m.id, src.id, e.id)))
+                 OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = src.user_id AND sp.scope_id = src.scope_id AND sp.object_id IN (m.id, src.id, e.id)))
            )`,
-        [actor.ownerId, scopeId, memoryId, query.known_at, query.valid_at ?? null],
+        [actor.userId, scopeId, memoryId, query.known_at, query.valid_at ?? null],
       );
       row = result.rows[0];
     }
@@ -2396,11 +2397,11 @@ export class CoreService {
     const sourceIds = await client.query<{ source_id: string }>(
       `SELECT DISTINCT src.id AS source_id
        FROM memory_version_evidence AS mve
-       JOIN evidence AS e ON e.owner_id = mve.owner_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
-       JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-       WHERE mve.owner_id = $1 AND mve.scope_id = $2 AND mve.memory_id = $3 AND mve.revision = $4
+       JOIN evidence AS e ON e.user_id = mve.user_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
+       JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+       WHERE mve.user_id = $1 AND mve.scope_id = $2 AND mve.memory_id = $3 AND mve.revision = $4
        ORDER BY src.id`,
-      [row.owner_id, row.scope_id, row.id, row.revision],
+      [row.user_id, row.scope_id, row.id, row.revision],
     );
     await this.lockSourcesForShare(
       client,
@@ -2414,16 +2415,16 @@ export class CoreService {
       `SELECT src.rights_status, src.consent,
          EXISTS (
            SELECT 1 FROM suppressions AS sp
-           WHERE sp.owner_id = src.owner_id AND sp.scope_id = src.scope_id
+           WHERE sp.user_id = src.user_id AND sp.scope_id = src.scope_id
              AND sp.object_id IN (m.id, src.id, e.id)
          ) AS suppressed
        FROM memory_version_evidence AS mve
-       JOIN evidence AS e ON e.owner_id = mve.owner_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
-       JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-       JOIN memories AS m ON m.owner_id = mve.owner_id AND m.scope_id = mve.scope_id AND m.id = mve.memory_id
-       WHERE mve.owner_id = $1 AND mve.scope_id = $2 AND mve.memory_id = $3 AND mve.revision = $4
+       JOIN evidence AS e ON e.user_id = mve.user_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
+       JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+       JOIN memories AS m ON m.user_id = mve.user_id AND m.scope_id = mve.scope_id AND m.id = mve.memory_id
+       WHERE mve.user_id = $1 AND mve.scope_id = $2 AND mve.memory_id = $3 AND mve.revision = $4
        ORDER BY src.id`,
-      [row.owner_id, row.scope_id, row.id, row.revision],
+      [row.user_id, row.scope_id, row.id, row.revision],
     );
     if (
       rights.rows.some(
@@ -2442,27 +2443,27 @@ export class CoreService {
       }>(
         `SELECT sub.id, sub.canonical_name, sa.alias, sa.valid_from AS alias_valid_from, sa.valid_to AS alias_valid_to
          FROM memory_subjects AS ms JOIN subjects AS sub
-           ON sub.owner_id = ms.owner_id AND sub.scope_id = ms.scope_id AND sub.id = ms.subject_id
+           ON sub.user_id = ms.user_id AND sub.scope_id = ms.scope_id AND sub.id = ms.subject_id
          LEFT JOIN subject_aliases AS sa
-           ON sa.owner_id = sub.owner_id AND sa.scope_id = sub.scope_id AND sa.subject_id = sub.id
-         WHERE ms.owner_id = $1 AND ms.scope_id = $2 AND ms.memory_id = $3
+           ON sa.user_id = sub.user_id AND sa.scope_id = sub.scope_id AND sa.subject_id = sub.id
+         WHERE ms.user_id = $1 AND ms.scope_id = $2 AND ms.memory_id = $3
            AND ($4::timestamptz IS NULL OR sa.id IS NULL OR sa.valid_from <= $4)
            AND ($4::timestamptz IS NULL OR sa.id IS NULL OR sa.valid_to IS NULL OR sa.valid_to > $4)
          ORDER BY sub.canonical_name, sa.valid_from`,
-        [row.owner_id, row.scope_id, row.id, query.valid_at ?? null],
+        [row.user_id, row.scope_id, row.id, query.valid_at ?? null],
       ),
       client.query<EvidenceRow>(
         `SELECT e.id, e.source_id, e.source_revision, e.locator, e.span, e.speaker, e.captured_at,
            e.event_time, coalesce(e.lineage_root, e.source_id) AS lineage_root, e.snippet,
            e.snippet_allowed, e.created_at
          FROM memory_version_evidence AS me JOIN evidence AS e
-           ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-         JOIN sources AS src ON src.owner_id = e.owner_id AND src.scope_id = e.scope_id AND src.id = e.source_id
-         WHERE me.owner_id = $1 AND me.scope_id = $2 AND me.memory_id = $3 AND me.revision = $5
+           ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+         JOIN sources AS src ON src.user_id = e.user_id AND src.scope_id = e.scope_id AND src.id = e.source_id
+         WHERE me.user_id = $1 AND me.scope_id = $2 AND me.memory_id = $3 AND me.revision = $5
            AND src.rights_status = 'granted' AND src.consent
            AND ($4::timestamptz IS NULL OR e.created_at <= $4)
          ORDER BY e.created_at, e.id`,
-        [row.owner_id, row.scope_id, row.id, query.known_at ?? null, row.revision],
+        [row.user_id, row.scope_id, row.id, query.known_at ?? null, row.revision],
       ),
     ]);
     const subjects = new Map<
@@ -2544,13 +2545,13 @@ export class CoreService {
       throw new CoreError(403, 'forbidden', `The token does not grant ${capability} access`);
     }
     return withTransaction(this.pool, async (client) => {
-      await client.query("SELECT set_config('app.owner_id', $1, true)", [actor.ownerId]);
+      await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
       await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
       await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
       const access = await client.query<ScopeAccessRow>(
         `SELECT scope_id AS id, auth_epoch, capabilities
          FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,
-        [actor.ownerId, actor.principalId, actor.actorKind, scopeIds],
+        [actor.userId, actor.principalId, actor.actorKind, scopeIds],
       );
       if (access.rows.length !== scopeIds.length)
         throw new CoreError(
@@ -2581,7 +2582,7 @@ export class CoreService {
         for (const scopeId of scopeIds) {
           await client.query(
             "SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))",
-            [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.ownerId, scopeId],
+            [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.userId, scopeId],
           );
         }
       }
@@ -2602,8 +2603,8 @@ export class CoreService {
       lease_valid: boolean;
     }>(
       `SELECT state, lease_token, lease_until > clock_timestamp() AS lease_valid
-       FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND id = $3 FOR UPDATE`,
-      [actor.ownerId, scopeId, jobId],
+       FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND id = $3 FOR UPDATE`,
+      [actor.userId, scopeId, jobId],
     );
     const row = result.rows[0];
     if (
@@ -2668,10 +2669,10 @@ function deriveAuthority(
   kind: string,
   status: string,
 ): string {
-  if (actorKind !== 'owner' || status === 'proposed') return 'ai_proposal';
-  if (kind === 'decision') return 'owner_decision';
-  if (kind === 'preference') return 'owner_preference';
-  return 'owner_assertion';
+  if (actorKind !== 'user' || status === 'proposed') return 'ai_proposal';
+  if (kind === 'decision') return 'user_decision';
+  if (kind === 'preference') return 'user_preference';
+  return 'user_assertion';
 }
 
 function normalizeScopes(scopeIds: readonly string[]): string[] {
@@ -2772,12 +2773,16 @@ function normalizeName(value: string): string {
 }
 
 function stableJson(value: unknown): string {
+  return stableJsonRaw(encodeIdentityProvenanceV1(value));
+}
+
+function stableJsonRaw(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (Array.isArray(value)) return `[${value.map(stableJsonRaw).join(',')}]`;
   const object = value as Record<string, unknown>;
   return `{${Object.keys(object)
     .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
+    .map((key) => `${JSON.stringify(key)}:${stableJsonRaw(object[key])}`)
     .join(',')}}`;
 }
 
@@ -2795,7 +2800,7 @@ function isCapability(value: string): value is Capability {
 
 function initialCursor(actor: ActorContext, scopeIds: readonly string[]): CursorState {
   return {
-    owner: actor.ownerId,
+    user: actor.userId,
     principal: actor.principalId,
     scopes: scopeIds,
     offsets: Object.fromEntries(scopeIds.map((scopeId) => [scopeId, '0'])),

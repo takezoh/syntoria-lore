@@ -22,7 +22,7 @@ import type { PoolClient } from 'pg';
 
 interface ClaimedJob {
   readonly job_id: string;
-  readonly owner_id: string;
+  readonly user_id: string;
   readonly scope_id: string;
   readonly source_id: string;
   readonly principal_id: string;
@@ -179,7 +179,7 @@ export class CaptureJobProcessor {
           exactDuplicates.length === 1 && matched.length === 1 ? exactDuplicates[0]! : null;
         const reasonCodes: string[] = [];
         if (!readAllowed) reasonCodes.push('read_capability_required_for_reconciliation');
-        if (proposal.kind !== 'fact') reasonCodes.push('non_fact_requires_owner_review');
+        if (proposal.kind !== 'fact') reasonCodes.push('non_fact_requires_user_review');
         if (proposal.contested) reasonCodes.push('contested_proposal');
         if (!['observed', 'inferred'].includes(proposal.epistemic_status))
           reasonCodes.push('uncertain_epistemic_status');
@@ -204,7 +204,7 @@ export class CaptureJobProcessor {
           matched,
           safe,
           duplicate,
-          reasonCodes: reasonCodes.length === 0 ? ['owner_review_required'] : reasonCodes,
+          reasonCodes: reasonCodes.length === 0 ? ['user_review_required'] : reasonCodes,
         });
       }
       if (invalidEpisodeProposal) {
@@ -305,7 +305,7 @@ export class CaptureJobProcessor {
 
   private async loadAuthorizedJob(claim: ClaimedJob): Promise<JobRuntime> {
     const preliminary = await withTransaction(this.workerPool, async (client) => {
-      await setJobTenant(client, claim.owner_id, claim.scope_id);
+      await setJobTenant(client, claim.user_id, claim.scope_id);
       const result = await client.query<{
         prompt_generation: string;
         model_id: string;
@@ -317,8 +317,8 @@ export class CaptureJobProcessor {
         checkpoint: Record<string, unknown>;
       }>(
         `SELECT prompt_generation, model_id, max_attempts, attempt, authorized_capabilities, token_scope_ids, auth_epochs, checkpoint
-         FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4`,
-        [claim.owner_id, claim.scope_id, claim.job_id, claim.lease_token],
+         FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4`,
+        [claim.user_id, claim.scope_id, claim.job_id, claim.lease_token],
       );
       return result.rows[0];
     });
@@ -326,7 +326,7 @@ export class CaptureJobProcessor {
       throw new CoreError(409, 'job_lease_lost', 'Capture job lease is no longer current', true);
     const capabilities = normalizeCapabilities(preliminary.authorized_capabilities);
     const actor: ActorContext = {
-      ownerId: claim.owner_id,
+      userId: claim.user_id,
       principalId: claim.principal_id,
       actorKind: claim.actor_kind,
       scopeIds: [claim.scope_id],
@@ -351,12 +351,12 @@ export class CaptureJobProcessor {
         }>(
           `SELECT s.kind AS source_kind, s.external_id AS source_external_id, s.revision AS source_revision,
             s.rights_status, s.consent, ca.enabled, ca.consent AS connector_consent
-         FROM capture_jobs j JOIN sources s ON s.owner_id = j.owner_id AND s.scope_id = j.scope_id AND s.id = j.source_id
-         JOIN connector_authorizations ca ON ca.owner_id = s.owner_id AND ca.scope_id = s.scope_id
+         FROM capture_jobs j JOIN sources s ON s.user_id = j.user_id AND s.scope_id = j.scope_id AND s.id = j.source_id
+         JOIN connector_authorizations ca ON ca.user_id = s.user_id AND ca.scope_id = s.scope_id
            AND ca.source_kind = s.kind AND ca.external_id = s.external_id
-         WHERE j.owner_id = $1 AND j.scope_id = $2 AND j.id = $3 AND j.lease_token = $4
+         WHERE j.user_id = $1 AND j.scope_id = $2 AND j.id = $3 AND j.lease_token = $4
          FOR SHARE OF j`,
-          [claim.owner_id, claim.scope_id, claim.job_id, claim.lease_token],
+          [claim.user_id, claim.scope_id, claim.job_id, claim.lease_token],
         );
         const sourceRow = source.rows[0];
         if (
@@ -375,9 +375,9 @@ export class CaptureJobProcessor {
           `SELECT o.id, o.source_id, o.source_kind, o.source_revision, o.locator, o.content, o.speaker,
            to_char(o.event_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS event_time,
            o.lineage_root::text AS lineage_root
-         FROM capture_job_observations jo JOIN observations o ON o.owner_id = jo.owner_id AND o.scope_id = jo.scope_id AND o.id = jo.observation_id
-         WHERE jo.owner_id = $1 AND jo.scope_id = $2 AND jo.job_id = $3 ORDER BY jo.ordinal`,
-          [claim.owner_id, claim.scope_id, claim.job_id],
+         FROM capture_job_observations jo JOIN observations o ON o.user_id = jo.user_id AND o.scope_id = jo.scope_id AND o.id = jo.observation_id
+         WHERE jo.user_id = $1 AND jo.scope_id = $2 AND jo.job_id = $3 ORDER BY jo.ordinal`,
+          [claim.user_id, claim.scope_id, claim.job_id],
         );
         if (observations.rows.length === 0)
           throw new CoreError(
@@ -425,10 +425,10 @@ export class CaptureJobProcessor {
     await withAuthorizedActor(this.workerPool, actor, [scopeId], 'write', async (client) => {
       const saved = await client.query(
         `UPDATE capture_jobs SET checkpoint = checkpoint || $5::jsonb, updated_at = clock_timestamp()
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4
            AND state = 'processing' AND lease_until > clock_timestamp()`,
         [
-          claim.owner_id,
+          claim.user_id,
           scopeId,
           claim.job_id,
           claim.lease_token,
@@ -513,16 +513,16 @@ export class CaptureJobProcessor {
     retryAfterSeconds?: number,
   ): Promise<void> {
     await withTransaction(this.workerPool, async (client) => {
-      await setJobTenant(client, claim.owner_id, claim.scope_id);
+      await setJobTenant(client, claim.user_id, claim.scope_id);
       const result = await client.query(
         `UPDATE capture_jobs SET state = $5, last_error_code = $6,
            next_retry_at = CASE WHEN $7::integer IS NULL THEN NULL ELSE clock_timestamp() + make_interval(secs => $7) END,
            checkpoint = checkpoint || $8::jsonb, lease_until = NULL, lease_token = NULL,
            updated_at = clock_timestamp()
-         WHERE owner_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3 AND lease_token = $4
            AND state = 'processing' AND lease_until > clock_timestamp()`,
         [
-          claim.owner_id,
+          claim.user_id,
           claim.scope_id,
           claim.job_id,
           claim.lease_token,
@@ -568,8 +568,8 @@ export class CurationReviewService {
   ) {}
 
   async list(actor: ActorContext, rawQuery: unknown): Promise<Record<string, unknown>> {
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may read the curation queue');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may read the curation queue');
     const parsed = reviewListQuerySchema.safeParse(rawQuery);
     if (!parsed.success)
       throw new CoreError(
@@ -590,12 +590,12 @@ export class CurationReviewService {
           `WITH visible AS (
            SELECT r.*, c.proposal,
              (s.rights_status = 'granted' AND s.consent AND ca.enabled AND ca.consent
-               AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)) AS source_visible
-           FROM curation_reviews r JOIN capture_jobs j ON j.owner_id = r.owner_id AND j.scope_id = r.scope_id AND j.id = r.job_id
-           JOIN sources s ON s.owner_id = j.owner_id AND s.scope_id = j.scope_id AND s.id = j.source_id
-           JOIN connector_authorizations ca ON ca.owner_id = s.owner_id AND ca.scope_id = s.scope_id AND ca.source_kind = s.kind AND ca.external_id = s.external_id
-           JOIN changesets c ON c.owner_id = r.owner_id AND c.scope_id = r.scope_id AND c.id = r.change_set_id
-           WHERE r.owner_id = $1 AND r.scope_id = $2
+               AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)) AS source_visible
+           FROM curation_reviews r JOIN capture_jobs j ON j.user_id = r.user_id AND j.scope_id = r.scope_id AND j.id = r.job_id
+           JOIN sources s ON s.user_id = j.user_id AND s.scope_id = j.scope_id AND s.id = j.source_id
+           JOIN connector_authorizations ca ON ca.user_id = s.user_id AND ca.scope_id = s.scope_id AND ca.source_kind = s.kind AND ca.external_id = s.external_id
+           JOIN changesets c ON c.user_id = r.user_id AND c.scope_id = r.scope_id AND c.id = r.change_set_id
+           WHERE r.user_id = $1 AND r.scope_id = $2
          )
          SELECT id, scope_id, CASE WHEN source_visible THEN status ELSE 'stale' END AS status,
            revision, reason_codes, CASE WHEN source_visible THEN rationale ELSE NULL END AS rationale,
@@ -606,7 +606,7 @@ export class CurationReviewService {
          WHERE (($3 = 'stale' AND NOT source_visible) OR ($3 <> 'stale' AND source_visible AND status = $3))
            AND ($4::timestamptz IS NULL OR created_at < $4)
          ORDER BY created_at DESC, id DESC LIMIT $5`,
-          [actor.ownerId, query.scope_id, query.status, query.before ?? null, query.limit],
+          [actor.userId, query.scope_id, query.status, query.before ?? null, query.limit],
         );
         return result.rows;
       },
@@ -615,8 +615,8 @@ export class CurationReviewService {
   }
 
   async get(actor: ActorContext, reviewId: string): Promise<Record<string, unknown>> {
-    if (actor.actorKind !== 'owner')
-      throw new CoreError(403, 'owner_required', 'Only the Owner may read a curation review');
+    if (actor.actorKind !== 'user')
+      throw new CoreError(403, 'user_required', 'Only the User may read a curation review');
     if (!uuidSchema.safeParse(reviewId).success)
       throw new CoreError(400, 'invalid_request', 'review_id must be a UUID');
     const scopes = actor.scopeIds.filter((scope) => actor.tokenScopeIds.includes(scope));
@@ -626,25 +626,25 @@ export class CurationReviewService {
       const result = await client.query<Record<string, unknown>>(
         `SELECT r.id, r.scope_id,
            CASE WHEN s.rights_status = 'granted' AND s.consent AND ca.enabled AND ca.consent
-             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
+             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
              THEN r.status ELSE 'stale' END AS status,
            r.revision, r.reason_codes,
            CASE WHEN s.rights_status = 'granted' AND s.consent AND ca.enabled AND ca.consent
-             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
+             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
              THEN r.rationale ELSE NULL END AS rationale,
            CASE WHEN s.rights_status = 'granted' AND s.consent AND ca.enabled AND ca.consent
-             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
+             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
              THEN r.candidate_summary ELSE NULL END AS candidate_summary,
            r.created_at, r.updated_at, r.decision_reason,
            CASE WHEN s.rights_status = 'granted' AND s.consent AND ca.enabled AND ca.consent
-             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
+             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id AND sp.object_id = s.id)
              THEN c.proposal ELSE NULL END AS proposal
-         FROM curation_reviews r JOIN capture_jobs j ON j.owner_id = r.owner_id AND j.scope_id = r.scope_id AND j.id = r.job_id
-         JOIN sources s ON s.owner_id = j.owner_id AND s.scope_id = j.scope_id AND s.id = j.source_id
-         JOIN connector_authorizations ca ON ca.owner_id = s.owner_id AND ca.scope_id = s.scope_id AND ca.source_kind = s.kind AND ca.external_id = s.external_id
-         JOIN changesets c ON c.owner_id = r.owner_id AND c.scope_id = r.scope_id AND c.id = r.change_set_id
-         WHERE r.owner_id = $1 AND r.id = $2 AND r.scope_id = ANY($3::uuid[])`,
-        [actor.ownerId, reviewId, scopes],
+         FROM curation_reviews r JOIN capture_jobs j ON j.user_id = r.user_id AND j.scope_id = r.scope_id AND j.id = r.job_id
+         JOIN sources s ON s.user_id = j.user_id AND s.scope_id = j.scope_id AND s.id = j.source_id
+         JOIN connector_authorizations ca ON ca.user_id = s.user_id AND ca.scope_id = s.scope_id AND ca.source_kind = s.kind AND ca.external_id = s.external_id
+         JOIN changesets c ON c.user_id = r.user_id AND c.scope_id = r.scope_id AND c.id = r.change_set_id
+         WHERE r.user_id = $1 AND r.id = $2 AND r.scope_id = ANY($3::uuid[])`,
+        [actor.userId, reviewId, scopes],
       );
       return result.rows[0];
     });
@@ -696,8 +696,8 @@ export class CurationReviewService {
         updated_at: Date;
       }>(
         `SELECT id, scope_id, state, review_id, attempt, updated_at
-         FROM capture_jobs WHERE owner_id = $1 AND scope_id = ANY($2::uuid[]) AND id = $3`,
-        [actor.ownerId, scopes, jobId],
+         FROM capture_jobs WHERE user_id = $1 AND scope_id = ANY($2::uuid[]) AND id = $3`,
+        [actor.userId, scopes, jobId],
       );
       return result.rows[0];
     });
@@ -931,7 +931,7 @@ export class OutboxDispatcher {
 
 function actorFromJob(job: JobRuntime): ActorContext {
   return {
-    ownerId: job.owner_id,
+    userId: job.user_id,
     principalId: job.principal_id,
     actorKind: job.actor_kind,
     scopeIds: [job.scope_id],
@@ -1096,7 +1096,7 @@ async function runWithDeadline<T>(
   }
 }
 
-async function setJobTenant(client: PoolClient, ownerId: string, scopeId: string): Promise<void> {
-  await client.query("SELECT set_config('app.owner_id', $1, true)", [ownerId]);
+async function setJobTenant(client: PoolClient, userId: string, scopeId: string): Promise<void> {
+  await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
   await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeId}}`]);
 }

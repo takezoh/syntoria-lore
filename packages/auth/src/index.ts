@@ -21,7 +21,7 @@ export interface AuthenticatorOptions {
 }
 
 interface PrincipalRow {
-  owner_id: string;
+  user_id: string;
   principal_id: string;
   actor_kind: ActorContext['actorKind'];
 }
@@ -92,7 +92,7 @@ export class Authenticator {
     }
 
     const principalResult = await this.options.pool.query<PrincipalRow>(
-      'SELECT owner_id, principal_id, actor_kind FROM app.resolve_principal($1, $2)',
+      'SELECT user_id, principal_id, actor_kind FROM app.resolve_principal($1, $2)',
       [issuer, subject],
     );
     const principal = principalResult.rows[0];
@@ -100,18 +100,18 @@ export class Authenticator {
       throw new CoreError(401, 'unauthorized', 'The token subject is not registered');
 
     const grants = await withTransaction(this.options.pool, async (client) => {
-      await client.query("SELECT set_config('app.owner_id', $1, true)", [principal.owner_id]);
+      await client.query("SELECT set_config('app.user_id', $1, true)", [principal.user_id]);
       await client.query("SELECT set_config('app.scope_ids', $1, true)", [
         uuidArray(tokenScopeIds),
       ]);
       const result = await client.query<GrantRow>(
         `SELECT s.id AS scope_id, s.auth_epoch, g.capabilities
          FROM scopes AS s
-         JOIN grants AS g ON g.owner_id = s.owner_id AND g.scope_id = s.id
-         WHERE s.owner_id = $1 AND g.principal_id = $2 AND s.id = ANY($3::uuid[])
+         JOIN grants AS g ON g.user_id = s.user_id AND g.scope_id = s.id
+         WHERE s.user_id = $1 AND g.principal_id = $2 AND s.id = ANY($3::uuid[])
            AND (g.expires_at IS NULL OR g.expires_at > clock_timestamp())
          ORDER BY s.id`,
-        [principal.owner_id, principal.principal_id, tokenScopeIds],
+        [principal.user_id, principal.principal_id, tokenScopeIds],
       );
       return result.rows;
     });
@@ -129,7 +129,7 @@ export class Authenticator {
       databaseCapabilities.has(capability),
     );
     return Object.freeze({
-      ownerId: principal.owner_id,
+      userId: principal.user_id,
       principalId: principal.principal_id,
       actorKind: principal.actor_kind,
       scopeIds: Object.freeze(scopeIds),

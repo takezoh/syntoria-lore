@@ -3,16 +3,16 @@ import type { Pool, PoolClient } from 'pg';
 export interface PrincipalIssuerCutoverOptions {
   readonly sourceIssuer: string;
   readonly targetIssuer: string;
-  readonly ownerPrincipalId: string;
-  readonly ownerId: string;
-  readonly ownerSubjectId: string;
+  readonly userPrincipalId: string;
+  readonly userId: string;
+  readonly userSubjectId: string;
   readonly databaseAdminRole?: string;
 }
 
 export interface PrincipalIssuerCutoverResult {
   readonly status: 'migrated' | 'already-current';
   readonly principalCount: number;
-  readonly ownerPrincipalId: string;
+  readonly userPrincipalId: string;
   readonly principalIdsPreserved: true;
   readonly grantsPreserved: true;
 }
@@ -25,9 +25,9 @@ export async function cutoverPrincipalIssuer(
 ): Promise<PrincipalIssuerCutoverResult> {
   const sourceIssuer = validateIssuer(options.sourceIssuer, 'sourceIssuer');
   const targetIssuer = validateIssuer(options.targetIssuer, 'targetIssuer');
-  const ownerPrincipalId = validateUuid(options.ownerPrincipalId, 'ownerPrincipalId');
-  const ownerId = validateUuid(options.ownerId, 'ownerId');
-  const ownerSubjectId = validateUuid(options.ownerSubjectId, 'ownerSubjectId');
+  const userPrincipalId = validateUuid(options.userPrincipalId, 'userPrincipalId');
+  const userId = validateUuid(options.userId, 'userId');
+  const userSubjectId = validateUuid(options.userSubjectId, 'userSubjectId');
   if (sourceIssuer === targetIssuer)
     throw new Error('The source and target identity issuers must differ');
 
@@ -37,9 +37,9 @@ export async function cutoverPrincipalIssuer(
     const result = await migrateIssuerInTransaction(client, {
       sourceIssuer,
       targetIssuer,
-      ownerPrincipalId,
-      ownerId,
-      ownerSubjectId,
+      userPrincipalId,
+      userId,
+      userSubjectId,
       ...(options.databaseAdminRole === undefined
         ? {}
         : { databaseAdminRole: validateRoleName(options.databaseAdminRole) }),
@@ -58,18 +58,18 @@ async function migrateIssuerInTransaction(
   client: PoolClient,
   options: PrincipalIssuerCutoverOptions,
 ): Promise<PrincipalIssuerCutoverResult> {
-  const { sourceIssuer, targetIssuer, ownerPrincipalId, ownerId, ownerSubjectId } = options;
+  const { sourceIssuer, targetIssuer, userPrincipalId, userId, userSubjectId } = options;
   if (options.databaseAdminRole !== undefined) {
     await client.query(`SET LOCAL ROLE "${options.databaseAdminRole}"`);
   }
   await client.query('SELECT pg_advisory_xact_lock($1::bigint)', ['701023243']);
   const tableState = await client.query<{
-    owner: string;
+    dbOwner: string;
     current_role: string;
     current_is_superuser: boolean;
     current_bypasses_rls: boolean;
   }>(
-    `SELECT pg_catalog.pg_get_userbyid(relation.relowner) AS owner,
+    `SELECT pg_catalog.pg_get_userbyid(relation.relowner) AS "dbOwner",
             current_user AS current_role,
             (SELECT role.rolsuper FROM pg_catalog.pg_roles AS role
              WHERE role.rolname = current_user) AS current_is_superuser,
@@ -79,7 +79,10 @@ async function migrateIssuerInTransaction(
      WHERE relation.oid = 'public.principals'::regclass`,
   );
   const table = tableState.rows[0];
-  if (table === undefined || (table.owner !== table.current_role && !table.current_is_superuser)) {
+  if (
+    table === undefined ||
+    (table.dbOwner !== table.current_role && !table.current_is_superuser)
+  ) {
     throw new Error('The configured database role must own the principals table');
   }
   if (!table.current_is_superuser && !table.current_bypasses_rls) {
@@ -89,9 +92,9 @@ async function migrateIssuerInTransaction(
   return migrateIssuerRows(client, {
     sourceIssuer,
     targetIssuer,
-    ownerPrincipalId,
-    ownerId,
-    ownerSubjectId,
+    userPrincipalId,
+    userId,
+    userSubjectId,
     ...(options.databaseAdminRole === undefined
       ? {}
       : { databaseAdminRole: options.databaseAdminRole }),
@@ -102,33 +105,31 @@ async function migrateIssuerRows(
   client: PoolClient,
   options: PrincipalIssuerCutoverOptions,
 ): Promise<PrincipalIssuerCutoverResult> {
-  const { sourceIssuer, targetIssuer, ownerPrincipalId, ownerId, ownerSubjectId } = options;
+  const { sourceIssuer, targetIssuer, userPrincipalId, userId, userSubjectId } = options;
 
-  const ownerResult = await client.query<{
+  const userResult = await client.query<{
     id: string;
-    owner_id: string;
+    user_id: string;
     issuer: string;
     subject: string;
     actor_kind: string;
     active: boolean;
   }>(
-    `SELECT id, owner_id, issuer, subject, actor_kind, active
+    `SELECT id, user_id, issuer, subject, actor_kind, active
      FROM public.principals WHERE id = $1 FOR UPDATE`,
-    [ownerPrincipalId],
+    [userPrincipalId],
   );
-  const owner = ownerResult.rows[0];
-  const ownerIssuerMatches = owner?.issuer === sourceIssuer || owner?.issuer === targetIssuer;
+  const user = userResult.rows[0];
+  const userIssuerMatches = user?.issuer === sourceIssuer || user?.issuer === targetIssuer;
   if (
-    owner === undefined ||
-    owner.owner_id !== ownerId ||
-    owner.subject !== ownerSubjectId ||
-    owner.actor_kind !== 'owner' ||
-    owner.active !== true ||
-    !ownerIssuerMatches
+    user === undefined ||
+    user.user_id !== userId ||
+    user.subject !== userSubjectId ||
+    user.actor_kind !== 'user' ||
+    user.active !== true ||
+    !userIssuerMatches
   ) {
-    throw new Error(
-      'The configured owner principal does not match the identity migration baseline',
-    );
+    throw new Error('The configured user principal does not match the identity migration baseline');
   }
 
   const sourceCountResult = await client.query<{ count: number }>(
@@ -137,9 +138,9 @@ async function migrateIssuerRows(
   );
   const sourceCount = sourceCountResult.rows[0]?.count ?? 0;
   if (sourceCount === 0) {
-    if (owner.issuer !== targetIssuer) {
+    if (user.issuer !== targetIssuer) {
       throw new Error(
-        'The source issuer has no principals but the expected owner is not at the target issuer',
+        'The source issuer has no principals but the expected user is not at the target issuer',
       );
     }
     const targetCount = await client.query<{ count: number }>(
@@ -149,14 +150,14 @@ async function migrateIssuerRows(
     return {
       status: 'already-current',
       principalCount: targetCount.rows[0]?.count ?? 0,
-      ownerPrincipalId,
+      userPrincipalId,
       principalIdsPreserved: true,
       grantsPreserved: true,
     };
   }
-  if (owner.issuer !== sourceIssuer) {
+  if (user.issuer !== sourceIssuer) {
     throw new Error(
-      'The issuer migration is partially applied; source principals remain after owner migration',
+      'The issuer migration is partially applied; source principals remain after user migration',
     );
   }
 
@@ -179,12 +180,12 @@ async function migrateIssuerRows(
     SELECT p.id,
            to_jsonb(p) - 'issuer' AS principal_identity,
            COALESCE(
-             jsonb_agg(to_jsonb(g) ORDER BY g.owner_id, g.scope_id, g.principal_id)
+             jsonb_agg(to_jsonb(g) ORDER BY g.user_id, g.scope_id, g.principal_id)
                FILTER (WHERE g.principal_id IS NOT NULL),
              '[]'::jsonb
            ) AS grants
     FROM public.principals AS p
-    LEFT JOIN public.grants AS g ON g.owner_id = p.owner_id AND g.principal_id = p.id
+    LEFT JOIN public.grants AS g ON g.user_id = p.user_id AND g.principal_id = p.id
     WHERE p.issuer = $1
     GROUP BY p.id
   `,
@@ -204,9 +205,9 @@ async function migrateIssuerRows(
              WHERE snapshot.principal_identity IS DISTINCT FROM to_jsonb(principal) - 'issuer'
                 OR snapshot.grants IS DISTINCT FROM COALESCE(
                   (SELECT jsonb_agg(to_jsonb(grant_row)
-                                   ORDER BY grant_row.owner_id, grant_row.scope_id, grant_row.principal_id)
+                                   ORDER BY grant_row.user_id, grant_row.scope_id, grant_row.principal_id)
                    FROM public.grants AS grant_row
-                   WHERE grant_row.owner_id = principal.owner_id
+                   WHERE grant_row.user_id = principal.user_id
                      AND grant_row.principal_id = principal.id),
                   '[]'::jsonb
                 )
@@ -221,7 +222,7 @@ async function migrateIssuerRows(
   return {
     status: 'migrated',
     principalCount: sourceCount,
-    ownerPrincipalId,
+    userPrincipalId,
     principalIdsPreserved: true,
     grantsPreserved: true,
   };

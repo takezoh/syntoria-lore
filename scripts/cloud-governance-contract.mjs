@@ -41,14 +41,14 @@ export function requireEncryptedExport(responseStatus, contentType, bundle) {
 }
 
 export function requireImportedMemoryId(body, sourceMemoryId) {
-  if (body?.state !== 'complete') throw new Error('Cross-owner encrypted import did not complete');
+  if (body?.state !== 'complete') throw new Error('Cross-user encrypted import did not complete');
   const idMap = body.id_map;
   if (idMap === null || typeof idMap !== 'object' || Array.isArray(idMap)) {
-    throw new Error('Cross-owner import omitted its entity ID map');
+    throw new Error('Cross-user import omitted its entity ID map');
   }
   const target = idMap[`memories:${sourceMemoryId}`];
   if (typeof target !== 'string')
-    throw new Error('Cross-owner import omitted the destination memory ID');
+    throw new Error('Cross-user import omitted the destination memory ID');
   return target;
 }
 

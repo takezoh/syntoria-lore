@@ -117,16 +117,16 @@ describe.skipIf(!runPostgresTests)('PostgreSQL local role migration handoff', ()
 });
 
 describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
-  const ownerId = randomUUID();
-  const importedOwnerId = randomUUID();
+  const userId = randomUUID();
+  const importedUserId = randomUUID();
   const scopeA = randomUUID();
   const scopeB = randomUUID();
   const importedScopeId = randomUUID();
   const issuer = 'http://127.0.0.1:9090/';
   const subject = `integration-${randomUUID()}`;
   const clientSubject = `integration-client-${randomUUID()}`;
-  const recoveryOwnerSubject = `integration-recovery-owner-${randomUUID()}`;
-  const importedOwnerSubject = `integration-import-owner-${randomUUID()}`;
+  const recoveryUserSubject = `integration-recovery-owner-${randomUUID()}`;
+  const importedUserSubject = `integration-import-owner-${randomUUID()}`;
   const importedReaderSubject = `integration-import-reader-${randomUUID()}`;
   const audience = 'memory-local-test';
   const mcpBaseUrl = 'http://127.0.0.1:8080';
@@ -174,71 +174,71 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       'SELECT count(*)::text AS count FROM memories',
     );
     expect(hiddenWithoutContext.rows[0]!.count).toBe('0');
-    const owner = await admin.query<{ id: string }>(
-      'INSERT INTO owners(id) VALUES ($1), ($2) RETURNING id',
-      [ownerId, importedOwnerId],
+    const user = await admin.query<{ id: string }>(
+      'INSERT INTO users(id) VALUES ($1), ($2) RETURNING id',
+      [userId, importedUserId],
     );
-    expect(owner.rows[0]).toBeDefined();
-    await admin.query('INSERT INTO scopes(owner_id, id, name) VALUES ($1, $2, $3), ($1, $4, $5)', [
-      ownerId,
+    expect(user.rows[0]).toBeDefined();
+    await admin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3), ($1, $4, $5)', [
+      userId,
       scopeA,
       'read-only',
       scopeB,
       'read-write',
     ]);
-    await admin.query('INSERT INTO scopes(owner_id, id, name) VALUES ($1, $2, $3)', [
-      importedOwnerId,
+    await admin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+      importedUserId,
       importedScopeId,
       'portable-import-destination',
     ]);
     const principal = await admin.query<{ id: string }>(
-      `INSERT INTO principals(owner_id, issuer, subject, actor_kind)
-       VALUES ($1, $2, $3, 'owner') RETURNING id`,
-      [ownerId, issuer, subject],
+      `INSERT INTO principals(user_id, issuer, subject, actor_kind)
+       VALUES ($1, $2, $3, 'user') RETURNING id`,
+      [userId, issuer, subject],
     );
     principalId = principal.rows[0]!.id;
     const importedPrincipal = await admin.query<{ id: string }>(
-      `INSERT INTO principals(owner_id, issuer, subject, actor_kind)
-       VALUES ($1, $2, $3, 'owner') RETURNING id`,
-      [importedOwnerId, issuer, importedOwnerSubject],
+      `INSERT INTO principals(user_id, issuer, subject, actor_kind)
+       VALUES ($1, $2, $3, 'user') RETURNING id`,
+      [importedUserId, issuer, importedUserSubject],
     );
     importedPrincipalId = importedPrincipal.rows[0]!.id;
     const importedReader = await admin.query<{ id: string }>(
-      `INSERT INTO principals(owner_id, issuer, subject, actor_kind)
+      `INSERT INTO principals(user_id, issuer, subject, actor_kind)
        VALUES ($1, $2, $3, 'client') RETURNING id`,
-      [importedOwnerId, issuer, importedReaderSubject],
+      [importedUserId, issuer, importedReaderSubject],
     );
     await admin.query(
-      `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
        VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])`,
-      [importedOwnerId, importedScopeId, importedPrincipalId],
+      [importedUserId, importedScopeId, importedPrincipalId],
     );
     await admin.query(
-      `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
        VALUES ($1, $2, $3, ARRAY['read'])`,
-      [importedOwnerId, importedScopeId, importedReader.rows[0]!.id],
+      [importedUserId, importedScopeId, importedReader.rows[0]!.id],
     );
     const clientPrincipal = await admin.query<{ id: string }>(
-      `INSERT INTO principals(owner_id, issuer, subject, actor_kind)
+      `INSERT INTO principals(user_id, issuer, subject, actor_kind)
        VALUES ($1, $2, $3, 'client') RETURNING id`,
-      [ownerId, issuer, clientSubject],
+      [userId, issuer, clientSubject],
     );
     clientPrincipalId = clientPrincipal.rows[0]!.id;
     const recoveryOwner = await admin.query<{ id: string }>(
-      `INSERT INTO principals(owner_id, issuer, subject, actor_kind)
-       VALUES ($1, $2, $3, 'owner') RETURNING id`,
-      [ownerId, issuer, recoveryOwnerSubject],
+      `INSERT INTO principals(user_id, issuer, subject, actor_kind)
+       VALUES ($1, $2, $3, 'user') RETURNING id`,
+      [userId, issuer, recoveryUserSubject],
     );
     await admin.query(
-      `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
        VALUES ($1, $2, $3, ARRAY['read', 'write'])`,
-      [ownerId, scopeB, recoveryOwner.rows[0]!.id],
+      [userId, scopeB, recoveryOwner.rows[0]!.id],
     );
     await admin.query(
-      `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
        VALUES ($1, $2, $3, ARRAY['read']), ($1, $4, $3, ARRAY['read', 'write', 'admin']),
               ($1, $4, $5, ARRAY['read', 'write'])`,
-      [ownerId, scopeA, principalId, scopeB, clientPrincipalId],
+      [userId, scopeA, principalId, scopeB, clientPrincipalId],
     );
 
     const keys = await generateKeyPair('RS256');
@@ -377,65 +377,65 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   it('moves an exact issuer cohort without changing principal IDs or grants', async () => {
     const sourceIssuer = `https://old.identity.test/realms/source-${randomUUID()}`;
     const targetIssuer = `https://new.identity.test/realms/target-${randomUUID()}`;
-    const cutoverOwnerId = randomUUID();
+    const cutoverUserId = randomUUID();
     const cutoverScopeId = randomUUID();
-    const ownerPrincipalId = randomUUID();
-    const ownerSubjectId = randomUUID();
+    const userPrincipalId = randomUUID();
+    const userSubjectId = randomUUID();
     const clientPrincipalId = randomUUID();
     const clientSubjectId = randomUUID();
     try {
-      await admin.query('INSERT INTO owners(id) VALUES ($1)', [cutoverOwnerId]);
-      await admin.query('INSERT INTO scopes(owner_id, id, name) VALUES ($1, $2, $3)', [
-        cutoverOwnerId,
+      await admin.query('INSERT INTO users(id) VALUES ($1)', [cutoverUserId]);
+      await admin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+        cutoverUserId,
         cutoverScopeId,
         'issuer-cutover-test',
       ]);
       await admin.query(
-        `INSERT INTO principals(id, owner_id, issuer, subject, actor_kind)
-         VALUES ($1, $2, $3, $4, 'owner'), ($5, $2, $3, $6, 'client')`,
+        `INSERT INTO principals(id, user_id, issuer, subject, actor_kind)
+         VALUES ($1, $2, $3, $4, 'user'), ($5, $2, $3, $6, 'client')`,
         [
-          ownerPrincipalId,
-          cutoverOwnerId,
+          userPrincipalId,
+          cutoverUserId,
           sourceIssuer,
-          ownerSubjectId,
+          userSubjectId,
           clientPrincipalId,
           clientSubjectId,
         ],
       );
       await admin.query(
-        `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+        `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
          VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin']),
                 ($1, $2, $4, ARRAY['read'])`,
-        [cutoverOwnerId, cutoverScopeId, ownerPrincipalId, clientPrincipalId],
+        [cutoverUserId, cutoverScopeId, userPrincipalId, clientPrincipalId],
       );
 
       const before = await admin.query(
-        `SELECT p.id, p.owner_id, p.subject, p.actor_kind, p.active, p.created_at,
+        `SELECT p.id, p.user_id, p.subject, p.actor_kind, p.active, p.created_at,
                 g.capabilities, g.scope_id
          FROM principals AS p JOIN grants AS g
-           ON g.owner_id = p.owner_id AND g.principal_id = p.id
+           ON g.user_id = p.user_id AND g.principal_id = p.id
          WHERE p.issuer = $1 ORDER BY p.id`,
         [sourceIssuer],
       );
       const result = await cutoverPrincipalIssuer(admin, {
         sourceIssuer,
         targetIssuer,
-        ownerPrincipalId,
-        ownerId: cutoverOwnerId,
-        ownerSubjectId,
+        userPrincipalId,
+        userId: cutoverUserId,
+        userSubjectId,
       });
       expect(result).toEqual({
         status: 'migrated',
         principalCount: 2,
-        ownerPrincipalId,
+        userPrincipalId,
         principalIdsPreserved: true,
         grantsPreserved: true,
       });
       const after = await admin.query(
-        `SELECT p.id, p.owner_id, p.subject, p.actor_kind, p.active, p.created_at,
+        `SELECT p.id, p.user_id, p.subject, p.actor_kind, p.active, p.created_at,
                 g.capabilities, g.scope_id
          FROM principals AS p JOIN grants AS g
-           ON g.owner_id = p.owner_id AND g.principal_id = p.id
+           ON g.user_id = p.user_id AND g.principal_id = p.id
          WHERE p.issuer = $1 ORDER BY p.id`,
         [targetIssuer],
       );
@@ -444,46 +444,43 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         cutoverPrincipalIssuer(admin, {
           sourceIssuer,
           targetIssuer,
-          ownerPrincipalId,
-          ownerId: cutoverOwnerId,
-          ownerSubjectId,
+          userPrincipalId,
+          userId: cutoverUserId,
+          userSubjectId,
         }),
       ).resolves.toMatchObject({ status: 'already-current', principalCount: 2 });
     } finally {
-      await admin.query('DELETE FROM principals WHERE owner_id = $1', [cutoverOwnerId]);
-      await admin.query('DELETE FROM scopes WHERE owner_id = $1', [cutoverOwnerId]);
-      await admin.query('DELETE FROM owners WHERE id = $1', [cutoverOwnerId]);
+      await admin.query('DELETE FROM principals WHERE user_id = $1', [cutoverUserId]);
+      await admin.query('DELETE FROM scopes WHERE user_id = $1', [cutoverUserId]);
+      await admin.query('DELETE FROM users WHERE id = $1', [cutoverUserId]);
     }
   });
 
   it('rolls back when a target issuer already has one of the source subjects', async () => {
     const sourceIssuer = `https://old.identity.test/realms/conflict-${randomUUID()}`;
     const targetIssuer = `https://new.identity.test/realms/conflict-${randomUUID()}`;
-    const cutoverOwnerId = randomUUID();
-    const ownerPrincipalId = randomUUID();
+    const cutoverUserId = randomUUID();
+    const userPrincipalId = randomUUID();
     const sourceClientPrincipalId = randomUUID();
-    const ownerSubjectId = randomUUID();
+    const userSubjectId = randomUUID();
     const conflictingSubject = randomUUID();
-    const targetOwnerId = randomUUID();
+    const targetUserId = randomUUID();
     const targetPrincipalId = randomUUID();
     try {
-      await admin.query('INSERT INTO owners(id) VALUES ($1), ($2)', [
-        cutoverOwnerId,
-        targetOwnerId,
-      ]);
+      await admin.query('INSERT INTO users(id) VALUES ($1), ($2)', [cutoverUserId, targetUserId]);
       await admin.query(
-        `INSERT INTO principals(id, owner_id, issuer, subject, actor_kind)
-         VALUES ($1, $2, $3, $4, 'owner'), ($5, $2, $3, $6, 'client'),
+        `INSERT INTO principals(id, user_id, issuer, subject, actor_kind)
+         VALUES ($1, $2, $3, $4, 'user'), ($5, $2, $3, $6, 'client'),
                 ($7, $8, $9, $6, 'client')`,
         [
-          ownerPrincipalId,
-          cutoverOwnerId,
+          userPrincipalId,
+          cutoverUserId,
           sourceIssuer,
-          ownerSubjectId,
+          userSubjectId,
           sourceClientPrincipalId,
           conflictingSubject,
           targetPrincipalId,
-          targetOwnerId,
+          targetUserId,
           targetIssuer,
         ],
       );
@@ -491,26 +488,26 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         cutoverPrincipalIssuer(admin, {
           sourceIssuer,
           targetIssuer,
-          ownerPrincipalId,
-          ownerId: cutoverOwnerId,
-          ownerSubjectId,
+          userPrincipalId,
+          userId: cutoverUserId,
+          userSubjectId,
         }),
       ).rejects.toThrow('A principal subject already exists at the target issuer');
       const remaining = await admin.query(
         'SELECT id, issuer FROM principals WHERE id = ANY($1::uuid[]) ORDER BY id',
-        [[ownerPrincipalId, sourceClientPrincipalId, targetPrincipalId]],
+        [[userPrincipalId, sourceClientPrincipalId, targetPrincipalId]],
       );
       expect(Object.fromEntries(remaining.rows.map((row) => [row.id, row.issuer]))).toEqual({
-        [ownerPrincipalId]: sourceIssuer,
+        [userPrincipalId]: sourceIssuer,
         [sourceClientPrincipalId]: sourceIssuer,
         [targetPrincipalId]: targetIssuer,
       });
     } finally {
-      await admin.query('DELETE FROM principals WHERE owner_id = ANY($1::uuid[])', [
-        [cutoverOwnerId, targetOwnerId],
+      await admin.query('DELETE FROM principals WHERE user_id = ANY($1::uuid[])', [
+        [cutoverUserId, targetUserId],
       ]);
-      await admin.query('DELETE FROM owners WHERE id = ANY($1::uuid[])', [
-        [cutoverOwnerId, targetOwnerId],
+      await admin.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [
+        [cutoverUserId, targetUserId],
       ]);
     }
   });
@@ -529,14 +526,14 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         await cleanup.query(
           'ALTER TABLE public.memory_versions DISABLE TRIGGER memory_versions_append_only',
         );
-        await cleanup.query('DELETE FROM owner_confirmations WHERE owner_id = $1', [ownerId]);
-        await cleanup.query('DELETE FROM curation_reviews WHERE owner_id = $1', [ownerId]);
-        await cleanup.query('DELETE FROM scopes WHERE owner_id = $1', [ownerId]);
-        await cleanup.query('DELETE FROM principals WHERE owner_id = $1', [ownerId]);
-        await cleanup.query('DELETE FROM owners WHERE id = $1', [ownerId]);
-        await cleanup.query('DELETE FROM scopes WHERE owner_id = $1', [importedOwnerId]);
-        await cleanup.query('DELETE FROM principals WHERE owner_id = $1', [importedOwnerId]);
-        await cleanup.query('DELETE FROM owners WHERE id = $1', [importedOwnerId]);
+        await cleanup.query('DELETE FROM user_confirmations WHERE user_id = $1', [userId]);
+        await cleanup.query('DELETE FROM curation_reviews WHERE user_id = $1', [userId]);
+        await cleanup.query('DELETE FROM scopes WHERE user_id = $1', [userId]);
+        await cleanup.query('DELETE FROM principals WHERE user_id = $1', [userId]);
+        await cleanup.query('DELETE FROM users WHERE id = $1', [userId]);
+        await cleanup.query('DELETE FROM scopes WHERE user_id = $1', [importedUserId]);
+        await cleanup.query('DELETE FROM principals WHERE user_id = $1', [importedUserId]);
+        await cleanup.query('DELETE FROM users WHERE id = $1', [importedUserId]);
         await cleanup.query(
           'ALTER TABLE public.memory_versions ENABLE TRIGGER memory_versions_append_only',
         );
@@ -566,13 +563,13 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       }
       await admin.query(
         `INSERT INTO public.deletion_requests
-           (id, owner_id, scope_id, principal_id, selector, reason_code, status, created_at)
+           (id, user_id, scope_id, principal_id, selector, reason_code, status, created_at)
          VALUES
            ($1, $3, $4, $5, $6::jsonb, 'worker_batch_test', 'ledger_pending', clock_timestamp() - interval '2 minutes'),
            ($2, $3, $4, $5, $6::jsonb, 'worker_batch_test', 'ledger_pending', clock_timestamp() - interval '1 minute')`,
         [
           ...requestIds,
-          ownerId,
+          userId,
           scopeB,
           principalId,
           JSON.stringify({ original_principal_id: principalId, memory_ids: [], source_ids: [] }),
@@ -675,8 +672,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
     const initialVersion = await admin.query<{ recorded_at: string }>(
       `SELECT to_char(recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS recorded_at
-       FROM memory_versions WHERE owner_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = 1`,
-      [ownerId, scopeB, memoryId],
+       FROM memory_versions WHERE user_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = 1`,
+      [userId, scopeB, memoryId],
     );
     expect(initialVersion.rows[0]).toBeDefined();
     const corroboration = {
@@ -727,10 +724,10 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(await unauthorizedReplay.json()).toMatchObject({
       error: { code: 'forbidden' },
     });
-    const ownerRecovery = await token([scopeB], 'memory:read memory:write', recoveryOwnerSubject);
+    const userRecovery = await token([scopeB], 'memory:read memory:write', recoveryUserSubject);
     const recoveredReplay = await post(
       `/v1/changesets/${proposal.change_set_id}:commit`,
-      ownerRecovery,
+      userRecovery,
       {},
       'owner-committed-recovery',
     );
@@ -937,46 +934,46 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const state = await admin.query<{ revision: number; evidence_count: string }>(
       `SELECT m.revision, count(mve.evidence_id)::text AS evidence_count
        FROM memories AS m JOIN memory_version_evidence AS mve
-         ON mve.owner_id = m.owner_id AND mve.scope_id = m.scope_id AND mve.memory_id = m.id AND mve.revision = m.revision
-       WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = $3 GROUP BY m.revision`,
-      [ownerId, scopeB, memoryId],
+         ON mve.user_id = m.user_id AND mve.scope_id = m.scope_id AND mve.memory_id = m.id AND mve.revision = m.revision
+       WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = $3 GROUP BY m.revision`,
+      [userId, scopeB, memoryId],
     );
     expect(state.rows[0]).toMatchObject({ revision: 2, evidence_count: '2' });
   });
 
   it('does not let the application role grant itself more authority', async () => {
     await expect(
-      app.query("UPDATE grants SET capabilities = ARRAY['admin'] WHERE owner_id = $1", [ownerId]),
+      app.query("UPDATE grants SET capabilities = ARRAY['admin'] WHERE user_id = $1", [userId]),
     ).rejects.toMatchObject({ code: '42501' });
 
     for (const statement of [
-      'UPDATE memory_versions SET statement = statement WHERE owner_id = $1',
-      'DELETE FROM memory_versions WHERE owner_id = $1',
+      'UPDATE memory_versions SET statement = statement WHERE user_id = $1',
+      'DELETE FROM memory_versions WHERE user_id = $1',
     ]) {
       await expect(
         withTransaction(app, async (client) => {
-          await client.query("SELECT set_config('app.owner_id', $1, true)", [ownerId]);
+          await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
           await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeB}}`]);
           await client.query("SELECT set_config('app.purge_mode', 'on', true)");
-          await client.query(statement, [ownerId]);
+          await client.query(statement, [userId]);
         }),
       ).rejects.toMatchObject({ code: '42501' });
     }
 
     const existingVersion = await admin.query<{ memory_id: string; revision: number }>(
-      'SELECT memory_id, revision FROM memory_versions WHERE owner_id = $1 AND scope_id = $2 LIMIT 1',
-      [ownerId, scopeB],
+      'SELECT memory_id, revision FROM memory_versions WHERE user_id = $1 AND scope_id = $2 LIMIT 1',
+      [userId, scopeB],
     );
     expect(existingVersion.rows[0]).toBeDefined();
     await expect(
       withTransaction(admin, async (client) => {
-        await client.query("SELECT set_config('app.owner_id', $1, true)", [ownerId]);
+        await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
         await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeB}}`]);
         await client.query("SELECT set_config('app.purge_mode', 'on', true)");
         await client.query(
           `UPDATE memory_versions SET statement = statement
-           WHERE owner_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = $4`,
-          [ownerId, scopeB, existingVersion.rows[0]!.memory_id, existingVersion.rows[0]!.revision],
+           WHERE user_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = $4`,
+          [userId, scopeB, existingVersion.rows[0]!.memory_id, existingVersion.rows[0]!.revision],
         );
       }),
     ).rejects.toMatchObject({ code: '55000' });
@@ -985,8 +982,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   it('expires a grant at authentication and again inside an already-authenticated operation', async () => {
     await admin.query(
       `UPDATE grants SET expires_at = clock_timestamp() + interval '1 hour'
-       WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3`,
-      [ownerId, scopeA, principalId],
+       WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3`,
+      [userId, scopeA, principalId],
     );
     const bearer = await token([scopeA], 'memory:read');
     const actor = await authenticator.authenticate(`Bearer ${bearer}`);
@@ -995,8 +992,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     try {
       await admin.query(
         `UPDATE grants SET expires_at = clock_timestamp() - interval '1 second'
-         WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3`,
-        [ownerId, scopeA, principalId],
+         WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3`,
+        [userId, scopeA, principalId],
       );
       await expect(coreService.getMemory(actor, scopeA, randomUUID(), {})).rejects.toThrow(
         'Current database grants do not cover every requested scope',
@@ -1013,8 +1010,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     } finally {
       await admin.query(
         `UPDATE grants SET expires_at = NULL
-         WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3`,
-        [ownerId, scopeA, principalId],
+         WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3`,
+        [userId, scopeA, principalId],
       );
     }
   });
@@ -1022,9 +1019,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   it('rolls back every commit write when a later source loses permission', async () => {
     const writer = await token([scopeB], 'memory:read memory:write');
     const source = await admin.query<{ id: string }>(
-      `INSERT INTO sources(owner_id, scope_id, kind, external_id, revision, rights_status, consent)
+      `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent)
        VALUES ($1, $2, 'document', $3, '1', 'granted', true) RETURNING id`,
-      [ownerId, scopeB, `rollback-${randomUUID()}`],
+      [userId, scopeB, `rollback-${randomUUID()}`],
     );
     const targetResponse = await post(
       '/v1/memories:remember',
@@ -1037,9 +1034,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const targetId = target.operations[0]!.memory_ids[0]!;
     const documentId = `rollback-${randomUUID()}`;
     const documentSource = await admin.query<{ id: string }>(
-      `INSERT INTO sources(owner_id, scope_id, kind, external_id, revision, rights_status, consent)
+      `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent)
        VALUES ($1, $2, 'document', $3, '1', 'granted', true) RETURNING id`,
-      [ownerId, scopeB, documentId],
+      [userId, scopeB, documentId],
     );
     expect(source.rows[0]).toBeDefined();
     expect(documentSource.rows[0]).toBeDefined();
@@ -1089,21 +1086,21 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       audit: string;
     }>(
       `SELECT o.last_seq::text AS last_seq,
-         (SELECT count(*)::text FROM memory_versions WHERE owner_id = $1 AND scope_id = $2) AS versions,
-         (SELECT count(*)::text FROM memory_version_evidence WHERE owner_id = $1 AND scope_id = $2) AS version_evidence,
-         (SELECT count(*)::text FROM change_log WHERE owner_id = $1 AND scope_id = $2) AS logs,
-         (SELECT count(*)::text FROM outbox WHERE owner_id = $1 AND scope_id = $2) AS outbox,
-         (SELECT count(*)::text FROM memories WHERE owner_id = $1 AND scope_id = $2) AS memories,
-         (SELECT count(*)::text FROM evidence WHERE owner_id = $1 AND scope_id = $2) AS evidence,
-         (SELECT count(*)::text FROM memory_evidence WHERE owner_id = $1 AND scope_id = $2) AS memory_evidence,
-         (SELECT count(*)::text FROM idempotency_keys WHERE owner_id = $1 AND scope_id = $2) AS idempotency,
-         (SELECT count(*)::text FROM audit_events WHERE owner_id = $1 AND scope_id = $2) AS audit
-       FROM scope_offsets AS o WHERE o.owner_id = $1 AND o.scope_id = $2`,
-      [ownerId, scopeB],
+         (SELECT count(*)::text FROM memory_versions WHERE user_id = $1 AND scope_id = $2) AS versions,
+         (SELECT count(*)::text FROM memory_version_evidence WHERE user_id = $1 AND scope_id = $2) AS version_evidence,
+         (SELECT count(*)::text FROM change_log WHERE user_id = $1 AND scope_id = $2) AS logs,
+         (SELECT count(*)::text FROM outbox WHERE user_id = $1 AND scope_id = $2) AS outbox,
+         (SELECT count(*)::text FROM memories WHERE user_id = $1 AND scope_id = $2) AS memories,
+         (SELECT count(*)::text FROM evidence WHERE user_id = $1 AND scope_id = $2) AS evidence,
+         (SELECT count(*)::text FROM memory_evidence WHERE user_id = $1 AND scope_id = $2) AS memory_evidence,
+         (SELECT count(*)::text FROM idempotency_keys WHERE user_id = $1 AND scope_id = $2) AS idempotency,
+         (SELECT count(*)::text FROM audit_events WHERE user_id = $1 AND scope_id = $2) AS audit
+       FROM scope_offsets AS o WHERE o.user_id = $1 AND o.scope_id = $2`,
+      [userId, scopeB],
     );
     await admin.query(
-      "UPDATE sources SET rights_status = 'revoked', consent = false WHERE owner_id = $1 AND scope_id = $2 AND id = $3",
-      [ownerId, scopeB, documentSource.rows[0]!.id],
+      "UPDATE sources SET rights_status = 'revoked', consent = false WHERE user_id = $1 AND scope_id = $2 AND id = $3",
+      [userId, scopeB, documentSource.rows[0]!.id],
     );
     const commit = await post(
       `/v1/changesets/${proposal.change_set_id}:commit`,
@@ -1128,19 +1125,19 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       status: string;
     }>(
       `SELECT o.last_seq::text AS last_seq,
-         (SELECT count(*)::text FROM memory_versions WHERE owner_id = $1 AND scope_id = $2) AS versions,
-         (SELECT count(*)::text FROM memory_version_evidence WHERE owner_id = $1 AND scope_id = $2) AS version_evidence,
-         (SELECT count(*)::text FROM change_log WHERE owner_id = $1 AND scope_id = $2) AS logs,
-         (SELECT count(*)::text FROM outbox WHERE owner_id = $1 AND scope_id = $2) AS outbox,
-         (SELECT count(*)::text FROM memories WHERE owner_id = $1 AND scope_id = $2) AS memories,
-         (SELECT count(*)::text FROM evidence WHERE owner_id = $1 AND scope_id = $2) AS evidence,
-         (SELECT count(*)::text FROM memory_evidence WHERE owner_id = $1 AND scope_id = $2) AS memory_evidence,
-         (SELECT count(*)::text FROM idempotency_keys WHERE owner_id = $1 AND scope_id = $2) AS idempotency,
-         (SELECT count(*)::text FROM audit_events WHERE owner_id = $1 AND scope_id = $2) AS audit,
-         (SELECT revision FROM memories WHERE owner_id = $1 AND scope_id = $2 AND id = $3) AS revision,
-         (SELECT status FROM changesets WHERE owner_id = $1 AND scope_id = $2 AND id = $4) AS status
-       FROM scope_offsets AS o WHERE o.owner_id = $1 AND o.scope_id = $2`,
-      [ownerId, scopeB, targetId, proposal.change_set_id],
+         (SELECT count(*)::text FROM memory_versions WHERE user_id = $1 AND scope_id = $2) AS versions,
+         (SELECT count(*)::text FROM memory_version_evidence WHERE user_id = $1 AND scope_id = $2) AS version_evidence,
+         (SELECT count(*)::text FROM change_log WHERE user_id = $1 AND scope_id = $2) AS logs,
+         (SELECT count(*)::text FROM outbox WHERE user_id = $1 AND scope_id = $2) AS outbox,
+         (SELECT count(*)::text FROM memories WHERE user_id = $1 AND scope_id = $2) AS memories,
+         (SELECT count(*)::text FROM evidence WHERE user_id = $1 AND scope_id = $2) AS evidence,
+         (SELECT count(*)::text FROM memory_evidence WHERE user_id = $1 AND scope_id = $2) AS memory_evidence,
+         (SELECT count(*)::text FROM idempotency_keys WHERE user_id = $1 AND scope_id = $2) AS idempotency,
+         (SELECT count(*)::text FROM audit_events WHERE user_id = $1 AND scope_id = $2) AS audit,
+         (SELECT revision FROM memories WHERE user_id = $1 AND scope_id = $2 AND id = $3) AS revision,
+         (SELECT status FROM changesets WHERE user_id = $1 AND scope_id = $2 AND id = $4) AS status
+       FROM scope_offsets AS o WHERE o.user_id = $1 AND o.scope_id = $2`,
+      [userId, scopeB, targetId, proposal.change_set_id],
     );
     expect(after.rows[0]).toMatchObject({ ...before.rows[0], revision: 1, status: 'proposed' });
   });
@@ -1149,17 +1146,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const singleConnection = new Pool({ connectionString: appUrl, max: 1 });
     try {
       await withTransaction(singleConnection, async (client) => {
-        await client.query("SELECT set_config('app.owner_id', $1, true)", [ownerId]);
+        await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
         await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeB}}`]);
       });
       const nextTransaction = await withTransaction(singleConnection, async (client) =>
-        client.query<{ owner: string | null; scopes: string | null; visible: string }>(
-          `SELECT nullif(current_setting('app.owner_id', true), '') AS owner,
+        client.query<{ user: string | null; scopes: string | null; visible: string }>(
+          `SELECT nullif(current_setting('app.user_id', true), '') AS user,
            nullif(current_setting('app.scope_ids', true), '') AS scopes,
            count(*)::text AS visible FROM memories`,
         ),
       );
-      expect(nextTransaction.rows[0]).toMatchObject({ owner: null, scopes: null, visible: '0' });
+      expect(nextTransaction.rows[0]).toMatchObject({ user: null, scopes: null, visible: '0' });
     } finally {
       await singleConnection.end();
     }
@@ -1193,8 +1190,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     expect(wrongVector.status).toBe(403);
     await admin.query(
-      "UPDATE grants SET capabilities = ARRAY['read', 'write'] WHERE owner_id = $1 AND scope_id = $2 AND principal_id = $3",
-      [ownerId, scopeA, principalId],
+      "UPDATE grants SET capabilities = ARRAY['read', 'write'] WHERE user_id = $1 AND scope_id = $2 AND principal_id = $3",
+      [userId, scopeA, principalId],
     );
     const freshReader = await token([scopeA, scopeB], 'memory:read');
     const expired = await fetch(
@@ -1209,26 +1206,26 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     });
   });
 
-  it('keeps Owner authority separate from client proposals and lets Owner confirm a candidate', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+  it('keeps User authority separate from client proposals and lets User confirm a candidate', async () => {
+    const user = await token([scopeB], 'memory:read memory:write');
     const client = await token([scopeB], 'memory:read memory:write', clientSubject);
-    const ownerCreated = await post(
+    const userCreated = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       { scope_id: scopeB, memory: sampleMemory() },
       'owner-authority',
     );
-    const ownerResult = (await ownerCreated.json()) as { operations: { memory_ids: string[] }[] };
-    const ownerMemoryId = ownerResult.operations[0]!.memory_ids[0]!;
-    const ownerMemory = await fetch(`${baseUrl}/v1/memories/${ownerMemoryId}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+    const userResult = (await userCreated.json()) as { operations: { memory_ids: string[] }[] };
+    const userMemoryId = userResult.operations[0]!.memory_ids[0]!;
+    const userMemory = await fetch(`${baseUrl}/v1/memories/${userMemoryId}?scope_id=${scopeB}`, {
+      headers: { authorization: `Bearer ${user}` },
     });
-    expect(await ownerMemory.json()).toMatchObject({
+    expect(await userMemory.json()).toMatchObject({
       lifecycle: 'active',
-      attribution: { actor_kind: 'owner', authority: 'owner_assertion' },
+      attribution: { actor_kind: 'user', authority: 'user_assertion' },
     });
 
-    const ownerRefineAttempt = await post(
+    const userRefineAttempt = await post(
       '/v1/changesets',
       client,
       {
@@ -1236,7 +1233,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         operations: [
           {
             op: 'REFINE',
-            memory_id: ownerMemoryId,
+            memory_id: userMemoryId,
             expected_revision: 1,
             statement: 'Unapproved client overwrite',
             evidence: [evidence('client-owner-refine')],
@@ -1245,9 +1242,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       },
       'client-owner-refine',
     );
-    expect(ownerRefineAttempt.status).toBe(403);
-    expect(await ownerRefineAttempt.json()).toMatchObject({
-      error: { code: 'owner_confirmation_required' },
+    expect(userRefineAttempt.status).toBe(403);
+    expect(await userRefineAttempt.json()).toMatchObject({
+      error: { code: 'user_confirmation_required' },
     });
 
     const clientCreated = await post(
@@ -1307,9 +1304,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       epistemic: { status: 'proposed' },
     });
 
-    const ownerConfirmation = await post(
+    const userConfirmation = await post(
       '/v1/changesets',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operations: [
@@ -1318,41 +1315,41 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
             memory_id: candidateId,
             expected_revision: 2,
             epistemic_status: 'asserted',
-            statement: 'Owner confirmed suggestion.',
+            statement: 'User confirmed suggestion.',
             evidence: [evidence('owner-confirmation')],
           },
         ],
       },
       'owner-confirmation',
     );
-    const confirmationProposal = (await ownerConfirmation.json()) as { change_set_id: string };
+    const confirmationProposal = (await userConfirmation.json()) as { change_set_id: string };
     expect(
       (
         await post(
           `/v1/changesets/${confirmationProposal.change_set_id}:commit`,
-          owner,
+          user,
           {},
           'owner-confirmation-commit',
         )
       ).status,
     ).toBe(200);
     const confirmed = await fetch(`${baseUrl}/v1/memories/${candidateId}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(await confirmed.json()).toMatchObject({
       lifecycle: 'active',
       revision: 3,
-      attribution: { actor_kind: 'owner', authority: 'owner_assertion' },
+      attribution: { actor_kind: 'user', authority: 'user_assertion' },
       epistemic: { status: 'asserted' },
     });
   });
 
   it('applies every ChangeOp and retains two-time temporal selection', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+    const user = await token([scopeB], 'memory:read memory:write');
     const beforeTime = '2024-12-31T23:59:00.000Z';
     const temporalCreate = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: {
@@ -1368,12 +1365,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const firstId = first.operations[0]!.memory_ids[0]!;
     const beforeVersion = await admin.query<{ recorded_at: string }>(
       `SELECT to_char(recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS recorded_at
-       FROM memory_versions WHERE owner_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = 1`,
-      [ownerId, scopeB, firstId],
+       FROM memory_versions WHERE user_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = 1`,
+      [userId, scopeB, firstId],
     );
     const refinement = await post(
       '/v1/changesets',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operations: [
@@ -1395,7 +1392,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       (
         await post(
           `/v1/changesets/${refineProposal.change_set_id}:commit`,
-          owner,
+          user,
           {},
           'temporal-refine-commit',
         )
@@ -1403,29 +1400,29 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     ).toBe(200);
     const latestVersion = await admin.query<{ recorded_at: string }>(
       `SELECT to_char(recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS recorded_at
-       FROM memory_versions WHERE owner_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = 2`,
-      [ownerId, scopeB, firstId],
+       FROM memory_versions WHERE user_id = $1 AND scope_id = $2 AND memory_id = $3 AND revision = 2`,
+      [userId, scopeB, firstId],
     );
     const oldKnow = await fetch(
       `${baseUrl}/v1/memories/${firstId}?scope_id=${scopeB}&valid_at=${encodeURIComponent(beforeTime)}&known_at=${encodeURIComponent(beforeVersion.rows[0]!.recorded_at)}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(oldKnow.status).toBe(200);
     expect(await oldKnow.json()).toMatchObject({ revision: 1, statement: 'A broad dated fact.' });
     const currentKnowOldValid = await fetch(
       `${baseUrl}/v1/memories/${firstId}?scope_id=${scopeB}&valid_at=${encodeURIComponent(beforeTime)}&known_at=${encodeURIComponent(latestVersion.rows[0]!.recorded_at)}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(currentKnowOldValid.status).toBe(404);
     const currentKnowValid = await fetch(
       `${baseUrl}/v1/memories/${firstId}?scope_id=${scopeB}&valid_at=2025-03-01T00%3A00%3A00.000Z&known_at=${encodeURIComponent(latestVersion.rows[0]!.recorded_at)}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(await currentKnowValid.json()).toMatchObject({
       revision: 2,
       statement: 'A later narrow dated fact.',
     });
-    const oldRecall = await post('/v1/recall', owner, {
+    const oldRecall = await post('/v1/recall', user, {
       query: 'A broad dated fact.',
       scope_ids: [scopeB],
       known_at: beforeVersion.rows[0]!.recorded_at,
@@ -1439,7 +1436,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
     const second = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       { scope_id: scopeB, memory: { ...sampleMemory(), statement: 'A related fact.' } },
       'all-ops-second-create',
     );
@@ -1473,7 +1470,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         op: 'RETRACT',
         memory_id: firstId,
         expected_revision: 4,
-        reason: 'Owner requested removal.',
+        reason: 'User requested removal.',
       },
     ];
     const committedChangeSetIds: string[] = [];
@@ -1482,7 +1479,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       const operation = operations[index]!;
       const proposed = await post(
         '/v1/changesets',
-        owner,
+        user,
         { scope_id: scopeB, operations: [operation] },
         `all-ops-${index}`,
       );
@@ -1491,7 +1488,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       committedChangeSetIds.push(proposedBody.change_set_id);
       const committed = await post(
         `/v1/changesets/${proposedBody.change_set_id}:commit`,
-        owner,
+        user,
         {},
         `all-ops-commit-${index}`,
       );
@@ -1512,8 +1509,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
           contested: boolean;
           context: Record<string, unknown>;
         }>(
-          'SELECT contested, context FROM memories WHERE owner_id = $1 AND scope_id = $2 AND id = $3',
-          [ownerId, scopeB, firstId],
+          'SELECT contested, context FROM memories WHERE user_id = $1 AND scope_id = $2 AND id = $3',
+          [userId, scopeB, firstId],
         );
         expect(contested.rows[0]).toMatchObject({
           contested: true,
@@ -1522,16 +1519,16 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       }
     }
     const finalMemory = await fetch(`${baseUrl}/v1/memories/${firstId}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(finalMemory.status).toBe(200);
     expect(await finalMemory.json()).toMatchObject({ lifecycle: 'retracted', revision: 5 });
     const operationRows = await admin.query<{ op: string; metadata: Record<string, unknown> }>(
       `SELECT co.op, co.metadata FROM change_ops AS co JOIN changesets AS cs
-         ON cs.owner_id = co.owner_id AND cs.scope_id = co.scope_id AND cs.id = co.change_set_id
-       WHERE co.owner_id = $1 AND co.scope_id = $2 AND cs.id = ANY($3::uuid[])
+         ON cs.user_id = co.user_id AND cs.scope_id = co.scope_id AND cs.id = co.change_set_id
+       WHERE co.user_id = $1 AND co.scope_id = $2 AND cs.id = ANY($3::uuid[])
        ORDER BY array_position($3::uuid[], cs.id), co.ordinal`,
-      [ownerId, scopeB, committedChangeSetIds],
+      [userId, scopeB, committedChangeSetIds],
     );
     expect(operationRows.rows.map((row) => row.op)).toEqual([
       'CONTEST',
@@ -1544,7 +1541,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       reason: 'A conflicting account exists.',
     });
     expect(operationRows.rows[3]!.metadata).toMatchObject({ reason: 'No new evidence was found.' });
-    expect(operationRows.rows[4]!.metadata).toMatchObject({ reason: 'Owner requested removal.' });
+    expect(operationRows.rows[4]!.metadata).toMatchObject({ reason: 'User requested removal.' });
     const lifecycle = await admin.query<{
       lifecycle: string;
       relation: string;
@@ -1552,11 +1549,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       noop_sequence_to: string | null;
     }>(
       `SELECT m.lifecycle,
-         (SELECT relation FROM relations WHERE owner_id = $1 AND scope_id = $2 AND from_memory_id = $4 AND to_memory_id = $3 AND relation = 'supports') AS relation,
-         (SELECT tombstone FROM change_log WHERE owner_id = $1 AND scope_id = $2 AND memory_id = $4 AND op = 'RETRACT' ORDER BY seq DESC LIMIT 1) AS tombstone,
-         (SELECT response->>'sequence_to' FROM changesets WHERE owner_id = $1 AND scope_id = $2 AND id = $5) AS noop_sequence_to
-       FROM memories AS m WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = $3`,
-      [ownerId, scopeB, secondId, firstId, committedChangeSetIds[3]],
+         (SELECT relation FROM relations WHERE user_id = $1 AND scope_id = $2 AND from_memory_id = $4 AND to_memory_id = $3 AND relation = 'supports') AS relation,
+         (SELECT tombstone FROM change_log WHERE user_id = $1 AND scope_id = $2 AND memory_id = $4 AND op = 'RETRACT' ORDER BY seq DESC LIMIT 1) AS tombstone,
+         (SELECT response->>'sequence_to' FROM changesets WHERE user_id = $1 AND scope_id = $2 AND id = $5) AS noop_sequence_to
+       FROM memories AS m WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = $3`,
+      [userId, scopeB, secondId, firstId, committedChangeSetIds[3]],
     );
     expect(lifecycle.rows[0]).toMatchObject({
       lifecycle: 'superseded',
@@ -1567,19 +1564,19 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(supersededReplacementId).toBeDefined();
     const replacement = await admin.query<{ lifecycle: string; supersedes_old: boolean }>(
       `SELECT m.lifecycle,
-         EXISTS (SELECT 1 FROM relations AS r WHERE r.owner_id = m.owner_id AND r.scope_id = m.scope_id
+         EXISTS (SELECT 1 FROM relations AS r WHERE r.user_id = m.user_id AND r.scope_id = m.scope_id
            AND r.from_memory_id = m.id AND r.to_memory_id = $4 AND r.relation = 'supersedes') AS supersedes_old
-       FROM memories AS m WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = $3`,
-      [ownerId, scopeB, supersededReplacementId, secondId],
+       FROM memories AS m WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = $3`,
+      [userId, scopeB, supersededReplacementId, secondId],
     );
     expect(replacement.rows[0]).toMatchObject({ lifecycle: 'active', supersedes_old: true });
   });
 
   it('cuts a superseded memory validity interval at the replacement start', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+    const user = await token([scopeB], 'memory:read memory:write');
     const created = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: {
@@ -1596,7 +1593,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const oldMemoryId = createdBody.operations[0]!.memory_ids[0]!;
     const proposed = await post(
       '/v1/changesets',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operations: [
@@ -1618,7 +1615,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const proposalBody = (await proposed.json()) as { change_set_id: string };
     const committed = await post(
       `/v1/changesets/${proposalBody.change_set_id}:commit`,
-      owner,
+      user,
       {},
       'supersede-interval-commit',
     );
@@ -1628,24 +1625,24 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
     const storedRange = await admin.query<{ valid_from: Date; valid_to: Date }>(
       `SELECT valid_from, valid_to FROM memories
-       WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-      [ownerId, scopeB, oldMemoryId],
+       WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+      [userId, scopeB, oldMemoryId],
     );
     expect(storedRange.rows[0]!.valid_to.toISOString()).toBe('2025-01-01T00:00:00.000Z');
 
     const priorView = await fetch(
       `${baseUrl}/v1/memories/${oldMemoryId}?scope_id=${scopeB}&valid_at=2024-01-01T00%3A00%3A00.000Z`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(priorView.status).toBe(200);
     const overlapView = await fetch(
       `${baseUrl}/v1/memories/${oldMemoryId}?scope_id=${scopeB}&valid_at=2026-01-01T00%3A00%3A00.000Z`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(overlapView.status).toBe(404);
     const replacementView = await fetch(
       `${baseUrl}/v1/memories/${replacementId}?scope_id=${scopeB}&valid_at=2026-01-01T00%3A00%3A00.000Z`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(replacementView.status).toBe(200);
   });
@@ -1688,9 +1685,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   });
 
   it('runs consented capture through worker auto-commit, hybrid Recall, held review, and explicit reconciliation', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+    const user = await token([scopeB], 'memory:read memory:write');
     const setupCapture = async (externalId: string, content: string) => {
-      const configured = await post('/v1/connectors', owner, {
+      const configured = await post('/v1/connectors', user, {
         scope_id: scopeB,
         source_kind: 'chat',
         external_id: externalId,
@@ -1703,16 +1700,16 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         scope_id: scopeB,
         operation_id: `op-${randomUUID()}`,
         source: { kind: 'chat', external_id: externalId, revision: '1' },
-        observations: [{ locator: 'message/1', content, speaker: 'owner' }],
+        observations: [{ locator: 'message/1', content, speaker: 'user' }],
       };
-      const captured = await post('/v1/captures', owner, body, `capture-${randomUUID()}`);
+      const captured = await post('/v1/captures', user, body, `capture-${randomUUID()}`);
       expect(captured.status).toBe(202);
       const captureBody = (await captured.json()) as { job_id: string };
       const dispatched = await outboxDispatcher.dispatchPending();
       expect(dispatched.retrying).toBe(0);
       expect(dispatched.dispatched).toBeGreaterThan(0);
       const status = await fetch(`${baseUrl}/v1/captures/${captureBody.job_id}`, {
-        headers: { authorization: `Bearer ${owner}` },
+        headers: { authorization: `Bearer ${user}` },
       });
       expect(status.status).toBe(200);
       return {
@@ -1725,7 +1722,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
     const statement = 'Sample water boiled at 100 degrees Celsius during the lab run.';
     const sourceExternalId = `water-${randomUUID()}`;
-    const configured = await post('/v1/connectors', owner, {
+    const configured = await post('/v1/connectors', user, {
       scope_id: scopeB,
       source_kind: 'chat',
       external_id: sourceExternalId,
@@ -1738,14 +1735,14 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       scope_id: scopeB,
       operation_id: `water-op-${randomUUID()}`,
       source: { kind: 'chat', external_id: sourceExternalId, revision: '1' },
-      observations: [{ locator: 'message/1', content: statement, speaker: 'owner' }],
+      observations: [{ locator: 'message/1', content: statement, speaker: 'user' }],
     };
-    const captured = await post('/v1/captures', owner, captureRequest, 'water-capture');
+    const captured = await post('/v1/captures', user, captureRequest, 'water-capture');
     expect(captured.status).toBe(202);
     const capturedBody = (await captured.json()) as { job_id: string; replayed: boolean };
     const differentOperation = await post(
       '/v1/capture',
-      owner,
+      user,
       {
         ...captureRequest,
         operation_id: `water-retry-${randomUUID()}`,
@@ -1760,20 +1757,20 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       job_observations: string;
     }>(
       `SELECT
-         (SELECT count(*)::text FROM observations o JOIN sources s ON s.owner_id = o.owner_id AND s.scope_id = o.scope_id AND s.id = o.source_id WHERE o.owner_id = $1 AND o.scope_id = $2 AND s.external_id = $3) AS observations,
-         (SELECT count(*)::text FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND id = $4) AS jobs,
-         (SELECT count(*)::text FROM capture_job_observations WHERE owner_id = $1 AND scope_id = $2 AND job_id = $4) AS job_observations`,
-      [ownerId, scopeB, sourceExternalId, capturedBody.job_id],
+         (SELECT count(*)::text FROM observations o JOIN sources s ON s.user_id = o.user_id AND s.scope_id = o.scope_id AND s.id = o.source_id WHERE o.user_id = $1 AND o.scope_id = $2 AND s.external_id = $3) AS observations,
+         (SELECT count(*)::text FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND id = $4) AS jobs,
+         (SELECT count(*)::text FROM capture_job_observations WHERE user_id = $1 AND scope_id = $2 AND job_id = $4) AS job_observations`,
+      [userId, scopeB, sourceExternalId, capturedBody.job_id],
     );
     expect(dedupeCounts.rows[0]).toEqual({ observations: '1', jobs: '1', job_observations: '1' });
-    const replay = await post('/v1/captures', owner, captureRequest, 'water-capture');
+    const replay = await post('/v1/captures', user, captureRequest, 'water-capture');
     expect(replay.status).toBe(202);
     expect(await replay.json()).toMatchObject({ job_id: capturedBody.job_id, replayed: true });
     const dispatched = await outboxDispatcher.dispatchPending();
     expect(dispatched.retrying).toBe(0);
     expect(dispatched.dispatched).toBeGreaterThan(0);
     const jobStatusResponse = await fetch(`${baseUrl}/v1/captures/${capturedBody.job_id}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(await jobStatusResponse.json()).toMatchObject({ status: 'committed' });
 
@@ -1790,7 +1787,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     ] as const;
     let autoMemory: Record<string, unknown> | undefined;
     for (const request of recallRequests) {
-      const response = await post('/v1/recall', owner, {
+      const response = await post('/v1/recall', user, {
         ...request,
         scope_ids: [scopeB],
         token_budget: 8_000,
@@ -1816,11 +1813,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       attribution: { actor_kind: 'curator', authority: 'ai_proposal' },
     });
     expect((autoMemory?.['evidence'] as Record<string, unknown>[])[0]).toMatchObject({
-      speaker: 'owner',
+      speaker: 'user',
       span: statement,
     });
 
-    const irrelevant = await post('/v1/recall', owner, {
+    const irrelevant = await post('/v1/recall', user, {
       query: `zxqv-${randomUUID()} nebular-whistle-${randomUUID()}`,
       scope_ids: [scopeB],
       mode: 'contextual',
@@ -1831,7 +1828,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const opaqueIdentifier = `a1${randomUUID().replaceAll('-', '').slice(0, 6)}`;
     const unrelatedProcedure = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: {
@@ -1844,7 +1841,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       `opaque-id-procedure-${opaqueIdentifier}`,
     );
     expect(unrelatedProcedure.status).toBe(200);
-    const belowRetrievalThreshold = await post('/v1/recall', owner, {
+    const belowRetrievalThreshold = await post('/v1/recall', user, {
       query: `AI draft proposal ${opaqueIdentifier}-5: the zephyr buoy pulses violet twice before dawn.`,
       scope_ids: [scopeB],
       mode: 'historical',
@@ -1861,7 +1858,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     expect(decision.status).toMatchObject({ status: 'held' });
     const reviewList = await fetch(`${baseUrl}/v1/review?scope_id=${scopeB}&status=held`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     const heldRows = ((await reviewList.json()) as { reviews: Record<string, unknown>[] }).reviews;
     const decisionReview = heldRows.find((row) => {
@@ -1883,7 +1880,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const approveKey = `decision-${randomUUID()}`;
     const accepted = await post(
       `/v1/review/${decisionReviewId}:decision`,
-      owner,
+      user,
       approveBody,
       approveKey,
     );
@@ -1893,7 +1890,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const acceptedId = acceptedBody.operations[0]!.memory_ids[0]!;
     const acceptedReplay = await post(
       `/v1/review/${decisionReviewId}:decision`,
-      owner,
+      user,
       approveBody,
       approveKey,
     );
@@ -1906,7 +1903,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(responseResult(acceptedReplayJson)).toEqual(responseResult(acceptedJson));
     const changedApproveReplay = await post(
       `/v1/review/${decisionReviewId}:decision`,
-      owner,
+      user,
       { ...approveBody, reason: 'A different decision request.' },
       approveKey,
     );
@@ -1914,7 +1911,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(await changedApproveReplay.json()).toMatchObject({
       error: { code: 'idempotency_conflict' },
     });
-    const otherOwner = await token([scopeB], 'memory:read memory:write', recoveryOwnerSubject);
+    const otherOwner = await token([scopeB], 'memory:read memory:write', recoveryUserSubject);
     const otherPrincipalReplay = await post(
       `/v1/review/${decisionReviewId}:decision`,
       otherOwner,
@@ -1926,13 +1923,13 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       error: { code: 'review_revision_conflict' },
     });
     const acceptedView = await fetch(`${baseUrl}/v1/memories/${acceptedId}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(await acceptedView.json()).toMatchObject({
       lifecycle: 'active',
       attribution: { actor_kind: 'curator', authority: 'ai_proposal' },
     });
-    const revokedDecisionSource = await post('/v1/connectors', owner, {
+    const revokedDecisionSource = await post('/v1/connectors', user, {
       scope_id: scopeB,
       source_kind: 'chat',
       external_id: decisionExternalId,
@@ -1942,7 +1939,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(revokedDecisionSource.status).toBe(200);
     const revokedSourceReplay = await post(
       `/v1/review/${decisionReviewId}:decision`,
-      owner,
+      user,
       approveBody,
       approveKey,
     );
@@ -1959,7 +1956,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const preferenceRows = (
       (await (
         await fetch(`${baseUrl}/v1/review?scope_id=${scopeB}&status=held`, {
-          headers: { authorization: `Bearer ${owner}` },
+          headers: { authorization: `Bearer ${user}` },
         })
       ).json()) as { reviews: Record<string, unknown>[] }
     ).reviews;
@@ -1974,11 +1971,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(preferenceReview).toBeDefined();
     const confirmed = await post(
       `/v1/review/${String(preferenceReview?.['id'])}:decision`,
-      owner,
+      user,
       {
         expected_revision: 1,
         decision: 'approve',
-        confirmation: 'owner_statement',
+        confirmation: 'user_statement',
       },
       `preference-${randomUUID()}`,
     );
@@ -1987,29 +1984,29 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const confirmedId = confirmedBody.operations[0]!.memory_ids[0]!;
     const confirmedViewResponse = await fetch(
       `${baseUrl}/v1/memories/${confirmedId}?scope_id=${scopeB}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     const confirmedView = (await confirmedViewResponse.json()) as Record<string, unknown>;
     expect(confirmedView).toMatchObject({
-      attribution: { actor_kind: 'curator', authority: 'owner_preference' },
+      attribution: { actor_kind: 'curator', authority: 'user_preference' },
     });
     expect((confirmedView['evidence'] as Record<string, unknown>[])[0]).toMatchObject({
-      speaker: 'owner',
+      speaker: 'user',
     });
     const confirmations = await admin.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM owner_confirmations WHERE owner_id = $1 AND scope_id = $2 AND memory_ids @> ARRAY[$3::uuid]`,
-      [ownerId, scopeB, confirmedId],
+      `SELECT count(*)::text AS count FROM user_confirmations WHERE user_id = $1 AND scope_id = $2 AND memory_ids @> ARRAY[$3::uuid]`,
+      [userId, scopeB, confirmedId],
     );
     expect(confirmations.rows[0]!.count).toBe('1');
 
     const oldCaptureReplay = await post(
       '/v1/captures',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operation_id: `reprocess-old-${randomUUID()}`,
         source: preference.source,
-        observations: [{ locator: 'message/1', content: preference.content, speaker: 'owner' }],
+        observations: [{ locator: 'message/1', content: preference.content, speaker: 'user' }],
       },
       `reprocess-old-${randomUUID()}`,
     );
@@ -2017,17 +2014,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(await oldCaptureReplay.json()).toMatchObject({ job_id: preference.job_id });
     const afterOldCaptureReplay = await fetch(
       `${baseUrl}/v1/memories/${confirmedId}?scope_id=${scopeB}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(await afterOldCaptureReplay.json()).toMatchObject({
       revision: confirmedView['revision'],
-      attribution: { authority: 'owner_preference' },
+      attribution: { authority: 'user_preference' },
     });
 
     const preexistingStatement = 'I prefer a paper planner for daily tasks.';
     const existing = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: {
@@ -2049,7 +2046,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const reconciliationRows = (
       (await (
         await fetch(`${baseUrl}/v1/review?scope_id=${scopeB}&status=held`, {
-          headers: { authorization: `Bearer ${owner}` },
+          headers: { authorization: `Bearer ${user}` },
         })
       ).json()) as { reviews: Record<string, unknown>[] }
     ).reviews;
@@ -2068,7 +2065,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(reconciliationReview).toBeDefined();
     const unsafeApproval = await post(
       `/v1/review/${String(reconciliationReview?.['id'])}:decision`,
-      owner,
+      user,
       {
         expected_revision: 1,
         decision: 'approve',
@@ -2089,7 +2086,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const rejectKey = `reject-reconcile-${randomUUID()}`;
     const rejected = await post(
       `/v1/review/${reconciliationReviewId}:decision`,
-      owner,
+      user,
       rejectBody,
       rejectKey,
     );
@@ -2097,7 +2094,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const rejectedJson = (await rejected.json()) as Record<string, unknown>;
     const rejectedReplay = await post(
       `/v1/review/${reconciliationReviewId}:decision`,
-      owner,
+      user,
       rejectBody,
       rejectKey,
     );
@@ -2109,7 +2106,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     });
     const changedRejectReplay = await post(
       `/v1/review/${reconciliationReviewId}:decision`,
-      owner,
+      user,
       { ...rejectBody, reason: 'A different rejection reason.' },
       rejectKey,
     );
@@ -2127,16 +2124,16 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       span: preexistingStatement,
       snippet: preexistingStatement,
       snippet_allowed: true,
-      speaker: 'owner',
+      speaker: 'user',
     };
     const sourceExternal = await admin.query<{ external_id: string }>(
-      `SELECT s.external_id FROM capture_jobs j JOIN sources s ON s.owner_id = j.owner_id AND s.scope_id = j.scope_id AND s.id = j.source_id WHERE j.id = $1`,
+      `SELECT s.external_id FROM capture_jobs j JOIN sources s ON s.user_id = j.user_id AND s.scope_id = j.scope_id AND s.id = j.source_id WHERE j.id = $1`,
       [reconciliation.status['job_id']],
     );
     corroborationEvidence.source.external_id = sourceExternal.rows[0]!.external_id;
     const proposed = await post(
       '/v1/changesets',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operations: [
@@ -2154,7 +2151,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const proposedBody = (await proposed.json()) as { change_set_id: string };
     const committed = await post(
       `/v1/changesets/${proposedBody.change_set_id}:commit`,
-      owner,
+      user,
       {},
       `manual-corroborate-commit-${randomUUID()}`,
     );
@@ -2162,22 +2159,22 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(await committed.json()).toMatchObject({ operations: [{ revisions: [2] }] });
   }, 40_000);
 
-  it('reprocesses an old Observation under a new prompt/model generation without changing an Owner decision', async () => {
+  it('reprocesses an old Observation under a new prompt/model generation without changing an User decision', async () => {
     const generationScope = randomUUID();
-    await admin.query('INSERT INTO scopes(owner_id, id, name) VALUES ($1, $2, $3)', [
-      ownerId,
+    await admin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+      userId,
       generationScope,
       'isolated-reprocess-generation',
     ]);
     await admin.query(
-      `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
        VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])`,
-      [ownerId, generationScope, principalId],
+      [userId, generationScope, principalId],
     );
-    const owner = await token([generationScope], 'memory:read memory:write');
+    const user = await token([generationScope], 'memory:read memory:write');
     const externalId = `generation-reprocess-${randomUUID()}`;
     const statement = `I prefer a quiet workspace for focused planning ${randomUUID()}.`;
-    const configured = await post('/v1/connectors', owner, {
+    const configured = await post('/v1/connectors', user, {
       scope_id: generationScope,
       source_kind: 'chat',
       external_id: externalId,
@@ -2189,11 +2186,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       scope_id: generationScope,
       operation_id: `generation-v1-${randomUUID()}`,
       source: { kind: 'chat', external_id: externalId, revision: '1' },
-      observations: [{ locator: 'message/1', content: statement, speaker: 'owner' }],
+      observations: [{ locator: 'message/1', content: statement, speaker: 'user' }],
     };
     const originalCapture = await post(
       '/v1/captures',
-      owner,
+      user,
       payload,
       `generation-v1-${randomUUID()}`,
     );
@@ -2213,7 +2210,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const heldResponse = await fetch(
       `${baseUrl}/v1/review?scope_id=${generationScope}&status=held`,
       {
-        headers: { authorization: `Bearer ${owner}` },
+        headers: { authorization: `Bearer ${user}` },
       },
     );
     const heldReviews = (
@@ -2228,8 +2225,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(originalReview).toBeDefined();
     const accepted = await post(
       `/v1/review/${String(originalReview?.['id'])}:decision`,
-      owner,
-      { expected_revision: 1, decision: 'approve', confirmation: 'owner_statement' },
+      user,
+      { expected_revision: 1, decision: 'approve', confirmation: 'user_statement' },
       `generation-owner-confirm-${randomUUID()}`,
     );
     expect(accepted.status, JSON.stringify(await accepted.clone().json())).toBe(200);
@@ -2240,16 +2237,16 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(acceptedBody.operations[0]!.revisions).toEqual([1]);
     const beforeReprocessResponse = await fetch(
       `${baseUrl}/v1/memories/${memoryId}?scope_id=${generationScope}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     const beforeReprocess = (await beforeReprocessResponse.json()) as Record<string, unknown>;
     expect(beforeReprocess).toMatchObject({
       revision: 1,
       statement,
-      attribution: { authority: 'owner_preference' },
+      attribution: { authority: 'user_preference' },
     });
 
-    const actor = await authenticator.authenticate(`Bearer ${owner}`);
+    const actor = await authenticator.authenticate(`Bearer ${user}`);
     const nextGeneration = new ConnectorService(app, {
       promptGeneration: 'curator-v2-reprocess-test',
       modelId: 'local-fake-v2-reprocess-test',
@@ -2272,9 +2269,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       request_hash: string;
     }>(
       `SELECT id, prompt_generation, model_id, request_hash
-       FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND id = ANY($3::uuid[])
+       FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND id = ANY($3::uuid[])
        ORDER BY prompt_generation`,
-      [ownerId, generationScope, [originalJobId, nextJobId]],
+      [userId, generationScope, [originalJobId, nextJobId]],
     );
     expect(jobGenerations.rows).toHaveLength(2);
     expect(jobGenerations.rows).toEqual(
@@ -2330,8 +2327,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       `SELECT state, prompt_generation, model_id,
          checkpoint->'curator_result'->>'promptVersion' AS result_prompt,
          checkpoint->'curator_result'->>'modelVersion' AS result_model
-       FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND id = $3`,
-      [ownerId, generationScope, nextJobId],
+       FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+      [userId, generationScope, nextJobId],
     );
     expect(processedGeneration.rows[0]).toEqual({
       state: 'held',
@@ -2343,34 +2340,34 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
     const afterReprocessResponse = await fetch(
       `${baseUrl}/v1/memories/${memoryId}?scope_id=${generationScope}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(await afterReprocessResponse.json()).toMatchObject({
       id: memoryId,
       revision: beforeReprocess['revision'],
       statement: beforeReprocess['statement'],
-      attribution: { authority: 'owner_preference' },
+      attribution: { authority: 'user_preference' },
     });
     const preservedDecision = await admin.query<{
       revisions: string;
       evidence_rows: string;
-      owner_confirmations: string;
+      user_confirmations: string;
     }>(
       `SELECT
-         (SELECT count(*)::text FROM memory_versions WHERE owner_id = $1 AND scope_id = $2 AND memory_id = $3) AS revisions,
-         (SELECT count(*)::text FROM memory_version_evidence WHERE owner_id = $1 AND scope_id = $2 AND memory_id = $3) AS evidence_rows,
-         (SELECT count(*)::text FROM owner_confirmations WHERE owner_id = $1 AND scope_id = $2 AND memory_ids @> ARRAY[$3::uuid]) AS owner_confirmations`,
-      [ownerId, generationScope, memoryId],
+         (SELECT count(*)::text FROM memory_versions WHERE user_id = $1 AND scope_id = $2 AND memory_id = $3) AS revisions,
+         (SELECT count(*)::text FROM memory_version_evidence WHERE user_id = $1 AND scope_id = $2 AND memory_id = $3) AS evidence_rows,
+         (SELECT count(*)::text FROM user_confirmations WHERE user_id = $1 AND scope_id = $2 AND memory_ids @> ARRAY[$3::uuid]) AS user_confirmations`,
+      [userId, generationScope, memoryId],
     );
     expect(preservedDecision.rows[0]).toEqual({
       revisions: '1',
       evidence_rows: '1',
-      owner_confirmations: '1',
+      user_confirmations: '1',
     });
   }, 40_000);
 
   it('holds a partial fact proposal from an episode instead of auto-committing it', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+    const user = await token([scopeB], 'memory:read memory:write');
     const externalId = `episode-partial-${randomUUID()}`;
     const action = `opened a violet hatch ${randomUUID()}`;
     const content = JSON.stringify({
@@ -2378,7 +2375,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       action,
       outcome: 'the room dried',
     });
-    const configured = await post('/v1/connectors', owner, {
+    const configured = await post('/v1/connectors', user, {
       scope_id: scopeB,
       source_kind: 'episode',
       external_id: externalId,
@@ -2388,12 +2385,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(configured.status).toBe(200);
     const captured = await post(
       '/v1/captures',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operation_id: `episode-op-${randomUUID()}`,
         source: { kind: 'episode', external_id: externalId, revision: '1' },
-        observations: [{ locator: 'episode/1', content, speaker: 'owner' }],
+        observations: [{ locator: 'episode/1', content, speaker: 'user' }],
       },
       `episode-capture-${randomUUID()}`,
     );
@@ -2441,9 +2438,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(processed).toMatchObject({ status: 'held', job_id: jobId });
     const jobState = await admin.query<{ state: string; last_error_code: string | null }>(
       `SELECT j.state, j.last_error_code
-       FROM capture_jobs j JOIN sources s ON s.owner_id = j.owner_id AND s.scope_id = j.scope_id AND s.id = j.source_id
-       WHERE j.owner_id = $1 AND j.scope_id = $2 AND s.external_id = $3`,
-      [ownerId, scopeB, externalId],
+       FROM capture_jobs j JOIN sources s ON s.user_id = j.user_id AND s.scope_id = j.scope_id AND s.id = j.source_id
+       WHERE j.user_id = $1 AND j.scope_id = $2 AND s.external_id = $3`,
+      [userId, scopeB, externalId],
     );
     expect(jobState.rows[0]).toEqual({
       state: 'held',
@@ -2452,22 +2449,22 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const committedMemories = await admin.query<{ count: string; reviews: string }>(
       `SELECT
          (SELECT count(DISTINCT m.id)::text FROM memories m
-          JOIN memory_evidence me ON me.owner_id = m.owner_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
-          JOIN evidence e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-          JOIN observations o ON o.owner_id = e.owner_id AND o.scope_id = e.scope_id AND o.id = e.observation_id
-          JOIN sources s ON s.owner_id = o.owner_id AND s.scope_id = o.scope_id AND s.id = o.source_id
-          WHERE m.owner_id = $1 AND m.scope_id = $2 AND s.external_id = $3) AS count,
-         (SELECT count(*)::text FROM curation_reviews r WHERE r.owner_id = $1 AND r.scope_id = $2 AND r.job_id = $4) AS reviews`,
-      [ownerId, scopeB, externalId, jobId],
+          JOIN memory_evidence me ON me.user_id = m.user_id AND me.scope_id = m.scope_id AND me.memory_id = m.id
+          JOIN evidence e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+          JOIN observations o ON o.user_id = e.user_id AND o.scope_id = e.scope_id AND o.id = e.observation_id
+          JOIN sources s ON s.user_id = o.user_id AND s.scope_id = o.scope_id AND s.id = o.source_id
+          WHERE m.user_id = $1 AND m.scope_id = $2 AND s.external_id = $3) AS count,
+         (SELECT count(*)::text FROM curation_reviews r WHERE r.user_id = $1 AND r.scope_id = $2 AND r.job_id = $4) AS reviews`,
+      [userId, scopeB, externalId, jobId],
     );
     expect(committedMemories.rows[0]).toEqual({ count: '0', reviews: '0' });
   }, 40_000);
 
   it('resumes a checkpoint after a transient failure and commits one evidence row once', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+    const user = await token([scopeB], 'memory:read memory:write');
     const externalId = `retry-${randomUUID()}`;
     const statement = 'The integration worker resumes from its saved extraction checkpoint.';
-    const configured = await post('/v1/connectors', owner, {
+    const configured = await post('/v1/connectors', user, {
       scope_id: scopeB,
       source_kind: 'chat',
       external_id: externalId,
@@ -2477,12 +2474,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(configured.status).toBe(200);
     const captured = await post(
       '/v1/captures',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operation_id: `retry-op-${randomUUID()}`,
         source: { kind: 'chat', external_id: externalId, revision: '1' },
-        observations: [{ locator: 'message/1', content: statement, speaker: 'owner' }],
+        observations: [{ locator: 'message/1', content: statement, speaker: 'user' }],
       },
       `retry-capture-${randomUUID()}`,
     );
@@ -2511,8 +2508,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       last_error_code: string | null;
       checkpoint: Record<string, unknown>;
     }>(
-      'SELECT state, last_error_code, checkpoint FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND id = $3',
-      [ownerId, scopeB, jobId],
+      'SELECT state, last_error_code, checkpoint FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND id = $3',
+      [userId, scopeB, jobId],
     );
     expect(firstAttempt, JSON.stringify(checkpoint.rows[0])).toMatchObject({
       status: 'failed',
@@ -2529,18 +2526,18 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const committed = await admin.query<{ memories: string; evidence: string }>(
       `SELECT count(DISTINCT m.id)::text AS memories, count(mve.evidence_id)::text AS evidence
        FROM memories m LEFT JOIN memory_version_evidence mve
-         ON mve.owner_id = m.owner_id AND mve.scope_id = m.scope_id AND mve.memory_id = m.id
-       WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.statement = $3`,
-      [ownerId, scopeB, statement],
+         ON mve.user_id = m.user_id AND mve.scope_id = m.scope_id AND mve.memory_id = m.id
+       WHERE m.user_id = $1 AND m.scope_id = $2 AND m.statement = $3`,
+      [userId, scopeB, statement],
     );
     expect(committed.rows[0]).toEqual({ memories: '1', evidence: '1' });
   });
 
   it('refuses to resume a saved extraction checkpoint after source consent is revoked', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+    const user = await token([scopeB], 'memory:read memory:write');
     const externalId = `revoked-retry-${randomUUID()}`;
     const statement = 'A copper label marks the archive box.';
-    const configured = await post('/v1/connectors', owner, {
+    const configured = await post('/v1/connectors', user, {
       scope_id: scopeB,
       source_kind: 'chat',
       external_id: externalId,
@@ -2550,12 +2547,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(configured.status).toBe(200);
     const captured = await post(
       '/v1/captures',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operation_id: `revoked-op-${randomUUID()}`,
         source: { kind: 'chat', external_id: externalId, revision: '1' },
-        observations: [{ locator: 'message/1', content: statement, speaker: 'owner' }],
+        observations: [{ locator: 'message/1', content: statement, speaker: 'user' }],
       },
       `revoked-capture-${randomUUID()}`,
     );
@@ -2582,14 +2579,14 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       last_error_code: string | null;
       checkpoint: Record<string, unknown>;
     }>(
-      'SELECT state, last_error_code, checkpoint FROM capture_jobs WHERE owner_id = $1 AND scope_id = $2 AND id = $3',
-      [ownerId, scopeB, jobId],
+      'SELECT state, last_error_code, checkpoint FROM capture_jobs WHERE user_id = $1 AND scope_id = $2 AND id = $3',
+      [userId, scopeB, jobId],
     );
     expect(firstAttempt, JSON.stringify(firstCheckpoint.rows[0])).toMatchObject({
       status: 'failed',
       job_id: jobId,
     });
-    const revoked = await post('/v1/connectors', owner, {
+    const revoked = await post('/v1/connectors', user, {
       scope_id: scopeB,
       source_kind: 'chat',
       external_id: externalId,
@@ -2604,18 +2601,18 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(await processor.process(jobId)).toMatchObject({ status: 'held', job_id: jobId });
     const state = await admin.query<{ state: string; curator_result: unknown; memories: string }>(
       `SELECT j.state, j.checkpoint->'curator_result' AS curator_result,
-         (SELECT count(*)::text FROM memories m WHERE m.owner_id = j.owner_id AND m.scope_id = j.scope_id AND m.statement = $4) AS memories
-       FROM capture_jobs j WHERE j.owner_id = $1 AND j.scope_id = $2 AND j.id = $3`,
-      [ownerId, scopeB, jobId, statement],
+         (SELECT count(*)::text FROM memories m WHERE m.user_id = j.user_id AND m.scope_id = j.scope_id AND m.statement = $4) AS memories
+       FROM capture_jobs j WHERE j.user_id = $1 AND j.scope_id = $2 AND j.id = $3`,
+      [userId, scopeB, jobId, statement],
     );
     expect(state.rows[0]).toMatchObject({ state: 'held', memories: '0' });
     expect(state.rows[0]?.curator_result).toBeDefined();
   });
 
   it('fences stale job workers from committing after a lease has been stolen', async () => {
-    const owner = await token([scopeB], 'memory:read memory:write');
+    const user = await token([scopeB], 'memory:read memory:write');
     const externalId = `lease-${randomUUID()}`;
-    const configured = await post('/v1/connectors', owner, {
+    const configured = await post('/v1/connectors', user, {
       scope_id: scopeB,
       source_kind: 'chat',
       external_id: externalId,
@@ -2626,12 +2623,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const statement = 'The test runner uses PostgreSQL for integration.';
     const captured = await post(
       '/v1/captures',
-      owner,
+      user,
       {
         scope_id: scopeB,
         operation_id: `lease-op-${randomUUID()}`,
         source: { kind: 'chat', external_id: externalId, revision: '1' },
-        observations: [{ locator: 'message/1', content: statement, speaker: 'owner' }],
+        observations: [{ locator: 'message/1', content: statement, speaker: 'user' }],
       },
       `lease-capture-${randomUUID()}`,
     );
@@ -2654,10 +2651,10 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(newClaim.rowCount).toBe(1);
     const observation = await admin.query<{ id: string; locator: string }>(
       `SELECT o.id, o.locator FROM observations o JOIN capture_job_observations jo
-       ON jo.owner_id = o.owner_id AND jo.scope_id = o.scope_id AND jo.observation_id = o.id WHERE jo.job_id = $1`,
+       ON jo.user_id = o.user_id AND jo.scope_id = o.scope_id AND jo.observation_id = o.id WHERE jo.job_id = $1`,
       [capturedBody.job_id],
     );
-    const actor = await authenticator.authenticate(`Bearer ${owner}`);
+    const actor = await authenticator.authenticate(`Bearer ${user}`);
     const staleWrite = workerCore.commitCuratedFacts(
       actor,
       scopeB,
@@ -2683,7 +2680,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
                 span: statement,
                 snippet: statement,
                 snippet_allowed: true,
-                speaker: 'owner',
+                speaker: 'user',
               },
             ],
           },
@@ -2698,8 +2695,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     await expect(staleWrite).rejects.toMatchObject({ code: 'job_lease_lost' });
     const written = await admin.query<{ count: string }>(
-      'SELECT count(*)::text AS count FROM memories WHERE owner_id = $1 AND scope_id = $2 AND statement = $3',
-      [ownerId, scopeB, statement],
+      'SELECT count(*)::text AS count FROM memories WHERE user_id = $1 AND scope_id = $2 AND statement = $3',
+      [userId, scopeB, statement],
     );
     expect(written.rows[0]!.count).toBe('0');
     await admin.query(
@@ -2710,17 +2707,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
   it('denies forgotten content immediately, then purges only its own memory and review after a worker ledger ACK', async () => {
     await admin.query(
-      `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
        VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])
-       ON CONFLICT (owner_id, scope_id, principal_id) DO UPDATE
+       ON CONFLICT (user_id, scope_id, principal_id) DO UPDATE
          SET capabilities = EXCLUDED.capabilities, updated_at = clock_timestamp()`,
-      [ownerId, scopeB, principalId],
+      [userId, scopeB, principalId],
     );
-    const owner = await token([scopeB], 'memory:admin');
+    const user = await token([scopeB], 'memory:admin');
     const createMemory = async (externalId: string) => {
       const response = await post(
         '/v1/memories:remember',
-        owner,
+        user,
         {
           scope_id: scopeB,
           memory: { ...sampleMemory(), evidence: [evidence(externalId)] },
@@ -2739,9 +2736,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const memoryB = retained.operations[0]!.memory_ids[0]!;
     const sourceIds = await admin.query<{ memory_id: string; source_id: string }>(
       `SELECT me.memory_id, e.source_id FROM memory_evidence me JOIN evidence e
-       ON e.owner_id=me.owner_id AND e.scope_id=me.scope_id AND e.id=me.evidence_id
-       WHERE me.owner_id=$1 AND me.scope_id=$2 AND me.memory_id=ANY($3::uuid[])`,
-      [ownerId, scopeB, [memoryA, memoryB]],
+       ON e.user_id=me.user_id AND e.scope_id=me.scope_id AND e.id=me.evidence_id
+       WHERE me.user_id=$1 AND me.scope_id=$2 AND me.memory_id=ANY($3::uuid[])`,
+      [userId, scopeB, [memoryA, memoryB]],
     );
     const sourceA = sourceIds.rows.find((row) => row.memory_id === memoryA)?.source_id;
     const sourceB = sourceIds.rows.find((row) => row.memory_id === memoryB)?.source_id;
@@ -2757,11 +2754,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       const jobId = randomUUID();
       const reviewId = randomUUID();
       await admin.query(
-        `INSERT INTO capture_jobs(id, owner_id, scope_id, source_id, state, principal_id, actor_kind, checkpoint)
-         VALUES ($1, $2, $3, $4, 'held', $5, 'owner', $6::jsonb)`,
+        `INSERT INTO capture_jobs(id, user_id, scope_id, source_id, state, principal_id, actor_kind, checkpoint)
+         VALUES ($1, $2, $3, $4, 'held', $5, 'user', $6::jsonb)`,
         [
           jobId,
-          ownerId,
+          userId,
           scopeB,
           sourceId,
           principalId,
@@ -2769,12 +2766,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         ],
       );
       await admin.query(
-        `INSERT INTO curation_reviews(id, owner_id, scope_id, job_id, change_set_id,
+        `INSERT INTO curation_reviews(id, user_id, scope_id, job_id, change_set_id,
            rationale, candidate_summary, evidence_anchors)
          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, '[]'::jsonb)`,
         [
           reviewId,
-          ownerId,
+          userId,
           scopeB,
           jobId,
           changeSetId,
@@ -2783,9 +2780,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         ],
       );
       await admin.query(
-        `INSERT INTO owner_confirmations(owner_id, scope_id, review_id, principal_id, confirmation_type, memory_ids)
-         VALUES ($1, $2, $3, $4, 'owner_statement', $5::uuid[])`,
-        [ownerId, scopeB, reviewId, principalId, [memoryId]],
+        `INSERT INTO user_confirmations(user_id, scope_id, review_id, principal_id, confirmation_type, memory_ids)
+         VALUES ($1, $2, $3, $4, 'user_statement', $5::uuid[])`,
+        [userId, scopeB, reviewId, principalId, [memoryId]],
       );
       return reviewId;
     };
@@ -2804,7 +2801,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
     const request = await post(
       '/v1/forget',
-      owner,
+      user,
       {
         scope_id: scopeB,
         selector: { memory_ids: [memoryA] },
@@ -2821,15 +2818,15 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(result).toMatchObject({ status: 'ledger_pending', ledger_durable: true });
 
     const immediateRead = await fetch(`${baseUrl}/v1/memories/${memoryA}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(immediateRead.status).toBe(404);
-    const actor = await authenticator.authenticate(`Bearer ${owner}`);
+    const actor = await authenticator.authenticate(`Bearer ${user}`);
     await expect(coreService.getMemory(actor, scopeB, memoryA, {})).rejects.toMatchObject({
       status: 404,
     });
     const retainedRead = await fetch(`${baseUrl}/v1/memories/${memoryB}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(retainedRead.status).toBe(200);
     await expect(coreService.getMemory(actor, scopeB, memoryB, {})).resolves.toBeDefined();
@@ -2853,18 +2850,18 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       review_b_payload: string | null;
     }>(
       `SELECT
-         (SELECT count(*)::text FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3) AS memory_a,
-         (SELECT count(*)::text FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$4) AS memory_b,
-         (SELECT count(*)::text FROM memory_versions WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3) AS versions_a,
-         (SELECT count(*)::text FROM evidence e JOIN memory_evidence me ON me.owner_id=e.owner_id
-           AND me.scope_id=e.scope_id AND me.evidence_id=e.id WHERE me.owner_id=$1 AND me.scope_id=$2
+         (SELECT count(*)::text FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3) AS memory_a,
+         (SELECT count(*)::text FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$4) AS memory_b,
+         (SELECT count(*)::text FROM memory_versions WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3) AS versions_a,
+         (SELECT count(*)::text FROM evidence e JOIN memory_evidence me ON me.user_id=e.user_id
+           AND me.scope_id=e.scope_id AND me.evidence_id=e.id WHERE me.user_id=$1 AND me.scope_id=$2
            AND me.memory_id=$3) AS evidence_a,
-         (SELECT count(*)::text FROM curation_reviews WHERE owner_id=$1 AND scope_id=$2 AND id=$5) AS review_a,
-         (SELECT count(*)::text FROM curation_reviews WHERE owner_id=$1 AND scope_id=$2 AND id=$6) AS review_b,
-         (SELECT count(*)::text FROM owner_confirmations WHERE owner_id=$1 AND scope_id=$2 AND review_id=$5) AS confirmation_a,
-         (SELECT count(*)::text FROM owner_confirmations WHERE owner_id=$1 AND scope_id=$2 AND review_id=$6) AS confirmation_b,
-         (SELECT candidate_summary->>'statement' FROM curation_reviews WHERE owner_id=$1 AND scope_id=$2 AND id=$6) AS review_b_payload`,
-      [ownerId, scopeB, memoryA, memoryB, reviewA, reviewB],
+         (SELECT count(*)::text FROM curation_reviews WHERE user_id=$1 AND scope_id=$2 AND id=$5) AS review_a,
+         (SELECT count(*)::text FROM curation_reviews WHERE user_id=$1 AND scope_id=$2 AND id=$6) AS review_b,
+         (SELECT count(*)::text FROM user_confirmations WHERE user_id=$1 AND scope_id=$2 AND review_id=$5) AS confirmation_a,
+         (SELECT count(*)::text FROM user_confirmations WHERE user_id=$1 AND scope_id=$2 AND review_id=$6) AS confirmation_b,
+         (SELECT candidate_summary->>'statement' FROM curation_reviews WHERE user_id=$1 AND scope_id=$2 AND id=$6) AS review_b_payload`,
+      [userId, scopeB, memoryA, memoryB, reviewA, reviewB],
     );
     expect(remaining.rows[0]).toEqual({
       memory_a: '0',
@@ -2880,17 +2877,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const retainedReadAfterAck = await fetch(
       `${baseUrl}/v1/memories/${memoryB}?scope_id=${scopeB}`,
       {
-        headers: { authorization: `Bearer ${owner}` },
+        headers: { authorization: `Bearer ${user}` },
       },
     );
     expect(retainedReadAfterAck.status).toBe(200);
     const purgedApiRead = await fetch(`${baseUrl}/v1/memories/${memoryA}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(purgedApiRead.status).toBe(404);
     const forgetStatus = await fetch(
       `${baseUrl}/v1/forget/${result.forget_request_id}?scope_id=${scopeB}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(forgetStatus.status, await forgetStatus.clone().text()).toBe(200);
     expect(await forgetStatus.json()).toMatchObject({
@@ -2904,11 +2901,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   it('replays ledger entries for a missing original principal and repeats when the HEAD advances during restore', async () => {
     const ledger = deletionLedger;
     const original = ledger.readSnapshot.bind(ledger);
-    const owner = await token([scopeB], 'memory:admin');
+    const user = await token([scopeB], 'memory:admin');
     const retainedStatement = `restore gate retained memory ${randomUUID()}`;
     const retainedCreated = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: {
@@ -2925,10 +2922,10 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     ).operations[0]!.memory_ids[0]!;
     const preexistingEntry = {
       request_id: randomUUID(),
-      owner_id: ownerId,
+      user_id: userId,
       scope_id: scopeB,
       principal_id: principalId,
-      actor_kind: 'owner' as const,
+      actor_kind: 'user' as const,
       target_memory_ids: [randomUUID()],
       target_source_ids: [],
       target_subject_ids: [],
@@ -2940,12 +2937,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       /suppressions are not applied/,
     );
     const blockedGet = await fetch(`${baseUrl}/v1/memories/${retainedId}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(blockedGet.status).toBe(503);
     const blockedRecall = await fetch(`${baseUrl}/v1/recall`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${user}`, 'content-type': 'application/json' },
       body: JSON.stringify({ query: retainedStatement, scope_id: scopeB }),
     });
     expect(blockedRecall.status).toBe(503);
@@ -2970,10 +2967,10 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(blockedMcp.status).toBe(503);
     const unknownPrincipalEntry = {
       request_id: randomUUID(),
-      owner_id: ownerId,
+      user_id: userId,
       scope_id: scopeB,
       principal_id: randomUUID(),
-      actor_kind: 'owner' as const,
+      actor_kind: 'user' as const,
       target_memory_ids: [randomUUID()],
       target_source_ids: [],
       target_subject_ids: [],
@@ -2989,23 +2986,23 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(restored.replayed).toBeGreaterThanOrEqual(1);
     expect(readSnapshot).toHaveBeenCalled();
     const replayed = await admin.query<{ principal_id: string | null; status: string }>(
-      `SELECT principal_id, status FROM deletion_requests WHERE owner_id=$1 AND scope_id=$2 AND id=$3`,
-      [ownerId, scopeB, unknownPrincipalEntry.request_id],
+      `SELECT principal_id, status FROM deletion_requests WHERE user_id=$1 AND scope_id=$2 AND id=$3`,
+      [userId, scopeB, unknownPrincipalEntry.request_id],
     );
     expect(replayed.rows[0]).toEqual({ principal_id: null, status: 'complete' });
     await expect(governance.verifyLedgerReadiness()).resolves.toBeUndefined();
     const restoredRead = await fetch(`${baseUrl}/v1/memories/${retainedId}?scope_id=${scopeB}`, {
-      headers: { authorization: `Bearer ${owner}` },
+      headers: { authorization: `Bearer ${user}` },
     });
     expect(restoredRead.status).toBe(200);
   }, 40_000);
 
   it('serves a read-only MCP audience through the official SDK client', async () => {
     const statement = `MCP read client fixture ${randomUUID()}`;
-    const owner = await token([scopeB], 'memory:admin');
+    const user = await token([scopeB], 'memory:admin');
     const created = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: { ...sampleMemory(), statement, evidence: [evidence(`mcp-read-${randomUUID()}`)] },
@@ -3072,8 +3069,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       await client.close();
     }
     const committed = await admin.query<{ count: string }>(
-      'SELECT count(*)::text AS count FROM memories WHERE owner_id=$1 AND scope_id=$2 AND statement=$3',
-      [ownerId, scopeB, statement],
+      'SELECT count(*)::text AS count FROM memories WHERE user_id=$1 AND scope_id=$2 AND statement=$3',
+      [userId, scopeB, statement],
     );
     expect(committed.rows[0]?.count).toBe('1');
 
@@ -3162,8 +3159,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       });
       expect(remembered.isError).not.toBe(true);
       const memory = await admin.query<{ id: string }>(
-        'SELECT id FROM memories WHERE owner_id=$1 AND scope_id=$2 AND statement=$3',
-        [ownerId, scopeB, statement],
+        'SELECT id FROM memories WHERE user_id=$1 AND scope_id=$2 AND statement=$3',
+        [userId, scopeB, statement],
       );
       const memoryId = memory.rows[0]?.id;
       expect(memoryId).toBeDefined();
@@ -3208,8 +3205,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       expect(afterForget.isError).toBe(true);
       expect(JSON.stringify(afterForget)).not.toContain(statement);
       const persistedForgetEvents = await admin.query<{ op: string; tombstone: boolean }>(
-        'SELECT op, tombstone FROM change_log WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY seq',
-        [ownerId, scopeB, memoryId],
+        'SELECT op, tombstone FROM change_log WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY seq',
+        [userId, scopeB, memoryId],
       );
       expect(persistedForgetEvents.rows).toContainEqual({ op: 'RETRACT', tombstone: true });
       const changesAfterForget = await reader.callTool({
@@ -3227,7 +3224,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     }
   }, 30_000);
 
-  it('exports and imports complete history across owners without importing authority', async () => {
+  it('exports and imports complete history across users without importing authority', async () => {
     let sourceOwner = await token([scopeB], 'memory:admin');
     const externalId = `portable-history-${randomUUID()}`;
     const originalStatement = `Portable history original ${randomUUID()}`;
@@ -3275,8 +3272,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     expect(commit.status).toBe(200);
     const versions = await admin.query<{ revision: number }>(
-      'SELECT revision FROM memory_versions WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY revision',
-      [ownerId, scopeB, sourceMemoryId],
+      'SELECT revision FROM memory_versions WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY revision',
+      [userId, scopeB, sourceMemoryId],
     );
     expect(versions.rows.map((row) => row.revision)).toEqual([1, 2]);
 
@@ -3303,7 +3300,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const encryptedBundle = await downloaded.text();
     expect(encryptedBundle).toMatch(/^v1\./);
 
-    const destinationOwner = await token([importedScopeId], 'memory:admin', importedOwnerSubject);
+    const destinationOwner = await token([importedScopeId], 'memory:admin', importedUserSubject);
     const importKey = `portable-import-${randomUUID()}`;
     const body = {
       scope_id: importedScopeId,
@@ -3345,22 +3342,22 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     });
     const importedHistory = await admin.query<{
       version_count: string;
-      origin_owner_id: string;
+      origin_user_id: string;
       created_by: string;
       rights_status: string;
       origin_authority: string;
     }>(
-      `SELECT (SELECT count(*)::text FROM memory_versions WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3) AS version_count,
-        m.import_provenance->>'origin_owner_id' AS origin_owner_id, m.created_by::text AS created_by,
-        (SELECT rights_status FROM sources WHERE owner_id=$1 AND scope_id=$2 LIMIT 1) AS rights_status,
+      `SELECT (SELECT count(*)::text FROM memory_versions WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3) AS version_count,
+        m.import_provenance->>'origin_user_id' AS origin_user_id, m.created_by::text AS created_by,
+        (SELECT rights_status FROM sources WHERE user_id=$1 AND scope_id=$2 LIMIT 1) AS rights_status,
         (SELECT origin_provenance->>'origin_authority' FROM memory_versions
-          WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY revision DESC LIMIT 1) AS origin_authority
-       FROM memories m WHERE m.owner_id=$1 AND m.scope_id=$2 AND m.id=$3`,
-      [importedOwnerId, importedScopeId, destinationMemoryId],
+          WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY revision DESC LIMIT 1) AS origin_authority
+       FROM memories m WHERE m.user_id=$1 AND m.scope_id=$2 AND m.id=$3`,
+      [importedUserId, importedScopeId, destinationMemoryId],
     );
     expect(importedHistory.rows[0]).toMatchObject({
       version_count: '2',
-      origin_owner_id: ownerId,
+      origin_user_id: userId,
       created_by: importedPrincipalId,
       rights_status: 'granted',
       origin_authority: expect.any(String),
@@ -3385,8 +3382,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       }[];
     };
     const persistedImportEvents = await admin.query<{ op: string; memory_revision: number }>(
-      'SELECT op, memory_revision FROM change_log WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY seq',
-      [importedOwnerId, importedScopeId, destinationMemoryId],
+      'SELECT op, memory_revision FROM change_log WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3 ORDER BY seq',
+      [importedUserId, importedScopeId, destinationMemoryId],
     );
     expect(persistedImportEvents.rows).toContainEqual({ op: 'IMPORT', memory_revision: 2 });
     expect(importedChanges.changes).toContainEqual(
@@ -3443,12 +3440,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   }, 40_000);
 
   it('invalidates ready exports after source-rights revocation while leaving other scopes usable', async () => {
-    const owner = await token([scopeB], 'memory:admin');
+    const user = await token([scopeB], 'memory:admin');
     const statement = `Rights-revoked export must not remain downloadable ${randomUUID()}`;
     const externalId = `rights-export-${randomUUID()}`;
     const remembered = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: {
@@ -3461,21 +3458,21 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     expect(remembered.status, await remembered.clone().text()).toBe(200);
     const sourceRow = await admin.query<{ id: string }>(
-      'SELECT id FROM sources WHERE owner_id=$1 AND scope_id=$2 AND external_id=$3',
-      [ownerId, scopeB, externalId],
+      'SELECT id FROM sources WHERE user_id=$1 AND scope_id=$2 AND external_id=$3',
+      [userId, scopeB, externalId],
     );
     expect(sourceRow.rows).toHaveLength(1);
 
     const affectedRequest = await post(
       '/v1/exports',
-      owner,
+      user,
       { scope_id: scopeB },
       `rights-export-affected-${randomUUID()}`,
     );
     expect(affectedRequest.status, await affectedRequest.clone().text()).toBe(202);
     const affected = (await affectedRequest.json()) as { export_id: string };
 
-    const unrelatedOwner = await token([importedScopeId], 'memory:admin', importedOwnerSubject);
+    const unrelatedOwner = await token([importedScopeId], 'memory:admin', importedUserSubject);
     const unrelatedRequest = await post(
       '/v1/exports',
       unrelatedOwner,
@@ -3488,13 +3485,13 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     await portability.processPendingWorker(workerDb);
     const affectedReady = await fetch(
       `${baseUrl}/v1/exports/${affected.export_id}?scope_id=${scopeB}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(affectedReady.status).toBe(200);
     expect(await affectedReady.json()).toMatchObject({ state: 'ready', content_available: true });
     const affectedDownload = await fetch(
       `${baseUrl}/v1/exports/${affected.export_id}:download?scope_id=${scopeB}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(affectedDownload.status).toBe(200);
     const affectedArtifact = await admin.query<{ artifact_key: string }>(
@@ -3517,7 +3514,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
     const revoke = await fetch(`${baseUrl}/v1/sources/${sourceRow.rows[0]!.id}:rights`, {
       method: 'PUT',
-      headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${user}`, 'content-type': 'application/json' },
       body: JSON.stringify({ scope_id: scopeB, rights_status: 'revoked', consent: false }),
     });
     expect(revoke.status, await revoke.clone().text()).toBe(200);
@@ -3527,7 +3524,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       state: string;
     }>(
       `SELECT ej.ready_auth_epoch, s.auth_epoch AS current_auth_epoch, ej.state
-       FROM export_jobs ej JOIN scopes s ON s.owner_id=ej.owner_id AND s.id=ej.scope_id
+       FROM export_jobs ej JOIN scopes s ON s.user_id=ej.user_id AND s.id=ej.scope_id
        WHERE ej.id=$1`,
       [affected.export_id],
     );
@@ -3603,12 +3600,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   }, 40_000);
 
   it('fences stale export claims and removes every claim file before Forget completes', async () => {
-    const owner = await token([scopeB], 'memory:admin');
-    const actor = await authenticator.authenticate(`Bearer ${owner}`);
+    const user = await token([scopeB], 'memory:admin');
+    const actor = await authenticator.authenticate(`Bearer ${user}`);
     const statement = `Forget exported artifact ${randomUUID()}`;
     const created = await post(
       '/v1/memories:remember',
-      owner,
+      user,
       {
         scope_id: scopeB,
         memory: {
@@ -3632,7 +3629,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     };
     const firstClaim = await workerDb.query<{
       export_id: string;
-      owner_id: string;
+      user_id: string;
       scope_id: string;
       principal_id: string;
       deletion_epoch: number;
@@ -3641,8 +3638,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const first = firstClaim.rows.find((row) => row.export_id === requested.export_id);
     expect(first).toBeDefined();
     const exportAuthEpoch = await admin.query<{ auth_epoch: number }>(
-      'SELECT auth_epoch FROM scopes WHERE owner_id=$1 AND id=$2',
-      [ownerId, scopeB],
+      'SELECT auth_epoch FROM scopes WHERE user_id=$1 AND id=$2',
+      [userId, scopeB],
     );
     const artifactA = await portabilityStore.write(
       requested.export_id,
@@ -3673,7 +3670,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     const secondClaim = await workerDb.query<{
       export_id: string;
-      owner_id: string;
+      user_id: string;
       scope_id: string;
       principal_id: string;
       deletion_epoch: number;
@@ -3699,7 +3696,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       `SELECT app.finish_export_job($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS ok`,
       [
         requested.export_id,
-        first!.owner_id,
+        first!.user_id,
         first!.scope_id,
         first!.principal_id,
         first!.deletion_epoch,
@@ -3720,7 +3717,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       `SELECT app.finish_export_job($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS ok`,
       [
         requested.export_id,
-        second!.owner_id,
+        second!.user_id,
         second!.scope_id,
         second!.principal_id,
         second!.deletion_epoch,
@@ -3740,7 +3737,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     )) as { export_id: string };
     const claimCResult = await workerDb.query<{
       export_id: string;
-      owner_id: string;
+      user_id: string;
       scope_id: string;
       principal_id: string;
       deletion_epoch: number;
@@ -3797,7 +3794,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     expect(nullArtifactKey.rows[0]).toEqual({ state: 'processing', artifact_key: null });
 
-    const otherOwner = await token([importedScopeId], 'memory:admin', importedOwnerSubject);
+    const otherOwner = await token([importedScopeId], 'memory:admin', importedUserSubject);
     const otherExportResponse = await post(
       '/v1/exports',
       otherOwner,
@@ -3825,7 +3822,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(completedKey).toBe(artifactB);
     const forget = await post(
       '/v1/forget',
-      owner,
+      user,
       {
         scope_id: scopeB,
         selector: { memory_ids: [memoryId] },
@@ -3844,8 +3841,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(heldForget.rows[0]?.status).toBe('purging');
     const queuedFileDeletions = await admin.query<{ pending: string }>(
       `SELECT count(*)::text AS pending FROM public.governance_file_deletions
-       WHERE owner_id=$1 AND scope_id=$2 AND state <> 'deleted'`,
-      [ownerId, scopeB],
+       WHERE user_id=$1 AND scope_id=$2 AND state <> 'deleted'`,
+      [userId, scopeB],
     );
     expect(Number(queuedFileDeletions.rows[0]?.pending)).toBeGreaterThan(0);
     const sweep = await fetch(`${workerBaseUrl}/internal/governance/sweep`, {
@@ -3855,7 +3852,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(sweep.status).toBe(200);
     const forgetStatus = await fetch(
       `${baseUrl}/v1/forget/${forgetBody.forget_request_id}?scope_id=${scopeB}`,
-      { headers: { authorization: `Bearer ${owner}` } },
+      { headers: { authorization: `Bearer ${user}` } },
     );
     expect(forgetStatus.status, await forgetStatus.clone().text()).toBe(200);
     expect(await forgetStatus.json()).toMatchObject({
@@ -3871,9 +3868,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const fileQueue = await admin.query<{ pending: string; deleted: string }>(
       `SELECT count(*) FILTER (WHERE state <> 'deleted')::text AS pending,
          count(*) FILTER (WHERE state='deleted')::text AS deleted
-       FROM governance_file_deletions WHERE owner_id=$1 AND scope_id=$2
+       FROM governance_file_deletions WHERE user_id=$1 AND scope_id=$2
          AND (artifact_key LIKE $3 OR artifact_key LIKE $4)`,
-      [ownerId, scopeB, `${requested.export_id}%`, `${uncommitted.export_id}%`],
+      [userId, scopeB, `${requested.export_id}%`, `${uncommitted.export_id}%`],
     );
     expect(fileQueue.rows[0]).toMatchObject({ pending: '0' });
     expect(Number(fileQueue.rows[0]?.deleted)).toBeGreaterThanOrEqual(3);
@@ -3881,7 +3878,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       `SELECT app.finish_export_job($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS ok`,
       [
         requested.export_id,
-        first!.owner_id,
+        first!.user_id,
         first!.scope_id,
         first!.principal_id,
         first!.deletion_epoch,
@@ -3907,17 +3904,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
   it('runs bounded retention expiry, feedback hold, and stale index backfill in the worker', async () => {
     await admin.query(
-      `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
        VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])
-       ON CONFLICT (owner_id, scope_id, principal_id) DO UPDATE
+       ON CONFLICT (user_id, scope_id, principal_id) DO UPDATE
          SET capabilities=EXCLUDED.capabilities, updated_at=clock_timestamp()`,
-      [ownerId, scopeB, principalId],
+      [userId, scopeB, principalId],
     );
-    const owner = await token([scopeB], 'memory:admin');
+    const user = await token([scopeB], 'memory:admin');
     const createMemory = async (label: string) => {
       const response = await post(
         '/v1/memories:remember',
-        owner,
+        user,
         {
           scope_id: scopeB,
           memory: {
@@ -3935,35 +3932,35 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const expiredMemoryId = await createMemory('expired');
     const freshMemoryId = await createMemory('fresh');
     const expiredSource = await admin.query<{ source_id: string }>(
-      `SELECT e.source_id FROM memory_evidence me JOIN evidence e ON e.owner_id=me.owner_id
+      `SELECT e.source_id FROM memory_evidence me JOIN evidence e ON e.user_id=me.user_id
         AND e.scope_id=me.scope_id AND e.id=me.evidence_id
-       WHERE me.owner_id=$1 AND me.scope_id=$2 AND me.memory_id=$3 LIMIT 1`,
-      [ownerId, scopeB, expiredMemoryId],
+       WHERE me.user_id=$1 AND me.scope_id=$2 AND me.memory_id=$3 LIMIT 1`,
+      [userId, scopeB, expiredMemoryId],
     );
     expect(expiredSource.rows[0]?.source_id).toBeDefined();
     await admin.query(
       `UPDATE observations SET captured_at=clock_timestamp()-interval '3 days'
-       WHERE owner_id=$1 AND scope_id=$2 AND source_id=$3`,
-      [ownerId, scopeB, expiredSource.rows[0]!.source_id],
+       WHERE user_id=$1 AND scope_id=$2 AND source_id=$3`,
+      [userId, scopeB, expiredSource.rows[0]!.source_id],
     );
     await admin.query(
       `UPDATE evidence SET captured_at=clock_timestamp()-interval '3 days'
-       WHERE owner_id=$1 AND scope_id=$2 AND source_id=$3`,
-      [ownerId, scopeB, expiredSource.rows[0]!.source_id],
+       WHERE user_id=$1 AND scope_id=$2 AND source_id=$3`,
+      [userId, scopeB, expiredSource.rows[0]!.source_id],
     );
     await admin.query(
       `UPDATE memories SET recorded_at=clock_timestamp()-interval '3 days'
-       WHERE owner_id=$1 AND scope_id=$2 AND id=$3`,
-      [ownerId, scopeB, expiredMemoryId],
+       WHERE user_id=$1 AND scope_id=$2 AND id=$3`,
+      [userId, scopeB, expiredMemoryId],
     );
 
     const retention = await fetch(`${baseUrl}/v1/scopes/${scopeB}/retention`, {
       method: 'PUT',
-      headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${user}`, 'content-type': 'application/json' },
       body: JSON.stringify({ observation_days: 1, memory_days: 1 }),
     });
     expect(retention.status).toBe(200);
-    const feedback = await post(`/v1/memories/${freshMemoryId}:feedback`, owner, {
+    const feedback = await post(`/v1/memories/${freshMemoryId}:feedback`, user, {
       scope_id: scopeB,
       feedback_type: 'stale',
       metadata: { reason: 'local maintenance fixture' },
@@ -3971,8 +3968,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(feedback.status).toBe(200);
 
     const beforeIndex = await admin.query<{ indexed_revision: number; committed_revision: number }>(
-      'SELECT indexed_revision, committed_revision FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3',
-      [ownerId, scopeB, freshMemoryId],
+      'SELECT indexed_revision, committed_revision FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3',
+      [userId, scopeB, freshMemoryId],
     );
     expect(beforeIndex.rows[0]?.indexed_revision).toBe(0);
     expect(beforeIndex.rows[0]?.committed_revision).toBeGreaterThan(0);
@@ -3996,14 +3993,14 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       fresh_committed: number;
     }>(
       `SELECT
-         (SELECT count(*)::text FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3) AS expired,
-         (SELECT count(*)::text FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$4) AS fresh,
-         (SELECT count(*)::text FROM sources WHERE owner_id=$1 AND scope_id=$2 AND id=$5) AS expired_source,
+         (SELECT count(*)::text FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3) AS expired,
+         (SELECT count(*)::text FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$4) AS fresh,
+         (SELECT count(*)::text FROM sources WHERE user_id=$1 AND scope_id=$2 AND id=$5) AS expired_source,
          (SELECT fr.state FROM feedback_reassessments fr JOIN feedback f ON f.id=fr.feedback_id
-          WHERE f.owner_id=$1 AND f.scope_id=$2 AND f.memory_id=$4 ORDER BY fr.created_at DESC LIMIT 1) AS feedback_state,
-         (SELECT indexed_revision FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$4) AS fresh_indexed,
-         (SELECT committed_revision FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$4) AS fresh_committed`,
-      [ownerId, scopeB, expiredMemoryId, freshMemoryId, expiredSource.rows[0]!.source_id],
+          WHERE f.user_id=$1 AND f.scope_id=$2 AND f.memory_id=$4 ORDER BY fr.created_at DESC LIMIT 1) AS feedback_state,
+         (SELECT indexed_revision FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$4) AS fresh_indexed,
+         (SELECT committed_revision FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$4) AS fresh_committed`,
+      [userId, scopeB, expiredMemoryId, freshMemoryId, expiredSource.rows[0]!.source_id],
     );
     expect(state.rows[0]).toMatchObject({
       expired: '0',

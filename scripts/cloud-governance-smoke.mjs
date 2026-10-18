@@ -112,7 +112,7 @@ try {
   requireEncryptedExport(download.status, download.headers.get('content-type'), encryptedBundle);
   results.encrypted_export_ready = true;
 
-  stage = 'cross-owner-import';
+  stage = 'cross-user-import';
   const imported = await apiJson('/v1/imports', tokens.destinationAdmin, {
     method: 'POST',
     idempotencyKey: `cloud-governance-import-${runId}`,
@@ -122,7 +122,7 @@ try {
       grant_imported_sources: true,
     },
   });
-  requireGovernanceHttpStatus(imported.status, 200, 'cross-owner encrypted import');
+  requireGovernanceHttpStatus(imported.status, 200, 'cross-user encrypted import');
   created.destinationMemoryId = requireImportedMemoryId(imported.body, created.sourceMemoryId);
   const recall = await apiJson('/v1/recall', tokens.destinationRead, {
     method: 'POST',
@@ -133,7 +133,7 @@ try {
     },
   });
   requireRecallIncludesMemory(recall.status, recall.body, created.destinationMemoryId);
-  results.cross_owner_import_and_recall_verified = true;
+  results.cross_user_import_and_recall_verified = true;
 
   stage = 'forget-suppression';
   const forgotten = await Promise.all([

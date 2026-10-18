@@ -15,14 +15,14 @@ sh scripts/local.sh start
 
 `start` builds the pinned Node image, starts PostgreSQL, reapplies migrations, verifies the existing deletion-ledger snapshot, and waits for API/worker readiness. It does not replay the ledger into a restored database. Use the explicit `restore-reconcile` command for that operation. `stop` preserves all three named volumes. The last `start` therefore reuses the same local database, issuer signing key, export artifacts, and deletion ledger. `reset` is destructive: it removes only this Compose project's three named volumes and `.env.local`, so the next start creates an empty test stack.
 
-API, issuer, Tasks fixture, and Scheduler fixture listen only on loopback. Generated local secrets have owner-only permissions; never copy them into a shared environment. API/worker request logs contain correlation ID, route template, result code, and duration, never statement/evidence text or bearer tokens. Diagnostics returns database counters and ledger checkpoint metadata, not remembered content; the ledger checkpoint is read through the checked non-bypass worker login. Outbox diagnostics distinguishes the `capture.accepted` task-dispatch queue from `memory.change` rows served by the change feed and `forget.accepted` metadata handled by the worker's deletion poll. Only the capture rows count as pending Task deliveries.
+API, issuer, Tasks fixture, and Scheduler fixture listen only on loopback. Generated local secrets have user-only permissions; never copy them into a shared environment. API/worker request logs contain correlation ID, route template, result code, and duration, never statement/evidence text or bearer tokens. Diagnostics returns database counters and ledger checkpoint metadata, not remembered content; the ledger checkpoint is read through the checked non-bypass worker login. Outbox diagnostics distinguishes the `capture.accepted` task-dispatch queue from `memory.change` rows served by the change feed and `forget.accepted` metadata handled by the worker's deletion poll. Only the capture rows count as pending Task deliveries.
 
 ## OAuth and client boundary
 
 Use separate principals and canonical resources:
 
 ```sh
-sh scripts/local.sh token owner http://localhost:18080
+sh scripts/local.sh token user http://localhost:18080
 sh scripts/local.sh token reader http://localhost:18080/mcp/read
 ```
 
@@ -43,11 +43,11 @@ sh scripts/local.sh diagnostics
 
 Provider failures are consumed from a shared local fixture directory. A failed capture remains durable with a retryable job state; the next worker attempt resumes its checkpoint. A task failure leaves the job/outbox visible for dispatch retry. Scheduler recovery is idempotent; the duplicate control deliberately redelivers and should not create a second memory/evidence result. `scheduler` runs the bounded maintenance sweep, including retention, index repair, feedback review hold, and pending task recovery. Inspect counts with `diagnostics`, then query the authenticated capture job or review item through its API route.
 
-For a new confirmed Capture, the local async worker may auto-commit a safe proposal. Ambiguous/prohibited decisions stay held until an Owner makes an explicit review decision. Replaying an old source revision after Owner confirmation resolves to the original job and preserves the confirmed memory revision; see the PostgreSQL case `keeps Owner authority separate from client proposals and lets Owner confirm a candidate`.
+For a new confirmed Capture, the local async worker may auto-commit a safe proposal. Ambiguous/prohibited decisions stay held until an User makes an explicit review decision. Replaying an old source revision after User confirmation resolves to the original job and preserves the confirmed memory revision; see the PostgreSQL case `keeps User authority separate from client proposals and lets User confirm a candidate`.
 
 ## Source-rights revocation and Forget
 
-Source rights revocation and Owner Forget are distinct actions. Revocation removes dependent content from protected reads/Recall immediately under current source-rights checks; it does not imply that the Owner requested physical deletion. Forget records immediate suppression in PostgreSQL and the independent local deletion ledger; worker acknowledgement and purge are asynchronous.
+Source rights revocation and User Forget are distinct actions. Revocation removes dependent content from protected reads/Recall immediately under current source-rights checks; it does not imply that the User requested physical deletion. Forget records immediate suppression in PostgreSQL and the independent local deletion ledger; worker acknowledgement and purge are asynchronous.
 
 Use the `forget_request_id` returned by `POST /v1/forget` to poll `GET /v1/forget/{forget_request_id}?scope_id=...`. Do not use the transport `request_id` as a business identifier. `sh scripts/local.sh diagnostics` reports queued/failed purge state without returning content. A stalled request is safe to retry with the same idempotency key. Do not manually delete the ledger entry or its checkpoint.
 

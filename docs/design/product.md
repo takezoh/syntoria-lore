@@ -47,7 +47,7 @@ The names in the family symbolize capabilities rather than describe functions. L
 | People who use several AI assistants and keep restating the same background | Primary | They gain most from one memory that every authorized AI reads with the same meaning and evidence |
 | People who make decisions in conversation with AI and later need to know what was decided, by whom and why | Primary | Attribution, valid time and correction history are what make a remembered decision usable |
 | People who build their own agents or workflows | Secondary | Separately authorized read-only and write-capable REST and MCP entry points over one contract |
-| Teams that need organization-wide knowledge management, document archives or a general knowledge graph | Not targeted | Lore is a personal service with one owner; originals stay in their source systems |
+| Teams that need organization-wide knowledge management, document archives or a general knowledge graph | Not targeted | Lore is a personal service with one user; originals stay in their source systems |
 
 These segments are hypotheses, not validated market findings.
 
@@ -57,8 +57,8 @@ These segments are hypotheses, not validated market findings.
 | --- | --- | --- |
 | Stop re-explaining yourself (entry) | Say a decision, preference or correction once; the next conversation and the next AI already know it | Synchronous commit for explicit remember and correction; read-after-write recall from the source of truth; one memory across authorized clients |
 | See where every memory came from (core) | Any memory can be traced back to who said it, where and when | Evidence locators per revision; attribution derived from authenticated identity and trusted source metadata; independent-evidence lineage |
-| Your decisions stay yours (primary differentiator) | An AI's suggestion never turns into your decision | Authority is never taken from model output; AI and client proposals stay candidates until the owner confirms them; a client cannot rewrite an owner-attributed memory |
-| Corrections stick (differentiator) | Changing your mind does not erase history, and old material cannot bring an old policy back | Supersede with valid-time intervals; separate recorded time; reprocessing cannot reverse an explicit owner decision |
+| Your decisions stay yours (primary differentiator) | An AI's suggestion never turns into your decision | Authority is never taken from model output; AI and client proposals stay candidates until the user confirms them; a client cannot rewrite an user-attributed memory |
+| Corrections stick (differentiator) | Changing your mind does not erase history, and old material cannot bring an old policy back | Supersede with valid-time intervals; separate recorded time; reprocessing cannot reverse an explicit user decision |
 | Gaps are named, not filled | Recall says what it does not know | Explicit unknown results, contested flags and coverage in every Context Pack |
 | Forget means forget (reason to believe) | Forgotten content is gone from every path and does not come back | Immediate suppression, physical purge, deletion ledger reapplied before a restored database serves reads |
 
@@ -71,7 +71,7 @@ Lead with relief from re-explaining, then the safety of attribution and correcti
 - The headline, supporting line and repository description were adopted by the user on 2026-10-18.
 - Introduce Lore as long-term memory with evidence before anything else.
 - Write benefit- and scene-first. The user and their AI are the subjects of user-facing text. Show the value through a decision recalled by a different AI, a correction that sticks and an honest unknown.
-- User-facing text says "AI", "remember", "recall", "correct" and "forget". "LLM", "caller", "principal", "scope" and "ChangeSet" belong to technical and API documentation. The owner is "you" in user-facing text.
+- User-facing text says "AI", "remember", "recall", "correct" and "forget". "LLM", "caller", "principal", "scope" and "ChangeSet" belong to technical and API documentation. The user is "you" in user-facing text.
 - Tone is calm, plain and honest. Avoid "AI that never forgets" or "perfect memory" hype; remembering less and forgetting deliberately are legitimate outcomes.
 
 ## Claim boundaries
@@ -80,7 +80,7 @@ Lead with relief from re-explaining, then the safety of attribution and correcti
 | --- | --- |
 | Lore knows what is true | It records who asserted what on which evidence; it does not verify external facts |
 | Lore decides what you should do | The Personal AI and the user decide; Lore returns memories and their uncertainty |
-| Lore remembers everything automatically | Capture is limited to sources the owner enabled; uncertain candidates are held |
+| Lore remembers everything automatically | Capture is limited to sources the user enabled; uncertain candidates are held |
 | Extraction is accurate | Curator output is a policy-checked proposal; hosted extraction quality has not been measured |
 | Forgotten content disappears from every backup at once | Backups keep content until their retention ends; Lore reapplies deletions before serving a restored database |
 | Works with any AI assistant today | Hosted API and MCP endpoints are private; no client integration has hosted acceptance yet |
@@ -93,7 +93,7 @@ Lead with relief from re-explaining, then the safety of attribution and correcti
 | --- | --- | --- |
 | Stop re-explaining | Restating background, decisions and preferences in every conversation | Less context the user supplies for representative tasks, without loss of task success |
 | Trust what the AI recalls | Checking whether a recalled statement is real, current and whose it is | Every recalled memory carries attribution and evidence; false-current rate stays low |
-| Keep decisions intact | Correcting an AI that treated a suggestion or an old policy as current | Zero AI proposals stored as owner decisions; old sources do not override current decisions |
+| Keep decisions intact | Correcting an AI that treated a suggestion or an old policy as current | Zero AI proposals stored as user decisions; old sources do not override current decisions |
 | Continue across AIs | Repeating corrections to each assistant | A correction made through one client is recalled by another |
 | Forget with confidence | Worrying that deleted information resurfaces | No forgotten content in recall, export or change feed, including after restore |
 
@@ -103,8 +103,8 @@ These are intended outcomes, not measured long-term effects. Evaluate with a no-
 
 | Lore provides | The user and their AI determine |
 | --- | --- |
-| Durable memories with evidence, attribution, valid time and revision history within one owner | Which conversations and sources to share, and what is worth remembering |
-| Capture, curation under policy, owner review, recall and change feed through REST and MCP | When to remember, recall or catch up, and how to interpret the result |
+| Durable memories with evidence, attribution, valid time and revision history within one user | Which conversations and sources to share, and what is worth remembering |
+| Capture, curation under policy, user review, recall and change feed through REST and MCP | When to remember, recall or catch up, and how to interpret the result |
 | Explicit correction, retraction and Forget with immediate effect | What is true, what matters and what to do next |
 | Encrypted export and import | Where the memory goes and who receives it |
 

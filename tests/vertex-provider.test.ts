@@ -397,7 +397,7 @@ function createObservation(content: string): CuratorObservation {
     source_revision: 'test-v1',
     locator: 'test/message/1',
     content,
-    speaker: 'owner',
+    speaker: 'user',
     event_time: null,
     lineage_root: randomUUID(),
   };

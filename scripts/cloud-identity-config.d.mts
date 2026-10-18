@@ -9,8 +9,8 @@ export interface CloudDeploymentConfig {
     realm: string;
     publicClientId: string;
     smokeClientId: string;
-    ownerInitialPasswordSecret: string;
-    existing?: { ownerSubjectId?: string };
+    userInitialPasswordSecret: string;
+    existing?: { userSubjectId?: string };
     migration: {
       sourceRealm: string;
       targetRealm: string;
@@ -47,10 +47,10 @@ export interface CloudIdentityConfig {
   productDisplayName: string;
   identityUrl: string;
   realm: string;
-  ownerSubjectId: string | undefined;
+  userSubjectId: string | undefined;
   publicClientId: string;
   smokeClientId: string;
-  ownerInitialPasswordSecret: string;
+  userInitialPasswordSecret: string;
   scopes: {
     scopeIds: string;
     api: string;

@@ -4,10 +4,10 @@ import { join } from 'node:path';
 
 export interface DeletionLedgerEntry {
   readonly request_id: string;
-  readonly owner_id: string;
+  readonly user_id: string;
   readonly scope_id: string;
   readonly principal_id: string;
-  readonly actor_kind: 'owner';
+  readonly actor_kind: 'user';
   readonly target_memory_ids: readonly string[];
   readonly target_source_ids: readonly string[];
   readonly target_subject_ids: readonly string[];
@@ -289,11 +289,11 @@ export class LocalDeletionLedger implements DeletionLedger {
 }
 
 export function validateDeletionLedgerEntry(entry: DeletionLedgerEntry): void {
-  for (const value of [entry.request_id, entry.owner_id, entry.scope_id, entry.principal_id]) {
+  for (const value of [entry.request_id, entry.user_id, entry.scope_id, entry.principal_id]) {
     if (!/^[0-9a-f-]{36}$/i.test(value))
       throw new Error('Deletion ledger identifiers must be UUIDs');
   }
-  if (entry.actor_kind !== 'owner' || Number.isNaN(Date.parse(entry.blocked_at)))
+  if (entry.actor_kind !== 'user' || Number.isNaN(Date.parse(entry.blocked_at)))
     throw new Error('Deletion ledger entry actor or timestamp is invalid');
   for (const hash of entry.source_locator_hmacs) {
     if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('Deletion ledger locator digest is invalid');
@@ -323,7 +323,17 @@ export function parseStoredDeletionLedgerEntry(text: string): StoredEntry {
     value.entry === null
   )
     throw new Error('Deletion ledger entry is invalid');
-  const stored = value as StoredEntry;
+  // The separately governed hash chain has a fixed v1 wire format.
+  const wire = value as Omit<StoredEntry, 'entry'> & {
+    entry: Omit<DeletionLedgerEntry, 'user_id' | 'actor_kind'> & {
+      owner_id: string;
+      actor_kind: 'owner';
+    };
+  };
+  if (wire.entry.actor_kind !== 'owner') throw new Error('Invalid v1 ledger actor');
+  const { owner_id: user_id, actor_kind: _actorKind, ...entry } = wire.entry;
+  void _actorKind;
+  const stored: StoredEntry = { ...wire, entry: { ...entry, user_id, actor_kind: 'user' } };
   validateDeletionLedgerEntry(stored.entry);
   return stored;
 }
@@ -358,7 +368,11 @@ export function hashDeletionLedgerEntry(previousHash: string, entry: DeletionLed
 export function canonicalDeletionLedgerJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalDeletionLedgerJson).join(',')}]`;
   if (typeof value === 'object' && value !== null) {
-    const record = value as Record<string, unknown>;
+    const input = value as Record<string, unknown>;
+    // Only ledger entries carry this field; ledger data contains no free-form text.
+    const { user_id, ...remaining } = input;
+    const record =
+      'user_id' in input ? { ...remaining, owner_id: user_id, actor_kind: 'owner' } : input;
     return `{${Object.keys(record)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${canonicalDeletionLedgerJson(record[key])}`)

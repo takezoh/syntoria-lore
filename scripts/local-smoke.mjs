@@ -10,7 +10,7 @@ const restToken = await issue(
   base,
   'memory:read memory:write memory:admin',
 );
-const ownerToken = await issue(
+const userToken = await issue(
   'demo-owner-client',
   'owner-local-fixture-only',
   `${base}/mcp/write`,
@@ -30,7 +30,7 @@ if (metadata.resource !== `${base}/mcp/read`)
 const wrongAudience = await fetch(`${base}/mcp/read`, {
   method: 'POST',
   headers: {
-    authorization: `Bearer ${ownerToken}`,
+    authorization: `Bearer ${userToken}`,
     'content-type': 'application/json',
     'mcp-protocol-version': '2025-11-25',
   },
@@ -77,14 +77,14 @@ const readerClient = new Client({ name: 'memory-local-reader', version: '1.0.0' 
 const readerTransport = new StreamableHTTPClientTransport(new URL(`${base}/mcp/read`), {
   requestInit: { headers: { authorization: `Bearer ${readerToken}` } },
 });
-const ownerClient = new Client({ name: 'memory-local-owner', version: '1.0.0' });
-const ownerTransport = new StreamableHTTPClientTransport(new URL(`${base}/mcp/write`), {
-  requestInit: { headers: { authorization: `Bearer ${ownerToken}` } },
+const userClient = new Client({ name: 'memory-local-user', version: '1.0.0' });
+const userTransport = new StreamableHTTPClientTransport(new URL(`${base}/mcp/write`), {
+  requestInit: { headers: { authorization: `Bearer ${userToken}` } },
 });
 try {
-  await Promise.all([readerClient.connect(readerTransport), ownerClient.connect(ownerTransport)]);
+  await Promise.all([readerClient.connect(readerTransport), userClient.connect(userTransport)]);
   const readTools = await readerClient.listTools();
-  const writeTools = await ownerClient.listTools();
+  const writeTools = await userClient.listTools();
   if (!readTools.tools.some((tool) => tool.name === 'recall_memories'))
     throw new Error('Read MCP client has no Recall tool');
   if (!writeTools.tools.some((tool) => tool.name === 'remember_memory'))
@@ -115,7 +115,7 @@ try {
     )}\n`,
   );
 } finally {
-  await Promise.allSettled([readerClient.close(), ownerClient.close()]);
+  await Promise.allSettled([readerClient.close(), userClient.close()]);
 }
 
 function parseToolJson(content) {

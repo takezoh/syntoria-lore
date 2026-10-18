@@ -14,12 +14,12 @@ A **memory** is a reusable unit of meaning interpreted from observations. Its ki
 | Episode | Condition, action and outcome kept as one experience; a partial fact extracted from an episode is held as invalid |
 | Subject | Stable person, project or thing with time-bounded aliases; alias validity is separate from memory validity |
 | Relation | Exactly `supersedes`, `supports`, `contradicts`, `related_to`, `same_subject` or `depends_on_context` |
-| Authority | `owner_decision`, `owner_preference`, `owner_assertion`, `third_party_claim`, `observed_state` or `ai_proposal` |
+| Authority | `user_decision`, `user_preference`, `user_assertion`, `third_party_claim`, `observed_state` or `ai_proposal` |
 | Lifecycle | `candidate`, `active`, `superseded`, `retracted`, `forgotten`; contested is a separate flag |
 
 ### Authority and attribution
 
-Authority is derived from the authenticated principal, the speaker recorded in the input and trusted source metadata. An `authority` value in model output is ignored. The owner may assert, refine, supersede and retract. Memories authored by a client, connector or the curator remain candidates with their own attribution until the owner confirms them; a client cannot rewrite an owner-attributed memory. An owner confirmation is a separate record: confirming a third party's technical claim does not turn it into a verified fact or change the original speaker. Imported memories are attributed to the importing principal with `third_party_claim` authority; the original owner, actor and authority survive only as provenance.
+Authority is derived from the authenticated principal, the speaker recorded in the input and trusted source metadata. An `authority` value in model output is ignored. The user may assert, refine, supersede and retract. Memories authored by a client, connector or the curator remain candidates with their own attribution until the user confirms them; a client cannot rewrite an user-attributed memory. An user confirmation is a separate record: confirming a third party's technical claim does not turn it into a verified fact or change the original speaker. Imported memories are attributed to the importing principal with `third_party_claim` authority; the original user, actor and authority survive only as provenance.
 
 ### Time
 
@@ -44,26 +44,26 @@ Forget is not a change operation; it has its own authorized flow.
 
 ## Tables
 
-Every tenant row carries `owner_id` and `scope_id`, protected by forced row-level security against transaction-local context.
+Every tenant row carries `user_id` and `scope_id`, protected by forced row-level security against transaction-local context.
 
 | Entities | Purpose | Classification and lifecycle |
 | --- | --- | --- |
-| `owners`, `principals`, `grants`, `scopes` | Tenant identity, OAuth issuer/subject binding, capabilities, grant expiry, authorization epoch | Restricted security data; revoked or expired grants deny immediately |
+| `users`, `principals`, `grants`, `scopes` | Tenant identity, OAuth issuer/subject binding, capabilities, grant expiry, authorization epoch | Restricted security data; revoked or expired grants deny immediately |
 | `subjects`, `subject_aliases` | Stable identities and time-bounded names | Tenant content metadata; purged with dependent data |
 | `sources`, `connector_authorizations` | Source identity, revision, rights, consent and suppression lineage | Restricted provenance; current rights gate every read |
 | `observations`, `episodes`, `capture_requests`, `capture_jobs`, `capture_job_observations` | Consented input, grouping, deduplication, durable job and checkpoint state | Potentially sensitive content; capture requires consent |
 | `evidence`, `memory_version_evidence` | Evidence locators, snippets, rights and per-revision evidence sets | Sensitive; Forget purges snippets and links |
 | `memories`, `memory_versions`, `memory_subjects`, `relations`, `embeddings`, `memory_embeddings` | Memory identity, append-only revisions, subject links, typed relations, model-specific vectors | Sensitive; rights, suppression and retention apply at read time |
 | `changesets`, `change_ops`, `change_log`, `scope_offsets` | Proposals, committed operations and the ordered per-scope feed | Change metadata; Forget events are content-free tombstones |
-| `outbox`, `idempotency_keys`, `feedback`, `curation_reviews`, `owner_confirmations` | Delivery and retry state, request replay, usage feedback, held decisions, explicit owner authority | Operational; a proposal is never an owner confirmation |
+| `outbox`, `idempotency_keys`, `feedback`, `curation_reviews`, `user_confirmations` | Delivery and retry state, request replay, usage feedback, held decisions, explicit user authority | Operational; a proposal is never an user confirmation |
 | `deletion_requests`, `suppressions`, `deletion_targets`, `deletion_ledger_checkpoint`, `deletion_ledger_visibility_items` | Immediate denial, purge work and database visibility against the external ledger | Highly restricted and content-free where possible |
 | `export_jobs`, `portability_imports`, `governance_file_deletions` | Encrypted bundle jobs, imports and artifact cleanup claims | Encrypted artifacts plus metadata; rights and Forget invalidate exports |
-| `scope_retention_policies`, `feedback_reassessments`, `audit_events` | Owner retention bounds, reassessment queue and content-free audit | Policy and operational data |
+| `scope_retention_policies`, `feedback_reassessments`, `audit_events` | User retention bounds, reassessment queue and content-free audit | Policy and operational data |
 | `schema_migrations` | Applied versions and checksums | Operational; no tenant content |
 
 ## Roles and row-level security
 
-The API connects as `memory_app`; the worker connects through a separate login that is a member of `memory_worker`. Both are non-superuser and `NOBYPASSRLS`, and the bootstrap checks this before serving. Each operation sets its owner, principal and authorized scope context with `SET LOCAL` inside the transaction; session-level settings are never used, so a pooled connection cannot carry one request's scope into another. The runtime role has no `UPDATE` or `DELETE` privilege on `memory_versions`, and the version trigger does not accept caller-settable settings as purge authority. Physical purge runs through a narrowly privileged, receipt-verified governance routine.
+The API connects as `memory_app`; the worker connects through a separate login that is a member of `memory_worker`. Both are non-superuser and `NOBYPASSRLS`, and the bootstrap checks this before serving. Each operation sets its user, principal and authorized scope context with `SET LOCAL` inside the transaction; session-level settings are never used, so a pooled connection cannot carry one request's scope into another. The runtime role has no `UPDATE` or `DELETE` privilege on `memory_versions`, and the version trigger does not accept caller-settable settings as purge authority. Physical purge runs through a narrowly privileged, receipt-verified governance routine.
 
 Source rows are locked `FOR SHARE` while evidence is validated and while evidence-backed memories are read or changed, so a concurrent revocation either wins before authorization or waits for the authorized transaction.
 
@@ -76,11 +76,11 @@ Proposal creation and commit are separate endpoints and database states. A commi
 3. Writes memory versions, version evidence, relations, change operations, `change_log(scope_id, seq)`, outbox rows, the idempotency response and the audit record.
 4. Commits all of it atomically or rolls back all of it. Model calls never run inside the transaction.
 
-A stale revision returns `409 revision_conflict`. Idempotency keys bind actor, scope, key and request hash: an identical retry replays the stored response, only to the original principal or the owner and only after the same authorization check; a different body returns `409 idempotency_conflict`.
+A stale revision returns `409 revision_conflict`. Idempotency keys bind actor, scope, key and request hash: an identical retry replays the stored response, only to the original principal or the user and only after the same authorization check; a different body returns `409 idempotency_conflict`.
 
 ## Change feed and cursors
 
-Because every change in a scope takes the same offset row lock, the per-scope sequence follows commit order without gaps; raw database sequences are never exposed. A cursor is an opaque signed token that binds the owner, principal, exact scope vector, per-scope offsets, authorization epochs and format version. Multi-scope readers receive a vector of positions; there is no global order. Tampered or mismatched cursors are rejected, an authorization change requires a fresh start, and an expired cursor returns `410 cursor_expired`. Forget writes content-free tombstones with the memory ID and last revision; imports allocate offsets under the same lock and write one content-free `IMPORT` event per imported memory.
+Because every change in a scope takes the same offset row lock, the per-scope sequence follows commit order without gaps; raw database sequences are never exposed. A cursor is an opaque signed token that binds the user, principal, exact scope vector, per-scope offsets, authorization epochs and format version. Multi-scope readers receive a vector of positions; there is no global order. Tampered or mismatched cursors are rejected, an authorization change requires a fresh start, and an expired cursor returns `410 cursor_expired`. Forget writes content-free tombstones with the memory ID and last revision; imports allocate offsets under the same lock and write one content-free `IMPORT` event per imported memory.
 
 Per-scope serialization costs write throughput; its effect at the planned workload has not been measured.
 
@@ -95,3 +95,25 @@ Forget commits suppression and tombstones before asynchronous cleanup. Reads and
 ## Migrations
 
 Migrations are forward-only. Applied files are never edited; their checksums are verified on every run. New schema changes follow the [migration review template](../templates/migration-review.md): additive deployment order, lock and backfill behavior, RLS and grant impact, mixed-version compatibility and the effect on Forget, export and restore.
+
+## User identity and fixed version 1 formats
+
+The authenticated person is `user`, with `userId` in TypeScript and `user_id`
+in SQL and structured identifiers. User-authored provenance uses `user`,
+`user_decision`, `user_preference`, `user_assertion` and `user_statement`.
+Callers cannot select or override the authenticated user.
+
+Migration `0041_user_identity.sql` renames the table and columns in place,
+preserving UUIDs, row identities, effective grants and row-level security.
+It updates typed provenance columns and only the defined response/provenance
+JSON fields. Memory text, caller context and metadata remain unchanged.
+Deploy the migration and service together behind the existing write fence;
+the previous service cannot use the renamed schema. Applied migrations remain
+immutable. No deployed database is changed by editing the repository.
+
+Cursor payload version 1, deletion-ledger version 1, encrypted portability
+payload version 1 and persisted receipt hashes retain their original `owner`
+keys and provenance bytes through explicit codecs. These fixed formats are
+not public API aliases. Database role ownership, existing login usernames,
+OAuth fixture subject/client IDs and deployed secret identifiers retain their
+external meanings and identities.

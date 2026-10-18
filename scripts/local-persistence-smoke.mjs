@@ -9,7 +9,7 @@ const scopeId = process.env['LOCAL_SCOPE_ID'] ?? '22222222-2222-4222-8222-222222
 const proofPath = join('var', 'local-persistence-proof.secret.json');
 
 if (mode === 'prepare') {
-  const token = await issueOwnerToken(api, issuer);
+  const token = await issueUserToken(api, issuer);
   const statement = `Local persistence smoke ${randomUUID()}`;
   const remembered = await request(`${api}/v1/memories:remember`, token, {
     method: 'POST',
@@ -95,7 +95,7 @@ if (mode === 'prepare') {
   throw new Error('Usage: node scripts/local-persistence-smoke.mjs prepare|verify');
 }
 
-async function issueOwnerToken(resource, localIssuer) {
+async function issueUserToken(resource, localIssuer) {
   const authorization = Buffer.from('demo-owner-client:owner-local-fixture-only').toString(
     'base64',
   );

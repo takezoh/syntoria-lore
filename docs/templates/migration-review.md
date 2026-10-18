@@ -4,7 +4,7 @@ Copy this file into the migration change or review record and complete each appl
 
 - Migration file / version:
 - Contract, requirement, or incident:
-- Owner and reviewer:
+- User and reviewer:
 - Forward-only deployment order:
 - Existing rows and expected data volume:
 - Lock, table rewrite, and index-build behavior:
