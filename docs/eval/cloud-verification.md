@@ -64,3 +64,15 @@ The dated local task register in [Development Plan §0.2](../DEVELOPMENT_PLAN.md
 ## Reproduction boundaries
 
 The live smoke scripts do not print bearer tokens, OAuth passwords, source content, export bundle contents, or database URLs. Use disposable synthetic principals/scopes and a non-production service target. The identity service has the approved public invoker grant for its discovery/JWKS flow; keep the API and worker private and do not infer public API access. Every governance rerun needs a fresh disposable destination because whole-scope exports include existing sources. Cleanup leaves synthetic Keycloak users/client configured but disables app principals and grants; explicitly bootstrap grants before reuse. Keep all clone restore testing on a fresh `ledger/verification/<uuid>/` prefix and disposable databases. Never invoke the empty-ledger bootstrap or fault-test against the current main ledger prefix.
+
+
+## User identity release — 2026-10-18
+
+The `user` / `user_id` release is active on `lore-api-00002-pkv` and
+`lore-worker-00002-bww`, using immutable image digest
+`47e114cd67bc7e25d1378d2b905542156e34efdaac1e9a41d63d7dc257609771`.
+Migration 0041, all-table/checksum preservation, ledger readiness, private HTTP
+readiness and authentication negatives passed; dispatch and automatic scaling
+were restored without changing identity or IAM. Ordinary user OAuth/MCP positive
+acceptance was not rerun, and external `/healthz` returned 404. See the
+[release record](user-identity-release-20261018.md) for exact evidence and limits.
