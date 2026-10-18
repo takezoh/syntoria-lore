@@ -42,7 +42,7 @@ Lore is a personal service: your memories belong to your account and are not sha
 
 Your account protects your memories with a password and an authenticator app. The [sign-in guide](docs/usage/sign-in.md) covers first sign-in, return visits and recovery.
 
-Connecting AI assistants to the hosted service is not open yet; the service currently runs privately. Signing in does not by itself give any AI access to your memories: each AI receives its own permission, read-only or with write access.
+Connecting AI assistants to the hosted API is not open yet; API and worker access remains private. Signing in does not by itself give any AI access to your memories: each AI receives its own permission, read-only or with write access.
 
 ## Use cases: ask your AI
 

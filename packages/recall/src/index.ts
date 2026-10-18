@@ -213,21 +213,21 @@ export class RecallService {
          )
          SELECT requested.id, requested.scope_id FROM requested
          WHERE requested.scope_id = ANY($2::uuid[]) AND EXISTS (
-           SELECT 1 FROM memory_versions v WHERE v.owner_id = $1 AND v.scope_id = requested.scope_id
+           SELECT 1 FROM memory_versions v WHERE v.user_id = $1 AND v.scope_id = requested.scope_id
              AND v.memory_id = requested.id AND v.revision = requested.revision
          )
          AND NOT EXISTS (
            SELECT 1 FROM memory_version_evidence mve
-           JOIN evidence e ON e.owner_id = mve.owner_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
-           JOIN sources s ON s.owner_id = e.owner_id AND s.scope_id = e.scope_id AND s.id = e.source_id
-           WHERE mve.owner_id = $1 AND mve.scope_id = requested.scope_id
+           JOIN evidence e ON e.user_id = mve.user_id AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id
+           JOIN sources s ON s.user_id = e.user_id AND s.scope_id = e.scope_id AND s.id = e.source_id
+           WHERE mve.user_id = $1 AND mve.scope_id = requested.scope_id
              AND mve.memory_id = requested.id AND mve.revision = requested.revision
              AND (s.rights_status <> 'granted' OR NOT s.consent
-               OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id
+               OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id
                  AND sp.object_id IN (requested.id, s.id, e.id)))
          )`,
           [
-            actor.ownerId,
+            actor.userId,
             requestedScopes,
             JSON.stringify(
               items.map((item) => {
@@ -391,27 +391,27 @@ export class RecallService {
             const row = await client.query<{ allowed: boolean }>(
               `SELECT NOT EXISTS (
                SELECT 1 FROM memory_version_evidence me
-               JOIN evidence e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-               JOIN sources s ON s.owner_id = e.owner_id AND s.scope_id = e.scope_id AND s.id = e.source_id
-               WHERE me.owner_id = $1 AND me.scope_id = $2 AND me.memory_id = $3 AND me.revision = $4
+               JOIN evidence e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+               JOIN sources s ON s.user_id = e.user_id AND s.scope_id = e.scope_id AND s.id = e.source_id
+               WHERE me.user_id = $1 AND me.scope_id = $2 AND me.memory_id = $3 AND me.revision = $4
                  AND (s.rights_status <> 'granted' OR NOT s.consent
-                   OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id AND sp.object_id IN (s.id,e.id,$3)))
+                   OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id AND sp.object_id IN (s.id,e.id,$3)))
              ) AS allowed`,
-              [actor.ownerId, scopeId, memory.id, memory.revision],
+              [actor.userId, scopeId, memory.id, memory.revision],
             );
             if (row.rows[0]?.allowed !== true) continue;
             const vector = vectors[memories.indexOf(memory)];
             if (vector === undefined) continue;
             const pgVector = `[${vector.join(',')}]`;
             await client.query(
-              `INSERT INTO memory_embeddings(owner_id, scope_id, memory_id, revision, model, dimension, generation, embedding)
+              `INSERT INTO memory_embeddings(user_id, scope_id, memory_id, revision, model, dimension, generation, embedding)
              SELECT $1, $2, m.id, $4, $5, $6, 1, $7::vector
-             FROM memories m WHERE m.owner_id = $1 AND m.scope_id = $2 AND m.id = $3 AND m.committed_revision = $4
-             ON CONFLICT (owner_id, scope_id, memory_id, revision, model, dimension)
+             FROM memories m WHERE m.user_id = $1 AND m.scope_id = $2 AND m.id = $3 AND m.committed_revision = $4
+             ON CONFLICT (user_id, scope_id, memory_id, revision, model, dimension)
              DO UPDATE SET generation = memory_embeddings.generation + 1, embedding = EXCLUDED.embedding, created_at = clock_timestamp()
              WHERE memory_embeddings.generation < EXCLUDED.generation`,
               [
-                actor.ownerId,
+                actor.userId,
                 scopeId,
                 memory.id,
                 memory.revision,
@@ -422,8 +422,8 @@ export class RecallService {
             );
             await client.query(
               `UPDATE memories SET indexed_revision = greatest(indexed_revision, $4)
-             WHERE owner_id = $1 AND scope_id = $2 AND id = $3 AND committed_revision = $4`,
-              [actor.ownerId, scopeId, memory.id, memory.revision],
+             WHERE user_id = $1 AND scope_id = $2 AND id = $3 AND committed_revision = $4`,
+              [actor.userId, scopeId, memory.id, memory.revision],
             );
             indexed += 1;
           }
@@ -450,24 +450,24 @@ export class RecallService {
       async (client) => {
         const result = await client.query<{ id: string }>(
           `SELECT m.id FROM memories m
-         WHERE m.owner_id=$1 AND m.scope_id=$2 AND m.lifecycle IN ('active', 'candidate')
+         WHERE m.user_id=$1 AND m.scope_id=$2 AND m.lifecycle IN ('active', 'candidate')
            AND m.committed_revision > 0
-           AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.owner_id=m.owner_id
+           AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.user_id=m.user_id
              AND e.scope_id=m.scope_id AND e.memory_id=m.id AND e.revision=m.committed_revision
              AND e.model=$3 AND e.dimension=$4)
-           AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id=m.owner_id
+           AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id=m.user_id
              AND sp.scope_id=m.scope_id AND sp.object_kind='memory' AND sp.object_id=m.id)
            AND NOT EXISTS (SELECT 1 FROM memory_version_evidence mve
-             JOIN evidence ev ON ev.owner_id=mve.owner_id AND ev.scope_id=mve.scope_id AND ev.id=mve.evidence_id
-             JOIN sources s ON s.owner_id=ev.owner_id AND s.scope_id=ev.scope_id AND s.id=ev.source_id
-             WHERE mve.owner_id=m.owner_id AND mve.scope_id=m.scope_id AND mve.memory_id=m.id
+             JOIN evidence ev ON ev.user_id=mve.user_id AND ev.scope_id=mve.scope_id AND ev.id=mve.evidence_id
+             JOIN sources s ON s.user_id=ev.user_id AND s.scope_id=ev.scope_id AND s.id=ev.source_id
+             WHERE mve.user_id=m.user_id AND mve.scope_id=m.scope_id AND mve.memory_id=m.id
                AND mve.revision=m.committed_revision AND (s.rights_status <> 'granted' OR NOT s.consent
-                 OR EXISTS (SELECT 1 FROM suppressions ss WHERE ss.owner_id=s.owner_id AND ss.scope_id=s.scope_id
+                 OR EXISTS (SELECT 1 FROM suppressions ss WHERE ss.user_id=s.user_id AND ss.scope_id=s.scope_id
                  AND ss.object_kind IN ('source', 'evidence')
                    AND ss.object_id IN (s.id, ev.id))))
          ORDER BY m.recorded_at, m.id LIMIT $5`,
           [
-            actor.ownerId,
+            actor.userId,
             scopeId,
             this.embeddings!.modelId,
             this.embeddings!.dimension,
@@ -491,14 +491,14 @@ export class RecallService {
       client,
       `AND (lower(btrim(r.statement)) = lower(btrim($3))
         OR EXISTS (
-          SELECT 1 FROM memory_subjects ms JOIN subjects s ON s.owner_id = ms.owner_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
-          WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id AND s.normalized_name = $4)
+          SELECT 1 FROM memory_subjects ms JOIN subjects s ON s.user_id = ms.user_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
+          WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id AND s.normalized_name = $4)
         OR EXISTS (
-          SELECT 1 FROM memory_subjects ms JOIN subject_aliases a ON a.owner_id = ms.owner_id AND a.scope_id = ms.scope_id AND a.subject_id = ms.subject_id
-          WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id AND a.normalized_alias = $4
+          SELECT 1 FROM memory_subjects ms JOIN subject_aliases a ON a.user_id = ms.user_id AND a.scope_id = ms.scope_id AND a.subject_id = ms.subject_id
+          WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id AND a.normalized_alias = $4
             AND ($5::timestamptz IS NULL OR (a.valid_from <= $5 AND (a.valid_to IS NULL OR a.valid_to > $5)))))`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeIds,
         query.query,
         normalizeName(query.query),
@@ -525,15 +525,15 @@ export class RecallService {
       client,
       `AND (r.statement ILIKE $10 ESCAPE '\\' OR r.context::text ILIKE $10 ESCAPE '\\'
         OR similarity(r.statement, $3) > 0.08 OR similarity(r.context::text, $3) > 0.08
-      OR EXISTS (SELECT 1 FROM memory_subjects ms JOIN subjects s ON s.owner_id = ms.owner_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
-          WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
+      OR EXISTS (SELECT 1 FROM memory_subjects ms JOIN subjects s ON s.user_id = ms.user_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
+          WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
             AND (s.normalized_name = $4 OR s.normalized_name ILIKE $10 ESCAPE '\\'))
-        OR EXISTS (SELECT 1 FROM memory_subjects ms JOIN subject_aliases a ON a.owner_id = ms.owner_id AND a.scope_id = ms.scope_id AND a.subject_id = ms.subject_id
-          WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
+        OR EXISTS (SELECT 1 FROM memory_subjects ms JOIN subject_aliases a ON a.user_id = ms.user_id AND a.scope_id = ms.scope_id AND a.subject_id = ms.subject_id
+          WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
             AND (a.normalized_alias = $4 OR a.normalized_alias ILIKE $10 ESCAPE '\\')
             AND ($5::timestamptz IS NULL OR (a.valid_from <= $5 AND (a.valid_to IS NULL OR a.valid_to > $5)))))`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeIds,
         query.query,
         normalizeName(query.query),
@@ -572,13 +572,13 @@ export class RecallService {
     const rows = await this.candidateQuery(
       client,
       `AND EXISTS (SELECT 1 FROM memory_embeddings e
-        WHERE e.owner_id = r.owner_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
+        WHERE e.user_id = r.user_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
           AND e.revision = r.revision AND e.model = $11 AND e.dimension = $12)
         AND 1 - (SELECT ${distance} FROM memory_embeddings e
-          WHERE e.owner_id = r.owner_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
+          WHERE e.user_id = r.user_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
             AND e.revision = r.revision AND e.model = $11 AND e.dimension = $12 LIMIT 1) >= $13::float8`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeIds,
         query.query,
         normalizeName(query.query),
@@ -594,18 +594,18 @@ export class RecallService {
         limit,
       ],
       `1 - (SELECT ${distance} FROM memory_embeddings e
-        WHERE e.owner_id = r.owner_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
+        WHERE e.user_id = r.user_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
           AND e.revision = r.revision AND e.model = $11 AND e.dimension = $12 LIMIT 1)
        + greatest(similarity(r.statement, $3), similarity(r.context::text, $3)) * 0.001
        + CASE WHEN EXISTS (SELECT 1 FROM memory_subjects ms JOIN subjects s
-           ON s.owner_id = ms.owner_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
-           WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
+           ON s.user_id = ms.user_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
+           WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
              AND s.normalized_name = $4) THEN 0.001::float8 ELSE 0::float8 END`,
       `(SELECT ${distance} FROM memory_embeddings e
-        WHERE e.owner_id = r.owner_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
+        WHERE e.user_id = r.user_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
           AND e.revision = r.revision AND e.model = $11 AND e.dimension = $12 LIMIT 1) ASC`,
       `(SELECT 1 - ${distance} FROM memory_embeddings e
-        WHERE e.owner_id = r.owner_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
+        WHERE e.user_id = r.user_id AND e.scope_id = r.scope_id AND e.memory_id = r.id
           AND e.revision = r.revision AND e.model = $11 AND e.dimension = $12 LIMIT 1) AS semantic_similarity`,
     );
     return rows.map((row) => ({
@@ -625,14 +625,14 @@ export class RecallService {
       client,
       `AND (r.statement ILIKE $10 ESCAPE '\\' OR r.context::text ILIKE $10 ESCAPE '\\'
           OR similarity(r.statement, $3) > 0.08 OR similarity(r.context::text, $3) > 0.08
-      OR EXISTS (SELECT 1 FROM memory_subjects ms JOIN subjects s ON s.owner_id = ms.owner_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
-            WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
+      OR EXISTS (SELECT 1 FROM memory_subjects ms JOIN subjects s ON s.user_id = ms.user_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
+            WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
               AND (s.normalized_name = $4 OR s.normalized_name ILIKE $10 ESCAPE '\\')))
-        AND EXISTS (SELECT 1 FROM change_log c WHERE c.owner_id = r.owner_id AND c.scope_id = r.scope_id
+        AND EXISTS (SELECT 1 FROM change_log c WHERE c.user_id = r.user_id AND c.scope_id = r.scope_id
           AND c.memory_id = r.id AND c.memory_revision = r.revision
           AND c.created_at <= coalesce($6::timestamptz, clock_timestamp()))`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeIds,
         query.query,
         normalizeName(query.query),
@@ -666,36 +666,36 @@ export class RecallService {
          SELECT CASE WHEN rel.from_memory_id = ANY($10::uuid[]) THEN rel.to_memory_id ELSE rel.from_memory_id END,
                 rel.scope_id, 1
          FROM relations rel
-         JOIN effective reached ON reached.owner_id = rel.owner_id AND reached.scope_id = rel.scope_id
+         JOIN effective reached ON reached.user_id = rel.user_id AND reached.scope_id = rel.scope_id
            AND reached.id = CASE WHEN rel.from_memory_id = ANY($10::uuid[]) THEN rel.to_memory_id ELSE rel.from_memory_id END
-         WHERE rel.owner_id = $1 AND rel.scope_id = ANY($2::uuid[])
+         WHERE rel.user_id = $1 AND rel.scope_id = ANY($2::uuid[])
            AND (rel.from_memory_id = ANY($10::uuid[]) OR rel.to_memory_id = ANY($10::uuid[]))
            AND ${eligibilitySql('reached')} AND NOT ${rightsDeniedSql('reached')}
          UNION
          SELECT CASE WHEN rel.from_memory_id = related.id THEN rel.to_memory_id ELSE rel.from_memory_id END,
                 rel.scope_id, related.depth + 1
-         FROM related JOIN relations rel ON rel.owner_id = $1 AND rel.scope_id = related.scope_id
+         FROM related JOIN relations rel ON rel.user_id = $1 AND rel.scope_id = related.scope_id
            AND related.depth < 2 AND (rel.from_memory_id = related.id OR rel.to_memory_id = related.id)
-         JOIN effective reached ON reached.owner_id = rel.owner_id AND reached.scope_id = rel.scope_id
+         JOIN effective reached ON reached.user_id = rel.user_id AND reached.scope_id = rel.scope_id
            AND reached.id = CASE WHEN rel.from_memory_id = related.id THEN rel.to_memory_id ELSE rel.from_memory_id END
          WHERE ${eligibilitySql('reached')} AND NOT ${rightsDeniedSql('reached')}
        )
        SELECT r.id, r.scope_id, r.revision, r.lifecycle, r.contested, r.recorded_at,
          CASE WHEN lower(btrim(r.statement)) = lower(btrim($3)) THEN 1.5::float8
               WHEN EXISTS (SELECT 1 FROM memory_subjects ms JOIN subjects s
-                ON s.owner_id = ms.owner_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
-                WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
+                ON s.user_id = ms.user_id AND s.scope_id = ms.scope_id AND s.id = ms.subject_id
+                WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id AND ms.memory_id = r.id
                   AND s.normalized_name = $4) THEN 1.25::float8 ELSE 1::float8 END AS score,
          r.indexed_revision, r.committed_revision, true AS relation_match
        FROM effective r JOIN (SELECT DISTINCT id, scope_id FROM related) x ON x.id = r.id AND x.scope_id = r.scope_id
        WHERE ${eligibilitySql('r')} AND NOT ${rightsDeniedSql('r')}
          AND (cardinality($8::uuid[]) = 0 OR r.id = ANY($8::uuid[]))
          AND (cardinality($9::uuid[]) = 0 OR EXISTS (
-           SELECT 1 FROM memory_subjects ms WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id
+           SELECT 1 FROM memory_subjects ms WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id
              AND ms.memory_id = r.id AND ms.subject_id = ANY($9::uuid[])))
        ORDER BY score DESC, r.recorded_at DESC LIMIT $11`,
       [
-        actor.ownerId,
+        actor.userId,
         scopeIds,
         query.query,
         normalizeName(query.query),
@@ -729,7 +729,7 @@ export class RecallService {
       WHERE ${eligibilitySql('r')} AND NOT ${rightsDeniedSql('r')}
         AND (cardinality($8::uuid[]) = 0 OR r.id = ANY($8::uuid[]))
         AND (cardinality($9::uuid[]) = 0 OR EXISTS (
-          SELECT 1 FROM memory_subjects ms WHERE ms.owner_id = r.owner_id AND ms.scope_id = r.scope_id
+          SELECT 1 FROM memory_subjects ms WHERE ms.user_id = r.user_id AND ms.scope_id = r.scope_id
             AND ms.memory_id = r.id AND ms.subject_id = ANY($9::uuid[])))
         ${predicate}
       ORDER BY ${orderExpression}
@@ -747,13 +747,13 @@ export class RecallService {
     const result = await client.query<{ lagging: boolean }>(
       `WITH eligible AS (
          SELECT m.id, m.scope_id, m.revision, m.indexed_revision
-         FROM memories m WHERE m.owner_id = $1 AND m.scope_id = ANY($2::uuid[])
+         FROM memories m WHERE m.user_id = $1 AND m.scope_id = ANY($2::uuid[])
            AND m.lifecycle NOT IN ('forgotten', 'retracted')
            AND ($3::timestamptz IS NULL OR m.valid_from IS NULL OR m.valid_from <= $3)
            AND ($3::timestamptz IS NULL OR m.valid_to IS NULL OR m.valid_to > $3)
            AND NOT ${rightsDeniedSql('m')}
        ) SELECT coalesce(bool_or(indexed_revision < revision), false) AS lagging FROM eligible`,
-      [actor.ownerId, scopeIds, query.valid_at ?? null],
+      [actor.userId, scopeIds, query.valid_at ?? null],
     );
     return result.rows[0]?.lagging ?? false;
   }
@@ -761,7 +761,7 @@ export class RecallService {
 
 function candidateCte(): string {
   return `WITH RECURSIVE effective AS (
-    SELECT m.id, m.owner_id, m.scope_id,
+    SELECT m.id, m.user_id, m.scope_id,
       coalesce(v.kind, m.kind) AS kind,
       coalesce(v.statement, m.statement) AS statement,
       coalesce(v.context, m.context) AS context,
@@ -776,11 +776,11 @@ function candidateCte(): string {
     LEFT JOIN LATERAL (
       SELECT version.kind, version.statement, version.context, version.lifecycle, version.contested,
         version.recorded_at, version.revision, version.valid_from, version.valid_to
-      FROM memory_versions version WHERE version.owner_id = m.owner_id AND version.scope_id = m.scope_id
+      FROM memory_versions version WHERE version.user_id = m.user_id AND version.scope_id = m.scope_id
         AND version.memory_id = m.id AND version.recorded_at <= $6
       ORDER BY version.revision DESC LIMIT 1
     ) v ON $6::timestamptz IS NOT NULL
-    WHERE m.owner_id = $1 AND m.scope_id = ANY($2::uuid[])
+    WHERE m.user_id = $1 AND m.scope_id = ANY($2::uuid[])
       AND ($6::timestamptz IS NULL OR v.revision IS NOT NULL)
   )`;
 }
@@ -795,15 +795,15 @@ function eligibilitySql(alias: string): string {
 function rightsDeniedSql(alias: string): string {
   return `(EXISTS (
       SELECT 1 FROM memory_version_evidence me
-      JOIN evidence e ON e.owner_id = me.owner_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
-      JOIN sources s ON s.owner_id = e.owner_id AND s.scope_id = e.scope_id AND s.id = e.source_id
-      WHERE me.owner_id = ${alias}.owner_id AND me.scope_id = ${alias}.scope_id
+      JOIN evidence e ON e.user_id = me.user_id AND e.scope_id = me.scope_id AND e.id = me.evidence_id
+      JOIN sources s ON s.user_id = e.user_id AND s.scope_id = e.scope_id AND s.id = e.source_id
+      WHERE me.user_id = ${alias}.user_id AND me.scope_id = ${alias}.scope_id
         AND me.memory_id = ${alias}.id AND me.revision = ${alias}.revision
         AND (s.rights_status <> 'granted' OR NOT s.consent
-          OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.owner_id = s.owner_id AND sp.scope_id = s.scope_id
+          OR EXISTS (SELECT 1 FROM suppressions sp WHERE sp.user_id = s.user_id AND sp.scope_id = s.scope_id
             AND sp.object_id IN (${alias}.id, s.id, e.id)))
     ) OR EXISTS (
-      SELECT 1 FROM suppressions sp WHERE sp.owner_id = ${alias}.owner_id
+      SELECT 1 FROM suppressions sp WHERE sp.user_id = ${alias}.user_id
         AND sp.scope_id = ${alias}.scope_id AND sp.object_kind = 'memory' AND sp.object_id = ${alias}.id
     ))`;
 }

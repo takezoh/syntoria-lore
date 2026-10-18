@@ -459,10 +459,10 @@ class MemoryCloudObjectBucket implements CloudObjectBucket {
 function ledgerEntry(requestId: string): DeletionLedgerEntry {
   return {
     request_id: requestId,
-    owner_id: randomUUID(),
+    user_id: randomUUID(),
     scope_id: randomUUID(),
     principal_id: randomUUID(),
-    actor_kind: 'owner',
+    actor_kind: 'user',
     target_memory_ids: [],
     target_source_ids: [],
     target_subject_ids: [],

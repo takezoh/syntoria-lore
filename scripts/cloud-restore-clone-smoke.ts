@@ -17,7 +17,7 @@ type Marker = {
   smoke_id: string;
   ledger_bucket: string;
   ledger_prefix: string;
-  owner_id: string;
+  user_id: string;
   scope_id: string;
   principal_id: string;
   memory_id: string;
@@ -122,37 +122,37 @@ async function prepare(): Promise<void> {
   }
 
   stage = 'synthetic-source-seed';
-  const ownerId = randomUUID();
+  const userId = randomUUID();
   const scopeId = randomUUID();
   const principalId = randomUUID();
   const subject = `cloud-restore-smoke-${smokeId}`;
   const statement = `Memory isolated restore verification ${smokeId}`;
-  await sourceAdmin.query('INSERT INTO owners(id) VALUES ($1)', [ownerId]);
+  await sourceAdmin.query('INSERT INTO users(id) VALUES ($1)', [userId]);
   await sourceAdmin.query(
-    `INSERT INTO principals(id, owner_id, issuer, subject, actor_kind)
-     VALUES ($1, $2, 'https://memory.invalid/restore-smoke', $3, 'owner')`,
-    [principalId, ownerId, subject],
+    `INSERT INTO principals(id, user_id, issuer, subject, actor_kind)
+     VALUES ($1, $2, 'https://memory.invalid/restore-smoke', $3, 'user')`,
+    [principalId, userId, subject],
   );
-  await sourceAdmin.query('INSERT INTO scopes(owner_id, id, name) VALUES ($1, $2, $3)', [
-    ownerId,
+  await sourceAdmin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+    userId,
     scopeId,
     'disposable cloud restore smoke scope',
   ]);
   await sourceAdmin.query(
-    `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+    `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
      VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])`,
-    [ownerId, scopeId, principalId],
+    [userId, scopeId, principalId],
   );
   const epochResult = await sourceAdmin.query<{ auth_epoch: string | number }>(
-    'SELECT auth_epoch FROM scopes WHERE owner_id=$1 AND id=$2',
-    [ownerId, scopeId],
+    'SELECT auth_epoch FROM scopes WHERE user_id=$1 AND id=$2',
+    [userId, scopeId],
   );
   const authEpoch = epochResult.rows[0]?.auth_epoch;
   if (authEpoch === undefined) throw new Error('synthetic scope grant was not created');
   const actor = {
-    ownerId,
+    userId,
     principalId,
-    actorKind: 'owner' as const,
+    actorKind: 'user' as const,
     scopeIds: [scopeId],
     tokenScopeIds: [scopeId],
     capabilities: ['read', 'write', 'admin'] as const,
@@ -195,8 +195,8 @@ async function prepare(): Promise<void> {
   const memoryId = (remembered['operations'] as Array<{ memory_ids: string[] }>)[0]?.memory_ids[0];
   if (memoryId === undefined) throw new Error('synthetic restore memory was not created');
   const persisted = await sourceAdmin.query<{ count: string }>(
-    'SELECT count(*)::text AS count FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3',
-    [ownerId, scopeId, memoryId],
+    'SELECT count(*)::text AS count FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3',
+    [userId, scopeId, memoryId],
   );
   if (persisted.rows[0]?.count !== '1')
     throw new Error('synthetic restore memory was not persisted');
@@ -205,7 +205,7 @@ async function prepare(): Promise<void> {
     smoke_id: smokeId,
     ledger_bucket: ledgerBucket,
     ledger_prefix: ledgerPrefix,
-    owner_id: ownerId,
+    user_id: userId,
     scope_id: scopeId,
     principal_id: principalId,
     memory_id: memoryId,
@@ -232,12 +232,12 @@ async function forgetSource(): Promise<void> {
   stage = 'source-forget';
   await writeMarker({ ...marker, status: 'forgetting' }, true);
   const sourceGovernance = new ForgetService(sourceApp, ledger, { hmacKey: forgetHmacKey });
-  const actor = await ownerActor(sourceAdmin, marker);
+  const actor = await userActor(sourceAdmin, marker);
   const previous = await sourceAdmin.query<{ id: string }>(
-    `SELECT id FROM deletion_requests WHERE owner_id=$1 AND scope_id=$2 AND principal_id=$3
+    `SELECT id FROM deletion_requests WHERE user_id=$1 AND scope_id=$2 AND principal_id=$3
        AND idempotency_key=$4 AND selector=$5::jsonb AND reason_code='user_requested'`,
     [
-      marker.owner_id,
+      marker.user_id,
       marker.scope_id,
       marker.principal_id,
       `cloud-restore-forget-${smokeId}`,
@@ -269,8 +269,8 @@ async function forgetSource(): Promise<void> {
   await sourceGovernance.verifyLedgerReadiness();
   const sourceCount = await countFixtureContent(sourceAdmin, marker);
   const completedRequest = await sourceAdmin.query<{ status: string }>(
-    'SELECT status FROM deletion_requests WHERE id=$1 AND owner_id=$2 AND scope_id=$3',
-    [requestId, marker.owner_id, marker.scope_id],
+    'SELECT status FROM deletion_requests WHERE id=$1 AND user_id=$2 AND scope_id=$3',
+    [requestId, marker.user_id, marker.scope_id],
   );
   if (
     drained.pending !== 0 ||
@@ -335,7 +335,7 @@ async function verifyClone(): Promise<void> {
 async function assertEmptySource(): Promise<void> {
   const result = await sourceAdmin.query<Record<string, string>>(
     `SELECT
-       (SELECT count(*)::text FROM owners) AS owners,
+       (SELECT count(*)::text FROM users) AS users,
        (SELECT count(*)::text FROM scopes) AS scopes,
        (SELECT count(*)::text FROM memories) AS memories,
        (SELECT count(*)::text FROM deletion_requests) AS deletion_requests,
@@ -355,8 +355,8 @@ async function assertEmptySource(): Promise<void> {
 
 async function assertMemoryExists(pool: Pool, value: Marker): Promise<void> {
   const result = await pool.query<{ count: string }>(
-    'SELECT count(*)::text AS count FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3',
-    [value.owner_id, value.scope_id, value.memory_id],
+    'SELECT count(*)::text AS count FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3',
+    [value.user_id, value.scope_id, value.memory_id],
   );
   if (result.rows[0]?.count !== '1') throw new Error('restore fixture memory is absent');
 }
@@ -364,29 +364,29 @@ async function assertMemoryExists(pool: Pool, value: Marker): Promise<void> {
 async function countFixtureContent(pool: Pool, value: Marker): Promise<Record<string, string>> {
   const result = await pool.query<Record<string, string>>(
     `SELECT
-       (SELECT count(*)::text FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3) AS memories,
-       (SELECT count(*)::text FROM memory_versions WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3) AS versions,
-       (SELECT count(*)::text FROM sources WHERE owner_id=$1 AND scope_id=$2) AS sources,
-       (SELECT count(*)::text FROM evidence WHERE owner_id=$1 AND scope_id=$2) AS evidence,
-       (SELECT count(*)::text FROM observations WHERE owner_id=$1 AND scope_id=$2) AS observations`,
-    [value.owner_id, value.scope_id, value.memory_id],
+       (SELECT count(*)::text FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3) AS memories,
+       (SELECT count(*)::text FROM memory_versions WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3) AS versions,
+       (SELECT count(*)::text FROM sources WHERE user_id=$1 AND scope_id=$2) AS sources,
+       (SELECT count(*)::text FROM evidence WHERE user_id=$1 AND scope_id=$2) AS evidence,
+       (SELECT count(*)::text FROM observations WHERE user_id=$1 AND scope_id=$2) AS observations`,
+    [value.user_id, value.scope_id, value.memory_id],
   );
   const row = result.rows[0];
   if (row === undefined) throw new Error('restore content count query returned no result');
   return row;
 }
 
-async function ownerActor(pool: Pool, value: Marker) {
+async function userActor(pool: Pool, value: Marker) {
   const result = await pool.query<{ auth_epoch: string | number }>(
-    'SELECT auth_epoch FROM scopes WHERE owner_id=$1 AND id=$2',
-    [value.owner_id, value.scope_id],
+    'SELECT auth_epoch FROM scopes WHERE user_id=$1 AND id=$2',
+    [value.user_id, value.scope_id],
   );
   const authEpoch = result.rows[0]?.auth_epoch;
   if (authEpoch === undefined) throw new Error('restore fixture grant is absent');
   return {
-    ownerId: value.owner_id,
+    userId: value.user_id,
     principalId: value.principal_id,
-    actorKind: 'owner' as const,
+    actorKind: 'user' as const,
     scopeIds: [value.scope_id],
     tokenScopeIds: [value.scope_id],
     capabilities: ['read', 'write', 'admin'] as const,
@@ -414,7 +414,7 @@ async function readMarker(path: string): Promise<Marker> {
   if (value === null || typeof value !== 'object')
     throw new Error('restore marker file is invalid');
   const candidate = value as Partial<Marker>;
-  for (const key of ['owner_id', 'scope_id', 'principal_id', 'memory_id'] as const) {
+  for (const key of ['user_id', 'scope_id', 'principal_id', 'memory_id'] as const) {
     if (typeof candidate[key] !== 'string' || !isUuid(candidate[key])) {
       throw new Error('restore marker file is invalid');
     }

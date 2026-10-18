@@ -48,7 +48,7 @@ export async function handleMcpRequest(
           instructions:
             endpoint === 'read'
               ? 'Use recall_memories to retrieve authorized memories. Results are subject to current source rights and Forget suppressions.'
-              : 'Use remember_memory only for explicit writes. Use forget_memory for owner-authorized durable deletion.',
+              : 'Use remember_memory only for explicit writes. Use forget_memory for user-authorized durable deletion.',
         },
       );
       if (endpoint === 'read') {
@@ -311,7 +311,7 @@ export async function handleMcpRequest(
             'decide_review',
             {
               description:
-                'Approve or reject a visible curation review under current revisions and Owner confirmation rules.',
+                'Approve or reject a visible curation review under current revisions and User confirmation rules.',
               inputSchema: {
                 review_id: z.uuid(),
                 idempotency_key: z.string().min(1).max(256),
@@ -336,7 +336,7 @@ export async function handleMcpRequest(
             'change_source_rights',
             {
               description:
-                'Change Owner-granted source rights and invalidate dependent memory visibility.',
+                'Change User-granted source rights and invalidate dependent memory visibility.',
               inputSchema: {
                 source_id: z.uuid(),
                 scope_id: z.uuid(),
@@ -358,7 +358,7 @@ export async function handleMcpRequest(
             'change_scope_grant',
             {
               description:
-                'Create, update, or revoke one principal grant under current Owner administration.',
+                'Create, update, or revoke one principal grant under current User administration.',
               inputSchema: {
                 scope_id: z.uuid(),
                 principal_id: z.uuid(),

@@ -1,7 +1,7 @@
-const [client = 'owner', resource = 'http://localhost:18080', requestedScope] =
+const [client = 'user', resource = 'http://localhost:18080', requestedScope] =
   process.argv.slice(2);
 const profiles = {
-  owner: {
+  user: {
     id: 'demo-owner-client',
     secret: 'owner-local-fixture-only',
     defaultScope: 'memory:read memory:write memory:admin',
@@ -13,7 +13,7 @@ const profiles = {
   },
 };
 const selected = profiles[client];
-if (!selected) throw new Error('Use owner or reader as the client profile');
+if (!selected) throw new Error('Use user or reader as the client profile');
 const body = new URLSearchParams({
   grant_type: 'client_credentials',
   resource,

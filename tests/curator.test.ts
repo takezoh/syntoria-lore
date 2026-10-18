@@ -40,7 +40,7 @@ describe('local curator fixtures', () => {
       source_revision: '1',
       locator: 'episode/1',
       content,
-      speaker: 'owner',
+      speaker: 'user',
       event_time: null,
       lineage_root: randomUUID(),
     };
@@ -74,7 +74,7 @@ describe('local curator fixtures', () => {
       source_revision: '1',
       locator: 'message/1',
       content: input,
-      speaker: 'owner',
+      speaker: 'user',
       event_time: null,
       lineage_root: randomUUID(),
     };

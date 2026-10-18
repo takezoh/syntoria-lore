@@ -65,9 +65,9 @@ try {
     issuerCutover = await cutoverPrincipalIssuer(pool, {
       sourceIssuer: requiredValue('IDENTITY_ISSUER_SOURCE'),
       targetIssuer: requiredValue('IDENTITY_ISSUER_TARGET'),
-      ownerPrincipalId: requiredValue('IDENTITY_OWNER_PRINCIPAL_ID'),
-      ownerId: requiredValue('IDENTITY_OWNER_ID'),
-      ownerSubjectId: requiredValue('IDENTITY_OWNER_SUBJECT_ID'),
+      userPrincipalId: requiredValue('IDENTITY_USER_PRINCIPAL_ID'),
+      userId: requiredValue('IDENTITY_USER_ID'),
+      userSubjectId: requiredValue('IDENTITY_USER_SUBJECT_ID'),
       databaseAdminRole: requiredValue('IDENTITY_DATABASE_ADMIN_ROLE'),
     });
   }
@@ -105,7 +105,7 @@ try {
             principal_issuer_cutover: {
               status: issuerCutover.status,
               principal_count: issuerCutover.principalCount,
-              owner_principal_id: issuerCutover.ownerPrincipalId,
+              user_principal_id: issuerCutover.userPrincipalId,
               principal_ids_preserved: issuerCutover.principalIdsPreserved,
               grants_preserved: issuerCutover.grantsPreserved,
             },

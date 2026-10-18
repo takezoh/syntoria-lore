@@ -122,7 +122,7 @@ try {
 async function assertDatabaseHasNoGovernanceHistory(pool) {
   const result = await pool.query(
     `SELECT
-       (SELECT count(*)::text FROM owners) AS owners,
+       (SELECT count(*)::text FROM users) AS users,
        (SELECT count(*)::text FROM scopes) AS scopes,
        (SELECT count(*)::text FROM memories) AS memories,
        (SELECT count(*)::text FROM deletion_requests) AS deletion_requests,
@@ -145,10 +145,10 @@ async function assertDatabaseHasNoGovernanceHistory(pool) {
 function smokeEntry(requestId) {
   return {
     request_id: requestId,
-    owner_id: randomUUID(),
+    user_id: randomUUID(),
     scope_id: randomUUID(),
     principal_id: randomUUID(),
-    actor_kind: 'owner',
+    actor_kind: 'user',
     target_memory_ids: [],
     target_source_ids: [],
     target_subject_ids: [],

@@ -4,16 +4,16 @@ import { readCloudIdentityConfig } from './cloud-identity-config.mjs';
 
 try {
   const cloudIdentity = await readCloudIdentityConfig();
-  const ownerInitialPasswordUrl = new URL(
-    `https://console.cloud.google.com/secret-manager/secret/${encodeURIComponent(cloudIdentity.ownerInitialPasswordSecret)}/versions`,
+  const userInitialPasswordUrl = new URL(
+    `https://console.cloud.google.com/secret-manager/secret/${encodeURIComponent(cloudIdentity.userInitialPasswordSecret)}/versions`,
   );
-  ownerInitialPasswordUrl.searchParams.set('project', cloudIdentity.project);
+  userInitialPasswordUrl.searchParams.set('project', cloudIdentity.project);
   const config = {
     issuer: `${cloudIdentity.identityUrl}/realms/${cloudIdentity.realm}`,
     clientId: cloudIdentity.publicClientId,
-    subject: cloudIdentity.ownerSubjectId,
+    subject: cloudIdentity.userSubjectId,
     productDisplayName: cloudIdentity.productDisplayName,
-    ownerInitialPasswordUrl: ownerInitialPasswordUrl.href,
+    userInitialPasswordUrl: userInitialPasswordUrl.href,
     cloudProject: cloudIdentity.project,
   };
   if (!config.subject || new URL(config.issuer).protocol !== 'https:')

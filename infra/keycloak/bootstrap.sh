@@ -609,58 +609,58 @@ origin_from_redirect() {
   esac
 }
 
-ensure_owner_user() {
-  BOOTSTRAP_STAGE=owner-user
-  validate_username "$OWNER_USERNAME"
-  if [ -n "${IDENTITY_OWNER_SUBJECT_ID:-}" ]; then
-    owner_user_id=$IDENTITY_OWNER_SUBJECT_ID
-    validate_uuid "$owner_user_id"
-    owner_json=$(kcadm get "users/$owner_user_id" -r "$REALM")
-    compact_owner=$(compact_json "$owner_json")
-    printf '%s' "$compact_owner" | grep -Fq "\"id\":\"$owner_user_id\"" || {
-      printf '%s\n' 'The configured owner subject ID changed' >&2
+ensure_user_account() {
+  BOOTSTRAP_STAGE=user-account
+  validate_username "$USER_USERNAME"
+  if [ -n "${IDENTITY_USER_SUBJECT_ID:-}" ]; then
+    user_subject_id=$IDENTITY_USER_SUBJECT_ID
+    validate_uuid "$user_subject_id"
+    user_json=$(kcadm get "users/$user_subject_id" -r "$REALM")
+    compact_user=$(compact_json "$user_json")
+    printf '%s' "$compact_user" | grep -Fq "\"id\":\"$user_subject_id\"" || {
+      printf '%s\n' 'The configured user subject ID changed' >&2
       exit 1
     }
-    printf '%s' "$compact_owner" | grep -Fq "\"username\":\"$OWNER_USERNAME\"" || {
-      printf '%s\n' 'The configured owner subject has an unexpected username' >&2
+    printf '%s' "$compact_user" | grep -Fq "\"username\":\"$USER_USERNAME\"" || {
+      printf '%s\n' 'The configured user subject has an unexpected username' >&2
       exit 1
     }
     return 0
   fi
-  owner_user_id=$(find_id_by_exact_name "$OWNER_USERNAME" user)
-  if [ -z "$owner_user_id" ]; then
+  user_subject_id=$(find_id_by_exact_name "$USER_USERNAME" user)
+  if [ -z "$user_subject_id" ]; then
     kcadm create users -r "$REALM" \
-      -s username="$OWNER_USERNAME" \
+      -s username="$USER_USERNAME" \
       -s enabled=true \
       -s emailVerified=true \
-      -s 'attributes.scope_ids=["'"$OWNER_SCOPE_ID"'"]' \
+      -s 'attributes.scope_ids=["'"$USER_SCOPE_ID"'"]' \
       -s 'requiredActions=["UPDATE_PASSWORD","CONFIGURE_TOTP"]' >/dev/null
-    owner_user_id=$(find_id_by_exact_name "$OWNER_USERNAME" user)
+    user_subject_id=$(find_id_by_exact_name "$USER_USERNAME" user)
   fi
 
-  [ -n "$owner_user_id" ] || {
-    printf '%s\n' 'The Keycloak-generated owner subject ID could not be resolved by exact username' >&2
+  [ -n "$user_subject_id" ] || {
+    printf '%s\n' 'The Keycloak-generated user subject ID could not be resolved by exact username' >&2
     exit 1
   }
-  validate_uuid "$owner_user_id"
-  owner_json=$(kcadm get "users/$owner_user_id" -r "$REALM")
-  compact_owner=$(compact_json "$owner_json")
-  printf '%s' "$compact_owner" | grep -Fq "\"username\":\"$OWNER_USERNAME\"" || {
-    printf '%s\n' 'The resolved owner subject is assigned to a different username' >&2
+  validate_uuid "$user_subject_id"
+  user_json=$(kcadm get "users/$user_subject_id" -r "$REALM")
+  compact_user=$(compact_json "$user_json")
+  printf '%s' "$compact_user" | grep -Fq "\"username\":\"$USER_USERNAME\"" || {
+    printf '%s\n' 'The resolved user subject is assigned to a different username' >&2
     exit 1
   }
-  printf '%s' "$compact_owner" | grep -Fq "\"scope_ids\":[\"$OWNER_SCOPE_ID\"]" || {
-    printf '%s\n' 'The owner user has a conflicting or non-exclusive scope_ids value' >&2
+  printf '%s' "$compact_user" | grep -Fq "\"scope_ids\":[\"$USER_SCOPE_ID\"]" || {
+    printf '%s\n' 'The user user has a conflicting or non-exclusive scope_ids value' >&2
     exit 1
   }
 
-  owner_credentials=$(kcadm get "users/$owner_user_id/credentials" -r "$REALM" \
+  user_credentials=$(kcadm get "users/$user_subject_id/credentials" -r "$REALM" \
     --fields=type --format csv --noquotes)
-  if ! printf '%s\n' "$owner_credentials" | grep -Fxq password; then
-    owner_password=${OWNER_INITIAL_PASSWORD:?OWNER_INITIAL_PASSWORD is required when the owner has no password credential}
-    kcadm set-password -r "$REALM" --userid "$owner_user_id" \
-      --new-password "$owner_password" --temporary >/dev/null
-    kcadm update "users/$owner_user_id" -r "$REALM" \
+  if ! printf '%s\n' "$user_credentials" | grep -Fxq password; then
+    user_password=${USER_INITIAL_PASSWORD:?USER_INITIAL_PASSWORD is required when the user has no password credential}
+    kcadm set-password -r "$REALM" --userid "$user_subject_id" \
+      --new-password "$user_password" --temporary >/dev/null
+    kcadm update "users/$user_subject_id" -r "$REALM" \
       -s 'requiredActions=["UPDATE_PASSWORD","CONFIGURE_TOTP"]' >/dev/null
   fi
 }
@@ -814,7 +814,7 @@ configure_realm() {
   ensure_public_client "$SMOKE_CLIENT_ID" "$SMOKE_REDIRECT_URI"
   ensure_account_console_url
 
-  ensure_owner_user
+  ensure_user_account
 }
 
 ensure_account_console_url() {
@@ -999,7 +999,7 @@ rename_existing_realm() {
       printf '%s\n' 'The configured source realm does not exist' >&2
       exit 1
     }
-    verify_owner_subject
+    verify_user_subject
     preflight_existing_identity
   else
     [ -z "$realm_target_id" ] || {
@@ -1007,7 +1007,7 @@ rename_existing_realm() {
       exit 1
     }
     REALM=$SOURCE_REALM
-    verify_owner_subject
+    verify_user_subject
     preflight_existing_identity
     source_confirm=$(realm_id "$SOURCE_REALM")
     [ "$source_confirm" = "$realm_source_id" ] || {
@@ -1030,14 +1030,14 @@ rename_existing_realm() {
   RENAME_MODE=true
   configure_realm
   assert_renamed_mapper_readback
-  verify_owner_subject
+  verify_user_subject
   final_id=$(realm_id "$TARGET_REALM")
   [ "$final_id" = "$realm_target_id" ] || {
     printf '%s\n' 'The target realm ID changed during reconciliation' >&2
     exit 1
   }
-  printf '{"status":"renamed-existing","realm":"%s","realm_id":"%s","owner_subject_id":"%s","same_id":true}\n' \
-    "$TARGET_REALM" "$final_id" "$IDENTITY_OWNER_SUBJECT_ID"
+  printf '{"status":"renamed-existing","realm":"%s","realm_id":"%s","user_subject_id":"%s","same_id":true}\n' \
+    "$TARGET_REALM" "$final_id" "$IDENTITY_USER_SUBJECT_ID"
 }
 
 assert_renamed_mapper_readback() {
@@ -1111,22 +1111,22 @@ realm_id() {
   printf '%s' "$realm_json" | grep -Eo '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed 's/^[^:]*:[[:space:]]*"//; s/"$//'
 }
 
-verify_owner_subject() {
-  owner_json=$(kcadm get "users/$IDENTITY_OWNER_SUBJECT_ID" -r "$REALM") || {
-    printf '%s\n' 'The configured owner subject does not exist' >&2
+verify_user_subject() {
+  user_json=$(kcadm get "users/$IDENTITY_USER_SUBJECT_ID" -r "$REALM") || {
+    printf '%s\n' 'The configured user subject does not exist' >&2
     exit 1
   }
-  compact_owner=$(compact_json "$owner_json")
-  printf '%s' "$compact_owner" | grep -Fq "\"id\":\"$IDENTITY_OWNER_SUBJECT_ID\"" || {
-    printf '%s\n' 'The configured owner subject ID changed' >&2
+  compact_user=$(compact_json "$user_json")
+  printf '%s' "$compact_user" | grep -Fq "\"id\":\"$IDENTITY_USER_SUBJECT_ID\"" || {
+    printf '%s\n' 'The configured user subject ID changed' >&2
     exit 1
   }
-  printf '%s' "$compact_owner" | grep -Fq "\"username\":\"$OWNER_USERNAME\"" || {
-    printf '%s\n' 'The configured owner subject has an unexpected username' >&2
+  printf '%s' "$compact_user" | grep -Fq "\"username\":\"$USER_USERNAME\"" || {
+    printf '%s\n' 'The configured user subject has an unexpected username' >&2
     exit 1
   }
-  printf '%s' "$compact_owner" | grep -Fq "\"scope_ids\":[\"$OWNER_SCOPE_ID\"]" || {
-    printf '%s\n' 'The configured owner scope_ids claim differs from the migration baseline' >&2
+  printf '%s' "$compact_user" | grep -Fq "\"scope_ids\":[\"$USER_SCOPE_ID\"]" || {
+    printf '%s\n' 'The configured user scope_ids claim differs from the migration baseline' >&2
     exit 1
   }
 }
@@ -1139,10 +1139,10 @@ main() {
   ISSUER_BASE=$IDENTITY_PUBLIC_URL
   API_RESOURCE_URL=${API_RESOURCE_URL:?API_RESOURCE_URL is required}
   MCP_RESOURCE_BASE_URL=${MCP_RESOURCE_BASE_URL:?MCP_RESOURCE_BASE_URL is required}
-  OWNER_ID=${IDENTITY_OWNER_ID:?IDENTITY_OWNER_ID is required}
-  OWNER_SCOPE_ID=${IDENTITY_OWNER_SCOPE_ID:?IDENTITY_OWNER_SCOPE_ID is required}
-  OWNER_USERNAME=${IDENTITY_OWNER_USERNAME:-owner}
-  OWNER_INITIAL_PASSWORD=${IDENTITY_OWNER_INITIAL_PASSWORD:-}
+  USER_ID=${IDENTITY_USER_ID:?IDENTITY_USER_ID is required}
+  USER_SCOPE_ID=${IDENTITY_USER_SCOPE_ID:?IDENTITY_USER_SCOPE_ID is required}
+  USER_USERNAME=${IDENTITY_USER_USERNAME:-owner}
+  USER_INITIAL_PASSWORD=${IDENTITY_USER_INITIAL_PASSWORD:-}
   BOOTSTRAP_USER=${KC_BOOTSTRAP_ADMIN_USERNAME:?KC_BOOTSTRAP_ADMIN_USERNAME is required}
   BOOTSTRAP_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:?KC_BOOTSTRAP_ADMIN_PASSWORD is required}
   SMOKE_CLIENT_ID=${OAUTH_SMOKE_CLIENT_ID:-memory-cloud-oauth-smoke}
@@ -1159,8 +1159,8 @@ main() {
   READ_RESOURCE_URL=${MCP_RESOURCE_BASE_URL%/}/mcp/read
   WRITE_RESOURCE_URL=${MCP_RESOURCE_BASE_URL%/}/mcp/write
 
-  validate_uuid "$OWNER_ID"
-  validate_uuid "$OWNER_SCOPE_ID"
+  validate_uuid "$USER_ID"
+  validate_uuid "$USER_SCOPE_ID"
   validate_realm_segment "$REALM"
   [ -z "$SOURCE_REALM" ] || validate_realm_segment "$SOURCE_REALM"
   validate_https_origin "$ISSUER_BASE"
@@ -1169,8 +1169,8 @@ main() {
   validate_loopback_redirect "$SMOKE_REDIRECT_URI"
   validate_client_id "$SMOKE_CLIENT_ID"
   validate_client_id "$PUBLIC_CLIENT_ID"
-  validate_username "$OWNER_USERNAME"
-  [ -z "${IDENTITY_OWNER_SUBJECT_ID:-}" ] || validate_uuid "$IDENTITY_OWNER_SUBJECT_ID"
+  validate_username "$USER_USERNAME"
+  [ -z "${IDENTITY_USER_SUBJECT_ID:-}" ] || validate_uuid "$IDENTITY_USER_SUBJECT_ID"
   [ -z "$SOURCE_REALM" ] || [ "$SOURCE_REALM" != "$REALM" ] || {
     printf '%s\n' 'The source and target realms must differ' >&2
     exit 2
@@ -1180,9 +1180,9 @@ main() {
   IDENTITY_PUBLIC_URL=$ISSUER_BASE
   API_RESOURCE_URL=${API_RESOURCE_URL%/}
   MCP_RESOURCE_BASE_URL=${MCP_RESOURCE_BASE_URL%/}
-  export ISSUER_BASE API_RESOURCE_URL MCP_RESOURCE_BASE_URL OWNER_ID OWNER_SCOPE_ID
-  export IDENTITY_PUBLIC_URL OWNER_USERNAME OWNER_INITIAL_PASSWORD REALM
-  export IDENTITY_OWNER_SUBJECT_ID SOURCE_REALM TARGET_REALM
+  export ISSUER_BASE API_RESOURCE_URL MCP_RESOURCE_BASE_URL USER_ID USER_SCOPE_ID
+  export IDENTITY_PUBLIC_URL USER_USERNAME USER_INITIAL_PASSWORD REALM
+  export IDENTITY_USER_SUBJECT_ID SOURCE_REALM TARGET_REALM
   export AUDIENCE_MAPPER_NAME SOURCE_AUDIENCE_MAPPER_NAME
   export SCOPE_IDS_MAPPER_NAME SOURCE_SCOPE_IDS_MAPPER_NAME SCOPE_IDS_SCOPE_NAME SOURCE_SCOPE_IDS_SCOPE_NAME
   export ACCOUNT_CONSOLE_URL PUBLIC_CLIENT_ID PUBLIC_REDIRECT_URI
@@ -1191,21 +1191,21 @@ main() {
   case "${OAUTH_SMOKE_ACTION:-configure}" in
     configure)
       configure_realm
-      owner_user_id=${owner_user_id:-}
+      user_subject_id=${user_subject_id:-}
       if [ -n "${OAUTH_SMOKE_USERNAME:-}" ]; then
         ensure_smoke_user
-        printf '{"status":"configured","realm":"%s","owner_subject_id":"%s","smoke_subject_id":"%s","resource_indicators":"experimental-enabled","bootstrap_password_emitted":false}\n' \
-          "$REALM" "$owner_user_id" "$smoke_user_id"
+        printf '{"status":"configured","realm":"%s","user_subject_id":"%s","smoke_subject_id":"%s","resource_indicators":"experimental-enabled","bootstrap_password_emitted":false}\n' \
+          "$REALM" "$user_subject_id" "$smoke_user_id"
       else
-        printf '{"status":"configured","realm":"%s","owner_subject_id":"%s","resource_indicators":"experimental-enabled","bootstrap_password_emitted":false}\n' \
-          "$REALM" "${owner_user_id:-}"
+        printf '{"status":"configured","realm":"%s","user_subject_id":"%s","resource_indicators":"experimental-enabled","bootstrap_password_emitted":false}\n' \
+          "$REALM" "${user_subject_id:-}"
       fi
       ;;
     ensure-smoke-user)
       configure_realm
       ensure_smoke_user
-      printf '{"status":"smoke-user-created-or-verified","realm":"%s","owner_subject_id":"%s","smoke_subject_id":"%s"}\n' \
-        "$REALM" "$owner_user_id" "$smoke_user_id"
+      printf '{"status":"smoke-user-created-or-verified","realm":"%s","user_subject_id":"%s","smoke_subject_id":"%s"}\n' \
+        "$REALM" "$user_subject_id" "$smoke_user_id"
       ;;
     delete-smoke-user)
       delete_smoke_user
@@ -1217,8 +1217,8 @@ main() {
         printf '%s\n' 'IDENTITY_SOURCE_REALM is required for rename-existing' >&2
         exit 2
       }
-      [ -n "${IDENTITY_OWNER_SUBJECT_ID:-}" ] || {
-        printf '%s\n' 'IDENTITY_OWNER_SUBJECT_ID is required for rename-existing' >&2
+      [ -n "${IDENTITY_USER_SUBJECT_ID:-}" ] || {
+        printf '%s\n' 'IDENTITY_USER_SUBJECT_ID is required for rename-existing' >&2
         exit 2
       }
       RENAME_MODE=true

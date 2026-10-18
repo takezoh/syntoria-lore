@@ -44,7 +44,7 @@ describe('cloud governance smoke response contract', () => {
     );
   });
 
-  it('requires a complete cross-owner import and a destination Recall hit', () => {
+  it('requires a complete cross-user import and a destination Recall hit', () => {
     expect(
       requireImportedMemoryId(
         { state: 'complete', id_map: { 'memories:source-1': 'destination-1' } },

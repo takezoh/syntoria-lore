@@ -10,7 +10,7 @@ const config = {
   clientId: 'memory-public-app',
   subject: 'personal-subject',
   productDisplayName: 'Syntoria Lore',
-  ownerInitialPasswordUrl:
+  userInitialPasswordUrl:
     'https://console.cloud.google.com/secret-manager/secret/lore-owner-initial-password/versions?project=example-project',
   cloudProject: 'example-project',
 };

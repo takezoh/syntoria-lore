@@ -39,43 +39,43 @@ try {
   await assertNobypassRls(sourceApp);
   await assertWorkerMember(sourceWorker);
 
-  const ownerId = randomUUID();
+  const userId = randomUUID();
   const scopeId = randomUUID();
   const subject = `restore-clone-${randomUUID()}`;
   const issuer = 'https://memory.local.test/';
-  const owner = await sourceAdmin.query<{ id: string }>(
-    'INSERT INTO owners(id) VALUES ($1) RETURNING id',
-    [ownerId],
+  const user = await sourceAdmin.query<{ id: string }>(
+    'INSERT INTO users(id) VALUES ($1) RETURNING id',
+    [userId],
   );
-  if (owner.rows[0]?.id !== ownerId) throw new Error('restore fixture Owner was not created');
+  if (user.rows[0]?.id !== userId) throw new Error('restore fixture User was not created');
   const principal = await sourceAdmin.query<{ id: string }>(
-    `INSERT INTO principals(owner_id, issuer, subject, actor_kind)
-     VALUES ($1, $2, $3, 'owner') RETURNING id`,
-    [ownerId, issuer, subject],
+    `INSERT INTO principals(user_id, issuer, subject, actor_kind)
+     VALUES ($1, $2, $3, 'user') RETURNING id`,
+    [userId, issuer, subject],
   );
   const principalId = principal.rows[0]?.id;
   if (principalId === undefined) throw new Error('restore fixture principal was not created');
-  await sourceAdmin.query('INSERT INTO scopes(owner_id, id, name) VALUES ($1, $2, $3)', [
-    ownerId,
+  await sourceAdmin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+    userId,
     scopeId,
     'pre-forget database snapshot fixture',
   ]);
   await sourceAdmin.query(
-    `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+    `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
      VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])`,
-    [ownerId, scopeId, principalId],
+    [userId, scopeId, principalId],
   );
   const grant = await sourceAdmin.query<{ auth_epoch: string | number }>(
-    'SELECT auth_epoch FROM scopes WHERE owner_id=$1 AND id=$2',
-    [ownerId, scopeId],
+    'SELECT auth_epoch FROM scopes WHERE user_id=$1 AND id=$2',
+    [userId, scopeId],
   );
   const authEpoch = grant.rows[0]?.auth_epoch;
   if (authEpoch === undefined) throw new Error('restore fixture grant was not created');
 
   const actor = {
-    ownerId,
+    userId,
     principalId,
-    actorKind: 'owner' as const,
+    actorKind: 'user' as const,
     scopeIds: [scopeId],
     tokenScopeIds: [scopeId],
     capabilities: ['read', 'write', 'admin'] as const,
@@ -116,8 +116,8 @@ try {
   const memoryId = (remembered['operations'] as Array<{ memory_ids: string[] }>)[0]?.memory_ids[0];
   if (memoryId === undefined) throw new Error('restore fixture memory was not created');
   const beforeSnapshot = await sourceAdmin.query<{ count: string }>(
-    'SELECT count(*)::text AS count FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3',
-    [ownerId, scopeId, memoryId],
+    'SELECT count(*)::text AS count FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3',
+    [userId, scopeId, memoryId],
   );
   if (beforeSnapshot.rows[0]?.count !== '1')
     throw new Error('pre-forget snapshot fixture is missing');
@@ -147,8 +147,8 @@ try {
   await sourceGovernance.processPendingWorker(sourceWorker);
   await sourceGovernance.verifyLedgerReadiness();
   const sourceAfterForget = await sourceAdmin.query<{ count: string }>(
-    'SELECT count(*)::text AS count FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3',
-    [ownerId, scopeId, memoryId],
+    'SELECT count(*)::text AS count FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3',
+    [userId, scopeId, memoryId],
   );
   if (sourceAfterForget.rows[0]?.count !== '0')
     throw new Error('source database Forget did not purge the memory');
@@ -159,8 +159,8 @@ try {
   await assertNobypassRls(restoreApp);
   await assertWorkerMember(restoreWorker);
   const preReconcile = await restoreAdmin.query<{ count: string }>(
-    'SELECT count(*)::text AS count FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3',
-    [ownerId, scopeId, memoryId],
+    'SELECT count(*)::text AS count FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3',
+    [userId, scopeId, memoryId],
   );
   if (preReconcile.rows[0]?.count !== '1')
     throw new Error('the independent PostgreSQL clone did not preserve its pre-Forget snapshot');
@@ -207,12 +207,12 @@ try {
     observations: string;
   }>(
     `SELECT
-       (SELECT count(*)::text FROM memories WHERE owner_id=$1 AND scope_id=$2 AND id=$3) AS memories,
-       (SELECT count(*)::text FROM memory_versions WHERE owner_id=$1 AND scope_id=$2 AND memory_id=$3) AS versions,
-       (SELECT count(*)::text FROM sources WHERE owner_id=$1 AND scope_id=$2) AS sources,
-       (SELECT count(*)::text FROM evidence WHERE owner_id=$1 AND scope_id=$2) AS evidence,
-       (SELECT count(*)::text FROM observations WHERE owner_id=$1 AND scope_id=$2) AS observations`,
-    [ownerId, scopeId, memoryId],
+       (SELECT count(*)::text FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=$3) AS memories,
+       (SELECT count(*)::text FROM memory_versions WHERE user_id=$1 AND scope_id=$2 AND memory_id=$3) AS versions,
+       (SELECT count(*)::text FROM sources WHERE user_id=$1 AND scope_id=$2) AS sources,
+       (SELECT count(*)::text FROM evidence WHERE user_id=$1 AND scope_id=$2) AS evidence,
+       (SELECT count(*)::text FROM observations WHERE user_id=$1 AND scope_id=$2) AS observations`,
+    [userId, scopeId, memoryId],
   );
   if (
     afterReconcile.rows[0]?.memories !== '0' ||

@@ -34,7 +34,7 @@ Runtime topology, identity, resources and objectives are defined in [infrastruct
 | packages/domain/ | Authorized transactions, change set validation and commit, revisions, bitemporal reads, signed cursors |
 | packages/connectors/ | Source registration, consent and rights, locator canonicalization and content hashing |
 | packages/curator/ | Curator and embedding ports; Vertex AI, OpenAI-compatible and deterministic local adapters; proposal and evidence-anchor validation |
-| packages/jobs/ | Capture job processing with checkpoints and leases, owner review, outbox dispatch |
+| packages/jobs/ | Capture job processing with checkpoints and leases, user review, outbox dispatch |
 | packages/recall/ | Hybrid retrieval, relation expansion, time and rights filtering, Context Pack assembly |
 | packages/governance/ | Forget and purge, deletion ledger, retention, encrypted export and import |
 | packages/runtime/ | Composition helpers: storage selection, health server and product display name |
@@ -46,13 +46,13 @@ API and worker share the domain packages as a modular monolith; the worker is a 
 
 ## Memory contract
 
-- M1: an observation records that something was asserted, not that it is true; an owner decision is not an externally verified fact.
-- M2: authority is derived from the authenticated principal, the speaker and trusted source metadata, never from model output. AI, client and connector proposals stay candidates until the owner confirms them; a client cannot rewrite an owner-attributed memory.
+- M1: an observation records that something was asserted, not that it is true; an user decision is not an externally verified fact.
+- M2: authority is derived from the authenticated principal, the speaker and trusted source metadata, never from model output. AI, client and connector proposals stay candidates until the user confirms them; a client cannot rewrite an user-attributed memory.
 - M3: valid time and recorded time are separate. Superseding closes the earlier interval instead of deleting it; historical reads choose the revision known at `known_at`, then apply `valid_at`.
 - M4: supersede, retract and forget are distinct. Contested is an epistemic flag, not a lifecycle state.
 - M5: memory versions are append-only and each revision keeps its own evidence set; derived summaries and duplicates never count as independent evidence.
 - M6: an episode keeps its condition, action and outcome as one experience.
-- M7: reprocessing old input never reverses an explicit owner decision.
+- M7: reprocessing old input never reverses an explicit user decision.
 
 The schema, relations and time model are defined in the [data model](docs/technical/data-model.md); operation semantics in the [API contract](docs/technical/mcp-api.md).
 
@@ -64,7 +64,7 @@ Capture writes observations, a job and an outbox row atomically. The scheduled s
 
 ## Authentication and authorization
 
-Keycloak issues OAuth tokens for three separate resources: the REST API, `/mcp/read` and `/mcp/write`. Token capabilities and scope IDs are intersected with live grants on every operation, and forced row-level security with transaction-local context enforces owner and scope in the database. Runtime roles are non-superuser and `NOBYPASSRLS`. The worker accepts only IAM-authenticated OIDC calls from the dedicated task and scheduler identities. Logs carry identifiers, statuses and durations, never memory content, evidence or credentials. Trust boundaries and remaining limits are in [security](docs/technical/security.md).
+Keycloak issues OAuth tokens for three separate resources: the REST API, `/mcp/read` and `/mcp/write`. Token capabilities and scope IDs are intersected with live grants on every operation, and forced row-level security with transaction-local context enforces user and scope in the database. Runtime roles are non-superuser and `NOBYPASSRLS`. The worker accepts only IAM-authenticated OIDC calls from the dedicated task and scheduler identities. Logs carry identifiers, statuses and durations, never memory content, evidence or credentials. Trust boundaries and remaining limits are in [security](docs/technical/security.md).
 
 ## Forget and restore
 

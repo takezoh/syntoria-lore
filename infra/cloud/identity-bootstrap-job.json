@@ -18,9 +18,7 @@
             "containers": [
               {
                 "image": "asia-southeast1-docker.pkg.dev/example-project/thymesis/identity-keycloak@sha256:9ae7bb7a596dbf0aaf235c264f8ce1621120f53221f9e808b34ec7890e57dc52",
-                "command": [
-                  "/opt/keycloak/cloud-oauth-bootstrap.sh"
-                ],
+                "command": ["/opt/keycloak/cloud-oauth-bootstrap.sh"],
                 "env": [
                   {
                     "name": "IDENTITY_PUBLIC_URL",
@@ -47,19 +45,19 @@
                     "value": "thymesis-bootstrap-admin"
                   },
                   {
-                    "name": "OWNER_ID",
+                    "name": "USER_ID",
                     "value": "ad1f3a02-e8f5-4ced-84e0-511bbaf6f712"
                   },
                   {
-                    "name": "OWNER_SUBJECT_ID",
+                    "name": "USER_SUBJECT_ID",
                     "value": "cf567b8c-39a8-41ff-8105-988605f9aa6d"
                   },
                   {
-                    "name": "OWNER_SCOPE_ID",
+                    "name": "USER_SCOPE_ID",
                     "value": "cc8b7c3d-a629-43b8-862d-e1672f7bc87e"
                   },
                   {
-                    "name": "OWNER_USERNAME",
+                    "name": "USER_USERNAME",
                     "value": "owner"
                   },
                   {
@@ -122,7 +120,7 @@
                     }
                   },
                   {
-                    "name": "OWNER_INITIAL_PASSWORD",
+                    "name": "USER_INITIAL_PASSWORD",
                     "valueFrom": {
                       "secretKeyRef": {
                         "name": "thymesis-owner-initial-password",

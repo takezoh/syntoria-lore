@@ -18,13 +18,13 @@ The checked-in documents describe this source version. Before execution, inspect
 
 Connecting AI clients to the hosted service is not open yet: the API and MCP endpoints are private. Develop and test against the [local stack](../technical/local-operations.md), which serves the same API, MCP endpoints and OAuth resource checks with a local signed-token issuer.
 
-The authorization model is the same in both environments. A client obtains an OAuth access token for exactly one resource—the REST API, `/mcp/read` or `/mcp/write`—through authorization code with PKCE S256, using a preregistered client and exact redirect URI. Dynamic client registration and password grants are not offered. The token's capabilities (`read`, `write`, `admin`) and scope IDs are intersected with the grant the owner gave that principal, on every request. A read-only connection has no path to write tools; a token for one resource is rejected by the others. Never pass an owner or scope you were not granted, and never put tokens in URLs or logs.
+The authorization model is the same in both environments. A client obtains an OAuth access token for exactly one resource—the REST API, `/mcp/read` or `/mcp/write`—through authorization code with PKCE S256, using a preregistered client and exact redirect URI. Dynamic client registration and password grants are not offered. The token's capabilities (`read`, `write`, `admin`) and scope IDs are intersected with the grant the user gave that principal, on every request. A read-only connection has no path to write tools; a token for one resource is rejected by the others. Never pass an user or scope you were not granted, and never put tokens in URLs or logs.
 
 | Capability | Typical use |
 | --- | --- |
 | read | Recall, get a memory, follow the change feed, read job, Forget and export status |
 | write | Remember, capture, propose and commit change sets, submit feedback |
-| admin (owner) | Enable sources, list and decide reviews, Forget, change source rights and grants, set retention, export and import |
+| admin (user) | Enable sources, list and decide reviews, Forget, change source rights and grants, set retention, export and import |
 
 ## Compose a workflow
 
@@ -32,13 +32,13 @@ Decide what triggers the workflow, which scopes it may read, which writes are au
 
 **Remember what the user states.** When the user explicitly asks to remember or correct something, call `remember_memory` (or a change set for a correction) with the user's words as evidence. It commits synchronously, and the next recall sees it. Do not label your own inference as the user's decision; Lore derives authority from the authenticated principal and evidence, not from your arguments.
 
-**Capture conversations and work.** For ongoing material, the owner first enables the source with consent. Then send observations with `capture`, a stable `operation_id` and an `Idempotency-Key`. Capture returns a job ID; poll `capture_status`. Safe facts may be committed automatically; preferences, decisions, conflicts and anything requiring reconciliation are held for the owner's review. Keep an episode's condition, action and outcome together in one observation.
+**Capture conversations and work.** For ongoing material, the user first enables the source with consent. Then send observations with `capture`, a stable `operation_id` and an `Idempotency-Key`. Capture returns a job ID; poll `capture_status`. Safe facts may be committed automatically; preferences, decisions, conflicts and anything requiring reconciliation are held for the user's review. Keep an episode's condition, action and outcome together in one observation.
 
 **Recall before you answer.** Call `recall_memories` with the user's question, a mode and a `token_budget` that fits your context. Use `precise` for names, decisions and IDs, `contextual` for current policy and background, `historical` with `valid_at` or `known_at` for questions about the past, `exploratory` for related experience and hypotheses, and `changes` for what changed. Present memories with their attribution; report contradictions and unknowns instead of filling them in.
 
-**Correct with a change set.** Use `propose_changeset` and `commit_changeset` with the memory's `expected_revision`: SUPERSEDE when something changed, RETRACT when it was wrong, CORROBORATE or REFINE when new evidence supports or sharpens it, CONTEST or RELATE to record conflicts and links. A client cannot rewrite an owner-attributed memory; propose instead and let the owner decide.
+**Correct with a change set.** Use `propose_changeset` and `commit_changeset` with the memory's `expected_revision`: SUPERSEDE when something changed, RETRACT when it was wrong, CORROBORATE or REFINE when new evidence supports or sharpens it, CONTEST or RELATE to record conflicts and links. A client cannot rewrite an user-attributed memory; propose instead and let the user decide.
 
-**Forget on request.** Forget is an owner operation. Call `forget_memory` with a selector and reason, then follow `forget_status` until purge completes. Do not keep your own copy of forgotten content.
+**Forget on request.** Forget is an user operation. Call `forget_memory` with a selector and reason, then follow `forget_status` until purge completes. Do not keep your own copy of forgotten content.
 
 ## Continue from memory
 

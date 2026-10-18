@@ -188,7 +188,7 @@ const report = {
     network_exceptions_truncated: Math.max(0, networkExceptions.length - 100),
   },
   limitations: [
-    'One local Compose stack, one owner scope, one issuer and a deterministic client workload; not a cloud-capacity or production-SLO measurement.',
+    'One local Compose stack, one user scope, one issuer and a deterministic client workload; not a cloud-capacity or production-SLO measurement.',
     'Counts and database bytes are exact PostgreSQL snapshots taken before and after the run; concurrent external writes may affect deltas.',
     'Evidence is an independently identified explicit-remember fixture row. This does not model large source artifacts or real-provider latency.',
   ],

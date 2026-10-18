@@ -8,7 +8,7 @@ const pool = createDatabase(required('MIGRATION_DATABASE_URL'), 1);
 try {
   const history = await pool.query(
     `SELECT
-       (SELECT count(*)::text FROM owners) AS owners,
+       (SELECT count(*)::text FROM users) AS users,
        (SELECT count(*)::text FROM scopes) AS scopes,
        (SELECT count(*)::text FROM memories) AS memories,
        (SELECT count(*)::text FROM deletion_requests) AS deletion_requests,

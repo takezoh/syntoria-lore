@@ -14,7 +14,7 @@ const fixtures = [];
 const setupErrors = [];
 const networkErrors = [];
 const caseResults = [];
-let ownerToken;
+let userToken;
 let readerToken;
 let wrongAudienceToken;
 let activeForgetRequestId;
@@ -25,7 +25,7 @@ const begunAt = new Date().toISOString();
 try {
   if (captureScopes.length !== 6)
     throw new Error('Local evaluation needs six isolated capture scopes');
-  ownerToken = await issue(
+  userToken = await issue(
     'demo-owner-client',
     'owner-local-fixture-only',
     api,
@@ -169,7 +169,7 @@ const report = {
     'All content is synthetic and deterministic. There is no human label set or paid/remote model in this run.',
     'The hash embedding and local curator exercise system behavior, not semantic quality of a production model.',
     'Conversation-summary results use a transparent first-four-facts text context and deterministic lexical retriever, not an LLM summary.',
-    'Each evaluation uses a new owner scope and two local OAuth principals; this is contract acceptance evidence, not a production quality or capacity claim.',
+    'Each evaluation uses a new user scope and two local OAuth principals; this is contract acceptance evidence, not a production quality or capacity claim.',
   ],
   cases: caseResults,
 };
@@ -516,23 +516,23 @@ async function seedAuthority() {
     [
       'decision',
       'asserted',
-      `Owner Mina decided on the ochre mountain pass during the thaw ${salt}-0.`,
+      `User Mina decided on the ochre mountain pass during the thaw ${salt}-0.`,
     ],
-    ['decision', 'asserted', `Owner Idris chose a low-noise alarm for the observatory ${salt}-1.`],
+    ['decision', 'asserted', `User Idris chose a low-noise alarm for the observatory ${salt}-1.`],
     [
       'preference',
       'asserted',
-      `Owner Sora prefers cedar shelves over steel racks for the archive ${salt}-2.`,
+      `User Sora prefers cedar shelves over steel racks for the archive ${salt}-2.`,
     ],
     [
       'preference',
       'asserted',
-      `Owner Kai likes concise labels on alpine equipment lockers ${salt}-3.`,
+      `User Kai likes concise labels on alpine equipment lockers ${salt}-3.`,
     ],
     [
       'fact',
       'asserted',
-      `Owner Noor asserted that the amber valve stays closed during maintenance ${salt}-4.`,
+      `User Noor asserted that the amber valve stays closed during maintenance ${salt}-4.`,
     ],
     [
       'fact',
@@ -559,10 +559,10 @@ async function seedAuthority() {
         epistemic_status === 'proposed'
           ? 'ai_proposal'
           : kind === 'decision'
-            ? 'owner_decision'
+            ? 'user_decision'
             : kind === 'preference'
-              ? 'owner_preference'
-              : 'owner_assertion',
+              ? 'user_preference'
+              : 'user_assertion',
       conversation_order: index,
     });
   }
@@ -575,7 +575,7 @@ async function seedEvidence() {
     {
       key: 'three-independent-sources-corroborated',
       kind: 'fact',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `Three field logs independently record the green lantern ${salt}.`,
       evidence: (key) => [
         evidenceCaseInput(`${key}-log-a`, '1', 'field/log-a', 'field team A'),
@@ -591,7 +591,7 @@ async function seedEvidence() {
     {
       key: 'one-source-two-distinct-locations',
       kind: 'decision',
-      authority: 'owner_decision',
+      authority: 'user_decision',
       statement: `The same inspection record places the brass seal in cabinet ${salt}.`,
       evidence: (key) => [
         evidenceCaseInput(`${key}-inspection`, '1', 'inspection/summary', 'inspection summary'),
@@ -605,10 +605,10 @@ async function seedEvidence() {
     {
       key: 'duplicate-evidence-anchor-deduplicates',
       kind: 'preference',
-      authority: 'owner_preference',
-      statement: `The owner prefers the amber paper labels ${salt}.`,
+      authority: 'user_preference',
+      statement: `The user prefers the amber paper labels ${salt}.`,
       evidence: (key) => {
-        const same = evidenceCaseInput(`${key}-owner-note`, '1', 'notes/preference', 'owner note');
+        const same = evidenceCaseInput(`${key}-owner-note`, '1', 'notes/preference', 'user note');
         return [same, { ...same, source: { ...same.source } }];
       },
       expectedEvidenceCount: 1,
@@ -619,7 +619,7 @@ async function seedEvidence() {
     {
       key: 'same-source-new-revision',
       kind: 'hypothesis',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `A revised field report still identifies the ridge beacon ${salt}.`,
       evidence: (key) => [
         evidenceCaseInput(`${key}-field-report`, '1', 'report/2026-01', 'January report'),
@@ -633,7 +633,7 @@ async function seedEvidence() {
     {
       key: 'snippet-rights-and-speaker-attribution',
       kind: 'experience',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `The frost test kept the sample stable in the insulated sleeve ${salt}.`,
       context: {
         episode: {
@@ -648,7 +648,7 @@ async function seedEvidence() {
           snippetAllowed: false,
         }),
         evidenceCaseInput(`${key}-public-result`, '1', 'lab/result', 'public-result-visible', {
-          speaker: 'owner',
+          speaker: 'user',
           snippetAllowed: true,
         }),
       ],
@@ -662,7 +662,7 @@ async function seedEvidence() {
     {
       key: 'dated-independent-procedure-sources',
       kind: 'procedure',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `During calibration, close the amber valve before pressure testing ${salt}.`,
       context: { procedure: { before: 'pressure test', action: 'close amber valve' } },
       evidence: (key) => [
@@ -693,7 +693,7 @@ async function seedEvidence() {
     };
     const first = await postJson(
       '/v1/memories:remember',
-      ownerToken,
+      userToken,
       { scope_id: scope, memory },
       { idempotencyKey },
     );
@@ -703,7 +703,7 @@ async function seedEvidence() {
     if (spec.corroboration !== undefined) {
       const corroboration = await postJson(
         '/v1/changesets',
-        ownerToken,
+        userToken,
         {
           scope_id: scope,
           operations: [
@@ -720,7 +720,7 @@ async function seedEvidence() {
       assertStatus(corroboration, 200, `propose evidence corroboration ${spec.key}`);
       const corroborated = await postJson(
         `/v1/changesets/${corroboration.body.change_set_id}:commit`,
-        ownerToken,
+        userToken,
         {},
         { idempotencyKey: `eval-evidence-corroborate-commit-${runId}-${spec.key}` },
       );
@@ -728,7 +728,7 @@ async function seedEvidence() {
       if (corroborated.body.operations?.[0]?.revisions?.[0] !== spec.expectedRevision)
         throw new Error(`Evidence fixture ${spec.key} did not reach its fixed revision`);
     }
-    const view = await getMemory(id, ownerToken);
+    const view = await getMemory(id, userToken);
     assertStatus(view, 200, `get evidence fixture ${spec.key}`);
     if (view.body.attribution?.authority !== spec.authority)
       throw new Error(`Evidence fixture ${spec.key} had unexpected authority`);
@@ -782,7 +782,7 @@ async function seedExperience() {
       ...result,
       statement,
       context,
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       conversation_order: index,
     });
   }
@@ -795,30 +795,30 @@ async function seedSecurity() {
     {
       key: 'owner-fact-single-readable-source',
       kind: 'fact',
-      authority: 'owner_assertion',
-      statement: `Owner records the cedar equipment cabinet near the west entrance ${salt}.`,
+      authority: 'user_assertion',
+      statement: `User records the cedar equipment cabinet near the west entrance ${salt}.`,
       evidence: (key) => [evidenceCaseInput(`${key}-source`, '1', 'notes/fact', 'allowed note')],
     },
     {
       key: 'owner-decision-two-supporting-sources',
       kind: 'decision',
-      authority: 'owner_decision',
-      statement: `Owner decided to store the brass seal in cabinet ${salt}.`,
+      authority: 'user_decision',
+      statement: `User decided to store the brass seal in cabinet ${salt}.`,
       context: { decision: { reason: 'restricted access', status: 'confirmed' } },
       evidence: (key) => [
-        evidenceCaseInput(`${key}-owner-note`, '1', 'decision/note', 'owner decision'),
+        evidenceCaseInput(`${key}-owner-note`, '1', 'decision/note', 'user decision'),
         evidenceCaseInput(`${key}-meeting-record`, '1', 'meeting/item', 'meeting record'),
       ],
     },
     {
       key: 'owner-preference-hidden-source-snippet',
       kind: 'preference',
-      authority: 'owner_preference',
-      statement: `Owner prefers short labels on archive boxes ${salt}.`,
+      authority: 'user_preference',
+      statement: `User prefers short labels on archive boxes ${salt}.`,
       context: { preference: { applies_to: 'archive labels', confidence: 1 } },
       evidence: (key) => [
         evidenceCaseInput(`${key}-private-note`, '1', 'private/preference', 'must-not-leak', {
-          speaker: 'owner',
+          speaker: 'user',
           snippetAllowed: false,
         }),
       ],
@@ -826,7 +826,7 @@ async function seedSecurity() {
     {
       key: 'asserted-hypothesis-with-uncertainty-context',
       kind: 'hypothesis',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `The north relay may need a second power check after frost ${salt}.`,
       context: { uncertainty: { confidence: 0.4, reason: 'single field observation' } },
       evidence: (key) => [
@@ -836,7 +836,7 @@ async function seedSecurity() {
     {
       key: 'experience-retains-condition-action-outcome',
       kind: 'experience',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `After frost, the team wrapped the gauge and it stayed dry ${salt}.`,
       context: {
         episode: {
@@ -852,7 +852,7 @@ async function seedSecurity() {
     {
       key: 'procedure-retains-ordered-steps',
       kind: 'procedure',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `During calibration, close valve A before opening the sample line ${salt}.`,
       context: { procedure: { steps: ['close valve A', 'open sample line'] } },
       evidence: (key) => [
@@ -863,7 +863,7 @@ async function seedSecurity() {
     {
       key: 'third-party-speaker-attribution',
       kind: 'fact',
-      authority: 'owner_assertion',
+      authority: 'user_assertion',
       statement: `A field technician reported that the amber gauge was dry ${salt}.`,
       context: { claim: { source_role: 'field technician' } },
       evidence: (key) => [
@@ -875,8 +875,8 @@ async function seedSecurity() {
     {
       key: 'decision-revision-has-separate-evidence-snapshots',
       kind: 'decision',
-      authority: 'owner_decision',
-      statement: `The owner selected the sealed case for winter transport ${salt}.`,
+      authority: 'user_decision',
+      statement: `The user selected the sealed case for winter transport ${salt}.`,
       context: { decision: { valid_for: 'winter transport', status: 'confirmed' } },
       evidence: (key) => [
         evidenceCaseInput(`${key}-decision-record`, '1', 'record/original', 'original decision'),
@@ -929,7 +929,7 @@ async function seedAsyncCaptures() {
     const statement = statements[index](fixtureKey);
     const captureScope = captureScopes[index];
     const externalId = `eval-capture-${runId}-${index}`;
-    const connector = await postJson('/v1/connectors', ownerToken, {
+    const connector = await postJson('/v1/connectors', userToken, {
       scope_id: captureScope,
       source_kind: 'chat',
       external_id: externalId,
@@ -942,19 +942,19 @@ async function seedAsyncCaptures() {
       scope_id: captureScope,
       operation_id: `eval-operation-${runId}-${index}`,
       source: { kind: 'chat', external_id: externalId, revision: '1' },
-      observations: [{ locator: `message/${index}`, content: statement, speaker: 'owner' }],
+      observations: [{ locator: `message/${index}`, content: statement, speaker: 'user' }],
     };
     const captureIdempotencyKey = `eval-capture-key-${runId}-${index}`;
-    const capture = await postJson('/v1/captures', ownerToken, captureRequest, {
+    const capture = await postJson('/v1/captures', userToken, captureRequest, {
       idempotencyKey: captureIdempotencyKey,
     });
     assertStatus(capture, 202, `submit capture ${index}`);
     const jobId = capture.body.job_id;
-    const terminal = await waitForCapture(jobId, ownerToken);
+    const terminal = await waitForCapture(jobId, userToken);
     if (terminal.status !== 'committed')
       throw new Error(`Local capture ${index} ended in ${terminal.status}`);
     const id = terminal.memory_ids?.[0] ?? terminal.result?.memory_ids?.[0] ?? null;
-    const recalled = await postJson('/v1/recall', ownerToken, {
+    const recalled = await postJson('/v1/recall', userToken, {
       query: statement,
       scope_ids: [captureScope],
       mode: 'precise',
@@ -996,7 +996,7 @@ async function seedAsyncCaptures() {
   });
   const heldStatement = `The cobalt rain gauge ${runId}-held is stored in the north archive.`;
   const heldExternalId = `eval-capture-${runId}-held`;
-  const heldConnector = await postJson('/v1/connectors', ownerToken, {
+  const heldConnector = await postJson('/v1/connectors', userToken, {
     scope_id: heldScope,
     source_kind: 'chat',
     external_id: heldExternalId,
@@ -1009,22 +1009,22 @@ async function seedAsyncCaptures() {
     scope_id: heldScope,
     operation_id: `eval-operation-${runId}-held`,
     source: { kind: 'chat', external_id: heldExternalId, revision: '1' },
-    observations: [{ locator: 'message/held', content: heldStatement, speaker: 'owner' }],
+    observations: [{ locator: 'message/held', content: heldStatement, speaker: 'user' }],
   };
   const heldKey = `eval-capture-key-${runId}-held`;
-  const heldCapture = await postJson('/v1/captures', ownerToken, heldRequest, {
+  const heldCapture = await postJson('/v1/captures', userToken, heldRequest, {
     idempotencyKey: heldKey,
   });
   assertStatus(heldCapture, 202, 'submit candidate-matched chat capture');
   const heldJobId = heldCapture.body.job_id;
-  const heldTerminal = await waitForCapture(heldJobId, ownerToken);
+  const heldTerminal = await waitForCapture(heldJobId, userToken);
   if (heldTerminal.status !== 'held')
     throw new Error(
       `Candidate-matched chat capture ended in ${heldTerminal.status}, expected held`,
     );
   const reviewList = await getJson(
     `/v1/review?scope_id=${encodeURIComponent(heldScope)}&status=held&limit=20`,
-    ownerToken,
+    userToken,
   );
   assertStatus(reviewList, 200, 'read candidate-matched chat review');
   const review = (reviewList.body.reviews ?? []).find((candidate) => {
@@ -1060,7 +1060,7 @@ function addTemporalCases(rows) {
     for (const test of row.tests)
       addCase('temporal_rename', `temporal-${row.scenario}-${test.name}`, {
         op: 'recall',
-        token: ownerToken,
+        token: userToken,
         query: test.query,
         mode: test.known_at === undefined ? 'precise' : 'historical',
         valid_at: test.valid_at,
@@ -1068,7 +1068,7 @@ function addTemporalCases(rows) {
         limit: test.limit ?? Math.max(1, test.expected.length),
         expected_memory_ids: test.expected,
         expected_authorities: test.expected.map((id) =>
-          [row.id].includes(id) ? row.authority : 'owner_assertion',
+          [row.id].includes(id) ? row.authority : 'user_assertion',
         ),
         expected_time: {
           valid_at: test.valid_at ?? null,
@@ -1089,13 +1089,13 @@ function addAuthorityCases(rows) {
     const row = rows[index];
     const candidate = row.epistemic_status === 'proposed';
     const variants = [
-      { name: 'owner-precise', token: ownerToken, mode: 'precise', visible: !candidate },
-      { name: 'owner-exploratory', token: ownerToken, mode: 'exploratory', visible: true },
+      { name: 'owner-precise', token: userToken, mode: 'precise', visible: !candidate },
+      { name: 'owner-exploratory', token: userToken, mode: 'exploratory', visible: true },
       { name: 'reader-precise', token: readerToken, mode: 'precise', visible: !candidate },
       { name: 'reader-exploratory', token: readerToken, mode: 'exploratory', visible: true },
       {
         name: 'known-time-after-record',
-        token: ownerToken,
+        token: userToken,
         mode: 'historical',
         known_at: '2099-01-01T00:00:00.000Z',
         visible: !candidate,
@@ -1125,7 +1125,7 @@ function addAuthorityCases(rows) {
     if (index === 4) {
       addCase('authority', 'authority-5-above-lexical-threshold-contextual', {
         op: 'recall',
-        token: ownerToken,
+        token: userToken,
         query: 'amber valve stays closed during maintenance',
         mode: 'contextual',
         expected_memory_ids: [row.id],
@@ -1159,7 +1159,7 @@ function addEvidenceCases(rows) {
     for (const variant of variants)
       addCase('independent_evidence', `evidence-${row.fixture_key}-${variant.name}`, {
         op: variant.op,
-        token: ownerToken,
+        token: userToken,
         memory_id: row.id,
         query: row.statement,
         mode: variant.mode,
@@ -1200,7 +1200,7 @@ function addUnknownCases() {
     ['near-miss', (key) => `The observatory telescope key is ${key}x, not ${key}.`],
     [
       'contradictory-claim',
-      (key) => `No owner ever confirmed that the ${key} observatory telescope exists.`,
+      (key) => `No user ever confirmed that the ${key} observatory telescope exists.`,
     ],
   ];
   for (let index = 0; index < 6; index += 1)
@@ -1209,7 +1209,7 @@ function addUnknownCases() {
       const query = makeQuery(key);
       addCase('unknown_abstention', `unknown-${index + 1}-${name}`, {
         op: 'recall',
-        token: ownerToken,
+        token: userToken,
         query,
         mode: 'precise',
         expected_memory_ids: [],
@@ -1256,7 +1256,7 @@ function addExperienceCases(rows) {
       const expected = expectsEnvelopeRejection ? [] : [row.id];
       addCase('experience_procedure', `experience-${index + 1}-${variant.name}`, {
         op: variant.op,
-        token: ownerToken,
+        token: userToken,
         memory_id: row.id,
         query: row.statement,
         mode: variant.mode,
@@ -1344,7 +1344,7 @@ function addSecurityCases(rows) {
   const aclProbe = rows[0];
   addCase('security_rights', 'acl-owner-revokes-reader-grant', {
     op: 'revoke_reader',
-    token: ownerToken,
+    token: userToken,
     principal_id: '44444444-4444-4444-8444-444444444444',
     expected_memory_ids: [],
     expected_authorities: [],
@@ -1380,7 +1380,7 @@ function addSecurityCases(rows) {
   });
   addCase('security_rights', 'forget-immediately-suppresses-memory-and-source', {
     op: 'forget_request',
-    token: ownerToken,
+    token: userToken,
     memory_id: forget.id,
     statement: forget.statement,
     source_id: forget.source_id,
@@ -1393,7 +1393,7 @@ function addSecurityCases(rows) {
   });
   addCase('security_rights', 'forget-target-is-hidden-from-get', {
     op: 'get',
-    token: ownerToken,
+    token: userToken,
     memory_id: forget.id,
     expected_memory_ids: [],
     expected_authorities: [],
@@ -1405,7 +1405,7 @@ function addSecurityCases(rows) {
   });
   addCase('security_rights', 'forget-target-is-unknown-to-recall', {
     op: 'recall',
-    token: ownerToken,
+    token: userToken,
     query: forget.statement,
     mode: 'precise',
     expected_memory_ids: [],
@@ -1416,7 +1416,7 @@ function addSecurityCases(rows) {
   });
   addCase('security_rights', 'forget-status-does-not-expose-content', {
     op: 'forget_status',
-    token: ownerToken,
+    token: userToken,
     expected_memory_ids: [],
     expected_authorities: [],
     expected_time: noTime(),
@@ -1426,7 +1426,7 @@ function addSecurityCases(rows) {
   });
   addCase('security_rights', 'forget-idempotent-replay-keeps-tombstone', {
     op: 'forget_replay',
-    token: ownerToken,
+    token: userToken,
     memory_id: forget.id,
     statement: forget.statement,
     source_id: forget.source_id,
@@ -1439,7 +1439,7 @@ function addSecurityCases(rows) {
   });
   addCase('security_rights', 'forgotten-remember-replay-does-not-restore-content', {
     op: 'remember_replay_after_forget',
-    token: ownerToken,
+    token: userToken,
     memory_id: forget.id,
     replay_body: forget.replay_body,
     replay_key: forget.replay_key,
@@ -1452,7 +1452,7 @@ function addSecurityCases(rows) {
   });
   addCase('security_rights', 'source-reimport-after-forget-is-denied', {
     op: 'remember_denied_after_forget',
-    token: ownerToken,
+    token: userToken,
     memory_id: forget.id,
     replay_body: forget.replay_body,
     expected_memory_ids: [],
@@ -1494,7 +1494,7 @@ function addAsyncCases(rows) {
       const readingMemory = ['recall', 'get', 'get_existing'].includes(variant.op);
       addCase('async_capture', `async-${index + 1}-${variant.name}`, {
         op: variant.op,
-        token: ownerToken,
+        token: userToken,
         scope_id: row.scope_id,
         memory_id: memoryId,
         job_id: row.job_id,
@@ -1996,12 +1996,12 @@ async function remember(statement, details = {}) {
   };
   const idempotencyKey = `eval-remember-${runId}-${randomUUID()}`;
   const replayBody = { scope_id: requestedScope, memory };
-  const response = await postJson('/v1/memories:remember', ownerToken, replayBody, {
+  const response = await postJson('/v1/memories:remember', userToken, replayBody, {
     idempotencyKey,
   });
   assertStatus(response, 200, 'Remember fixture');
   const id = memoryId(response.body);
-  const view = await getMemory(id, ownerToken, requestedScope);
+  const view = await getMemory(id, userToken, requestedScope);
   assertStatus(view, 200, `Get fixture ${id}`);
   const authority = view.body.attribution?.authority;
   if (expectedAuthority !== undefined && authority !== expectedAuthority)

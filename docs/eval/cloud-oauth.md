@@ -1,6 +1,16 @@
-# Cloud OAuth and MCP verification — 2026-10-17
+# Cloud OAuth and MCP verification
 
-This dated record covers the hosted identity service and the deployed OAuth checks for REST and both MCP resources. The identity design is in [infrastructure](../technical/infrastructure.md#identity-and-access); setup and smoke commands are in the [infrastructure runbook](../technical/infrastructure-runbook.md#identity-setup). Current status across all cloud boundaries is in the [cloud verification register](cloud-verification.md).
+This record retains the 2026-10-17 hosted identity and OAuth observations and adds the 2026-10-18 Lore cutover verification below. The identity design is in [infrastructure](../technical/infrastructure.md#identity-and-access); setup and smoke commands are in the [infrastructure runbook](../technical/infrastructure-runbook.md#identity-setup). Current status across all cloud boundaries is in the [cloud verification register](cloud-verification.md).
+
+## Lore cutover verification — 2026-10-18
+
+The Lore identity, API and worker services are ready on revisions `lore-identity-00001-zsq`, `lore-api-00001-bkf` and `lore-worker-00001-zlf`. The application database migration completed with 40 migrations; the prior 39 checksums, seven role OIDs, attributes and memberships were preserved. The two databases are `lore` and `lore_identity`.
+
+The `lore-identity-bootstrap` Job renamed the realm, scopes, clients and account URL, but its final mapper-name readback failed because of a limitation in the pinned Keycloak API. Do not count that Job as successful. An offline correction applied the four mapper names (`applied: 4`, `retry: 0`) while preserving mapper IDs and configuration. A separate maintenance identity-verification Job passed the existing assertions for the four mapper names and IDs, realm ID, owner subject and scope, then was deleted. The realm, owner and scope IDs remained unchanged; credential, required-action, user, component and Liquibase tables retained their recorded hashes.
+
+The full OAuth, REST and MCP verification passed on the Lore target. It verified discovery, PKCE S256, token signature/issuer/expiry/audience/subject, JWKS, scope IDs and read capability, REST API resource and Recall, MCP read Recall, the read and write tool catalogs, write-resource separation and audience isolation. Invalid resources, PKCE verifier, token-resource mismatch, redirects, wrong audiences and wrong scopes were rejected. The API remained private; this run does not establish that every write operation was exercised or open external AI onboarding.
+
+The account-browser smoke passed login, settings, logout with HTTP 204 session removal, and revisit to the username login form at `/realms/lore/login-actions/authenticate`. The browser did not use the local callback. This verifies the account route and browser flow; the owner's required password update and TOTP enrollment remain pending human actions.
 
 ## Contract under test
 
@@ -22,9 +32,9 @@ The deployed full-mode run passed these checks. The latest results and their lim
 
 On 2026-10-17, the final strict hosted governance run passed in 33.183s using real PKCE tokens, the private API IAM path, and actual Neon, GCS, and Scheduler resources. It verified encrypted cross-owner Import, destination Recall, immediate Forget suppression, completed ledger purge, and artifact removal. The first full attempt exposed a Scheduler concurrency failure; polling was serialized after a TDZ fix, and the fresh-destination rerun passed. Reusing a destination correctly returned `source_conflict`. Identity setup maintenance was explicitly approved; both setup Jobs succeeded and the original pinned identity configuration and public invocation were restored. API and worker remain private. Cleanup disabled three synthetic app principals and removed their grants (existing tokens returned 401); Keycloak test users/client remain configured, and the temporary setup Job and private credential directory were removed.
 
-## Owner account entry
+## Current owner account entry
 
-The intended personal entry is the public [Keycloak account console](https://thymesis-identity-123456789012.asia-southeast1.run.app/realms/thymesis/account/). A read-only public probe returned 404 before the proxy correction that added the account routes. Repository allowlist tests establish which methods and paths the proxy forwards, but do not prove the deployed route, account-console client behavior, or an authenticated browser session. The public redirect/login/logout/revisit flow still requires post-deployment browser verification.
+The personal entry is the public [Keycloak account console](https://lore-identity-123456789012.asia-southeast1.run.app/realms/lore/account/). The earlier 2026-10-17 probe returned 404 before the proxy correction; the 2026-10-18 browser smoke verified the live login, settings, logout and revisit flow described above. The registered 1Password connection entry has not yet been updated.
 
 ## Limits
 

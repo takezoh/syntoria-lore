@@ -25,7 +25,7 @@ let report;
 
 try {
   await provisionIsolatedScope(pool, baseScopeId, scopeId, runId);
-  const token = await issueOwnerToken(api, issuer, scopeId);
+  const token = await issueUserToken(api, issuer, scopeId);
   await control('task-fail');
   await control('provider-fail-curator');
   await request(`${api}/v1/connectors`, token, {
@@ -46,7 +46,7 @@ try {
       scope_id: scopeId,
       operation_id: `local-recovery-${runId}`,
       source: { kind: 'chat', external_id: externalId, revision: '1' },
-      observations: [{ locator: `messages/${runId}`, content: statement, speaker: 'owner' }],
+      observations: [{ locator: `messages/${runId}`, content: statement, speaker: 'user' }],
     },
   });
   const jobId = capture.body?.job_id;
@@ -193,7 +193,7 @@ const output = join('var', `recovery-${new Date().toISOString().replaceAll(':', 
 await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 process.stdout.write(`${JSON.stringify({ ...report, report_file: output }, null, 2)}\n`);
 
-async function issueOwnerToken(resourceBase, issuerUrl, scope) {
+async function issueUserToken(resourceBase, issuerUrl, scope) {
   const authorization = Buffer.from('demo-owner-client:owner-local-fixture-only').toString(
     'base64',
   );
@@ -213,37 +213,37 @@ async function issueOwnerToken(resourceBase, issuerUrl, scope) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || typeof body.access_token !== 'string')
-    throw new Error('Local Owner token acquisition failed');
+    throw new Error('Local User token acquisition failed');
   const claims = JSON.parse(
     Buffer.from(body.access_token.split('.')[1] ?? '', 'base64').toString(),
   );
   if (!Array.isArray(claims.scope_ids) || !claims.scope_ids.includes(scope))
-    throw new Error('Local Owner token does not include the configured test scope');
+    throw new Error('Local User token does not include the configured test scope');
   return body.access_token;
 }
 
 async function provisionIsolatedScope(databasePool, templateScopeId, newScopeId, run) {
   const template = await databasePool.query(
-    `SELECT s.owner_id, p.id AS principal_id
+    `SELECT s.user_id, p.id AS principal_id
      FROM scopes s
-     JOIN grants g ON g.owner_id = s.owner_id AND g.scope_id = s.id
-     JOIN principals p ON p.owner_id = g.owner_id AND p.id = g.principal_id
-     WHERE s.id = $1 AND p.actor_kind = 'owner' AND p.active
+     JOIN grants g ON g.user_id = s.user_id AND g.scope_id = s.id
+     JOIN principals p ON p.user_id = g.user_id AND p.id = g.principal_id
+     WHERE s.id = $1 AND p.actor_kind = 'user' AND p.active
        AND 'admin' = ANY(g.capabilities)
      LIMIT 1`,
     [templateScopeId],
   );
   const principal = template.rows[0];
-  if (principal === undefined) throw new Error('Local recovery owner fixture is unavailable');
-  await databasePool.query('INSERT INTO scopes(owner_id, id, name) VALUES ($1, $2, $3)', [
-    principal.owner_id,
+  if (principal === undefined) throw new Error('Local recovery user fixture is unavailable');
+  await databasePool.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+    principal.user_id,
     newScopeId,
     `local recovery ${run}`,
   ]);
   await databasePool.query(
-    `INSERT INTO grants(owner_id, scope_id, principal_id, capabilities)
+    `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
      VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])`,
-    [principal.owner_id, newScopeId, principal.principal_id],
+    [principal.user_id, newScopeId, principal.principal_id],
   );
 }
 

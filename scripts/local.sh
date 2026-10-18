@@ -47,7 +47,7 @@ case "$COMMAND" in
     compose logs --tail=100 "${2:-api}"
     ;;
   token)
-    node scripts/issue-local-token.mjs "${2:-owner}" "${3:-http://localhost:18080}" "${4:-}"
+    node scripts/issue-local-token.mjs "${2:-user}" "${3:-http://localhost:18080}" "${4:-}"
     ;;
   diagnostics)
     node scripts/local-env.mjs
@@ -102,7 +102,7 @@ Usage: sh scripts/local.sh COMMAND [ARGS]
   stop                  stop containers while preserving all local volumes
   reset                 remove this stack, its three named volumes, and .env.local
   status | logs [NAME]  inspect services
-  token [owner|reader] [RESOURCE] [SCOPE]
+  token [user|reader] [RESOURCE] [SCOPE]
   diagnostics           show counts for failed jobs, outbox lag, purge, index, and ledger
   restore-reconcile     replay the separate deletion ledger through the non-bypass worker role
   scheduler | duplicate-scheduler | fail-next-task | fail-next-provider [curator|embedding]

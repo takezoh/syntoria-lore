@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { CoreError, uuidSchema } from '@memory/contracts';
 
 export interface CursorState {
-  readonly owner: string;
+  readonly user: string;
   readonly principal: string;
   readonly scopes: readonly string[];
   readonly offsets: Readonly<Record<string, string>>;
@@ -10,7 +10,9 @@ export interface CursorState {
   readonly exp: number;
 }
 
-interface SignedCursor extends CursorState {
+// Version 1 signed payload keys are immutable; the public model uses user.
+interface SignedCursor extends Omit<CursorState, 'user'> {
+  readonly owner: string;
   readonly v: 1;
   readonly kid: string;
 }
@@ -52,7 +54,10 @@ export class CursorCodec {
     const payload: SignedCursor = {
       v: 1,
       kid: this.activeKeyId,
-      ...state,
+      owner: state.user,
+      principal: state.principal,
+      offsets: state.offsets,
+      auth_epochs: state.auth_epochs,
       scopes: [...state.scopes].sort(),
       exp: Math.floor(Date.now() / 1000) + this.lifetimeSeconds,
     };
@@ -65,7 +70,7 @@ export class CursorCodec {
 
   decode(
     token: string,
-    expected: { owner: string; principal: string; scopes: readonly string[] },
+    expected: { user: string; principal: string; scopes: readonly string[] },
   ): CursorState {
     if (token.length > 4096)
       throw new CoreError(400, 'invalid_cursor', 'The change cursor is invalid');
@@ -99,7 +104,7 @@ export class CursorCodec {
     }
     const scopes = [...expected.scopes].sort();
     if (
-      decoded.owner !== expected.owner ||
+      decoded.owner !== expected.user ||
       decoded.principal !== expected.principal ||
       decoded.scopes.length !== scopes.length ||
       decoded.scopes.some((scope, index) => scope !== scopes[index])
@@ -111,7 +116,7 @@ export class CursorCodec {
       );
     }
     return {
-      owner: decoded.owner,
+      user: decoded.owner,
       principal: decoded.principal,
       scopes: decoded.scopes,
       offsets: decoded.offsets,

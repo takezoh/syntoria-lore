@@ -106,7 +106,7 @@ const apiContract = {
     '/v1/connectors': {
       post: {
         operationId: 'configureConnectorConsent',
-        summary: 'Enable or revoke a source connector with Owner consent',
+        summary: 'Enable or revoke a source connector with User consent',
         requestBody: {
           required: true,
           content: {
@@ -170,7 +170,7 @@ const apiContract = {
     '/v1/review': {
       get: {
         operationId: 'listCurationReviews',
-        summary: 'List owner-visible curation reviews for one scope',
+        summary: 'List user-visible curation reviews for one scope',
         parameters: [
           {
             name: 'scope_id',
@@ -211,7 +211,7 @@ const apiContract = {
     '/v1/review/{review_id}': {
       get: {
         operationId: 'getCurationReview',
-        summary: 'Read an owner-visible curation review',
+        summary: 'Read an user-visible curation review',
         parameters: [
           {
             name: 'review_id',
@@ -545,7 +545,7 @@ const apiContract = {
     '/v1/sources/{source_id}:rights': {
       put: {
         operationId: 'updateSourceRights',
-        summary: 'Change source access and consent with an Owner grant',
+        summary: 'Change source access and consent with an User grant',
         parameters: [
           {
             name: 'source_id',
@@ -598,7 +598,7 @@ const apiContract = {
     '/v1/scopes/{scope_id}/retention': {
       put: {
         operationId: 'updateRetentionPolicy',
-        summary: 'Store the Owner retention policy used by bounded worker sweeps',
+        summary: 'Store the User retention policy used by bounded worker sweeps',
         parameters: [
           {
             name: 'scope_id',
@@ -624,7 +624,7 @@ const apiContract = {
     '/v1/memories/{memory_id}:feedback': {
       post: {
         operationId: 'submitMemoryFeedback',
-        summary: 'Record feedback for a memory; worker routes reassessment to Owner review',
+        summary: 'Record feedback for a memory; worker routes reassessment to User review',
         parameters: [
           {
             name: 'memory_id',
@@ -1128,7 +1128,7 @@ const apiContract = {
           expected_revision: { type: 'integer', minimum: 1 },
           decision: { enum: ['approve', 'reject'] },
           confirmation: {
-            enum: ['accept_candidate', 'owner_statement'],
+            enum: ['accept_candidate', 'user_statement'],
             default: 'accept_candidate',
           },
           reason: { type: 'string', maxLength: 4000 },
@@ -1526,12 +1526,12 @@ const apiContract = {
             type: 'object',
             required: ['actor_kind', 'authority'],
             properties: {
-              actor_kind: { enum: ['owner', 'client', 'connector', 'curator'] },
+              actor_kind: { enum: ['user', 'client', 'connector', 'curator'] },
               authority: {
                 enum: [
-                  'owner_decision',
-                  'owner_preference',
-                  'owner_assertion',
+                  'user_decision',
+                  'user_preference',
+                  'user_assertion',
                   'third_party_claim',
                   'observed_state',
                   'ai_proposal',

@@ -5,7 +5,7 @@ This document is the product contract for Release 1: the functional requirements
 ## Product principles
 
 1. **Outcome first**: the service exists to reduce re-explanation and mistakes, not to evaluate technologies. Architecture follows the finished product's requirements and operating load.
-2. **AI-first, human-controlled**: routine extraction and organization are automatic; owner confirmation, correction and Forget take precedence.
+2. **AI-first, human-controlled**: routine extraction and organization are automatic; user confirmation, correction and Forget take precedence.
 3. **Evidence before confidence**: source, speaker, authenticated principal, applicability and time outrank a model's self-assessment.
 4. **History without confusion**: past and current facts, claims and decisions, and proposals and implementations stay distinct.
 5. **Multi-agent and provider-neutral**: no dependency on a particular model, AI product or source system.
@@ -51,7 +51,7 @@ This document is the product contract for Release 1: the functional requirements
 
 **Security, operations and portability (FR-GOV)**
 
-- FR-GOV-01: Authorize delegated OAuth access per owner, scope and operation.
+- FR-GOV-01: Authorize delegated OAuth access per user, scope and operation.
 - FR-GOV-02: Provide read-only and write-capable MCP entry points with separate authorization policies.
 - FR-GOV-03: Instrument and audit capture, curation, recall and forget without logging content or secrets.
 - FR-GOV-04: Re-evaluate or block rights-dependent derived memories when source access is stopped or deleted.
@@ -60,7 +60,7 @@ This document is the product contract for Release 1: the functional requirements
 
 ## Acceptance contracts
 
-- **AC-01 Decision provenance:** An AI recommendation is never stored or returned as an owner decision.
+- **AC-01 Decision provenance:** An AI recommendation is never stored or returned as an user decision.
 - **AC-02 Temporal correctness:** Renames and policy changes are distinguished from three viewpoints: current, past and what was known at the time.
 - **AC-03 Consolidation:** Resending the same information does not multiply records, and independent evidence from another source is not lost.
 - **AC-04 Multi-client:** An explicit change by client A is correctly visible to client B's recall and change feed.

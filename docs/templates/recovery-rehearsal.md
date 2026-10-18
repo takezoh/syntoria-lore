@@ -16,7 +16,7 @@ Copy this file into a dated record under [docs/eval](../eval/) for each restore 
 - Failure injection (missing, corrupt, or gapped ledger) and fail-closed result:
 - Data-loss or duplication result:
 - Measured duration and limitations:
-- Follow-up actions and owners:
+- Follow-up actions and users:
 
 ## Rehearsal checklist
 

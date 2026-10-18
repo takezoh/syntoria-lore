@@ -15,14 +15,14 @@ try {
     if (error?.code !== 'ENOENT') throw error;
     const data = await pool.query(
       `SELECT
-         (SELECT count(*)::text FROM owners) AS owners,
+         (SELECT count(*)::text FROM users) AS users,
          (SELECT count(*)::text FROM memories) AS memories,
          (SELECT count(*)::text FROM deletion_requests) AS deletions`,
     );
     const counts = data.rows[0];
     if (
       counts === undefined ||
-      counts.owners !== '0' ||
+      counts.users !== '0' ||
       counts.memories !== '0' ||
       counts.deletions !== '0'
     ) {

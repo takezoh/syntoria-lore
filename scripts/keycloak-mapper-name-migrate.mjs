@@ -293,6 +293,18 @@ export async function writeMapperNameBaseline(filePath, baseline) {
   }
 }
 
+function isSupportedKeycloakLiquibaseLockState(rows) {
+  if (!Array.isArray(rows)) return false;
+  const canonicalRow = rows.length === 1 && rows[0]?.id === 1 && rows[0]?.locked === false;
+  const pinnedKeycloakRows =
+    rows.length === 2 &&
+    rows[0]?.id === 1 &&
+    rows[0]?.locked === false &&
+    rows[1]?.id === 1000 &&
+    rows[1]?.locked === false;
+  return canonicalRow || pinnedKeycloakRows;
+}
+
 async function applyTransaction(client, config, direction, maintenancePids) {
   let transactionOpen = false;
   let writeAttempted = false;
@@ -540,9 +552,18 @@ async function readSnapshot(client, config) {
     );
     changelog = changes.rows;
     const lockResult = await client.query(
-      'SELECT locked FROM public.databasechangeloglock ORDER BY locked',
+      'SELECT id, locked FROM public.databasechangeloglock ORDER BY id',
     );
     lock = lockResult.rows;
+  } catch {
+    fail('KEYCLOAK_SCHEMA_UNAVAILABLE');
+  }
+
+  if (!isSupportedKeycloakLiquibaseLockState(lock)) {
+    fail('KEYCLOAK_SCHEMA_VERSION_MISMATCH');
+  }
+
+  try {
     const realms = await client.query(
       'SELECT to_jsonb(r) AS row FROM public.realm r ORDER BY r.id',
     );
@@ -570,9 +591,7 @@ async function readSnapshot(client, config) {
   if (
     digest(schema) !== KEYCLOAK_SCHEMA_SHA256 ||
     digest(changelog) !== KEYCLOAK_CHANGELOG_SHA256 ||
-    changelog.length !== KEYCLOAK_CHANGELOG_COUNT ||
-    lock.length !== 1 ||
-    lock[0]?.locked !== false
+    changelog.length !== KEYCLOAK_CHANGELOG_COUNT
   ) {
     fail('KEYCLOAK_SCHEMA_VERSION_MISMATCH');
   }

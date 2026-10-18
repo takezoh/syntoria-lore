@@ -594,7 +594,7 @@ function makeBoundaryReadbacks(config: CloudBoundaryConfig): CloudBoundaryReadba
     projectPolicy: {
       bindings: [
         ...serviceAccountBindings(config.serviceAccountProjectRoles),
-        { role: 'roles/owner', members: ['user:operator@example.test'] },
+        { role: 'roles/user', members: ['user:operator@example.test'] },
         {
           role: 'roles/editor',
           members: [

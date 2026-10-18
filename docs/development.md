@@ -52,7 +52,7 @@ sh scripts/local.sh start
 sh scripts/local.sh smoke
 ```
 
-The first start generates local-only secrets in `.env.local`, starts pinned PostgreSQL with pgvector, migrations, least-privilege roles, a signed issuer with JWKS, the API, a separate private worker and Cloud Tasks and Scheduler fixtures, and waits for readiness. Ports bind to localhost only: the API at `http://localhost:18080` (OpenAPI at `/openapi.json`) and PostgreSQL at `127.0.0.1:55433`. Tokens from `sh scripts/local.sh token owner` belong to the local fixture issuer, not the cloud owner account. `stop` keeps the database, keys, deletion ledger and artifacts; `reset` deletes this project's volumes and `.env.local` after confirmation. Failure injection, restore reconciliation and other operations are in [local operations](technical/local-operations.md).
+The first start generates local-only secrets in `.env.local`, starts pinned PostgreSQL with pgvector, migrations, least-privilege roles, a signed issuer with JWKS, the API, a separate private worker and Cloud Tasks and Scheduler fixtures, and waits for readiness. Ports bind to localhost only: the API at `http://localhost:18080` (OpenAPI at `/openapi.json`) and PostgreSQL at `127.0.0.1:55433`. Tokens from `sh scripts/local.sh token user` belong to the local fixture issuer, not the cloud user account. `stop` keeps the database, keys, deletion ledger and artifacts; `reset` deletes this project's volumes and `.env.local` after confirmation. Failure injection, restore reconciliation and other operations are in [local operations](technical/local-operations.md).
 
 ## Acceptance and release
 

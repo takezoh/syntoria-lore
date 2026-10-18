@@ -4,13 +4,13 @@ Your Lore account protects your memories. You sign in with a password and an aut
 
 ## Your account page
 
-[Open your account page](https://thymesis-identity-123456789012.asia-southeast1.run.app/realms/thymesis/account/)
+[Open your account page](https://lore-identity-123456789012.asia-southeast1.run.app/realms/lore/account/)
 
-The address still carries the service's former name, Thymesis. You need only a browser; no repository, command line or local software is involved.
+You need only a browser; no repository, command line or local software is involved.
 
 ## First sign-in
 
-Your username is **owner**. The initial password is stored for you in Google Cloud Secret Manager: open the [initial password](https://console.cloud.google.com/security/secret-manager/secret/thymesis-owner-initial-password/versions?project=example-project) with your own Google account and use version **1**. Enter it only on the sign-in screen; do not paste it into a chat, a note or a message, and do not send it to anyone. If you cannot open it, check your access to the Google Cloud project rather than asking someone to forward the password.
+Your username is **owner**. The initial password is stored for you in Google Cloud Secret Manager: open the [initial password](https://console.cloud.google.com/security/secret-manager/secret/lore-owner-initial-password/versions?project=example-project) with your own Google account and use version **1**. Enter it only on the sign-in screen; do not paste it into a chat, a note or a message, and do not send it to anyone. If you cannot open it, check your access to the Google Cloud project rather than asking someone to forward the password.
 
 After the first sign-in you are asked to choose a new password and to set up an authenticator app (TOTP). When you have finished both steps and returned to the account page, your account is ready. From then on the page shows your security settings and active sessions.
 

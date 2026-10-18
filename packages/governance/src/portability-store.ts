@@ -1,3 +1,4 @@
+import { encodeIdentityProvenanceV1 } from '@memory/contracts';
 import {
   createCipheriv,
   createDecipheriv,
@@ -247,5 +248,7 @@ async function syncDirectory(path: string): Promise<void> {
 }
 
 export function portabilityPayloadHash(value: unknown): string {
-  return createHash('sha256').update(canonicalJson(value)).digest('hex');
+  return createHash('sha256')
+    .update(canonicalJson(encodeIdentityProvenanceV1(value)))
+    .digest('hex');
 }
