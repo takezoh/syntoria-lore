@@ -1,0 +1,111 @@
+# MCP and HTTP API contract
+
+## Service boundary
+
+REST and Remote MCP expose the same application services. OAuth tokens establish the principal; business arguments and identity headers cannot select an owner or widen a scope. MCP tools are thin adapters over the REST services and never reimplement core rules. Callers decide when to remember, recall or catch up and how to interpret results; Lore attributes, validates, versions and governs. See [infrastructure](infrastructure.md) for identity and transport and the [data model](data-model.md) for memory semantics.
+
+## Entry points and authorization
+
+| Entry point | Resource / audience | Purpose |
+| --- | --- | --- |
+| `/v1/*` | API resource | Full REST surface |
+| `POST /mcp/read` | MCP read resource | Recall, get, change feed and status tools only |
+| `POST /mcp/write` | MCP write resource | Remember, capture, change sets, review, governance and portability tools |
+
+A token is valid for exactly one resource. Its `memory:read`, `memory:write` and `memory:admin` capabilities and `scope_ids` claim are intersected with the principal's live grants; `admin` includes read and write. Writes require `write`. Enabling sources, listing and deciding reviews, Forget, source rights, grants, retention, export, download and import require the owner (`403 owner_required` otherwise). Missing or invalid credentials return 401; the protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the issuer, resource and scopes.
+
+## Tool and schema discovery
+
+Use MCP `initialize` followed by `tools/list` on the relevant endpoint; each tool advertises its `inputSchema`. The REST contract is served at `/openapi.json` and exported to [openapi.json](../api/openapi.json) with `npm run openapi:export`; `npm run openapi:check` fails when they diverge. Input schemas reject unknown keys. The running deployment defines the available tools; this checkout may describe a different version.
+
+| MCP endpoint | Tools |
+| --- | --- |
+| `/mcp/read` | `recall_memories`, `get_memory`, `get_changes`, `capture_status`, `forget_status`, `export_status`, `list_reviews`, `get_review` |
+| `/mcp/write` | `remember_memory`, `capture`, `propose_changeset`, `commit_changeset`, `decide_review`, `forget_memory`, `change_source_rights`, `change_scope_grant`, `set_retention_policy`, `submit_feedback`, `request_export`, `import_bundle` |
+
+Review tools on the read endpoint still require the owner.
+
+## REST operations
+
+| Operation | Endpoint | Notes |
+| --- | --- | --- |
+| Remember | `POST /v1/memories:remember` | Synchronous commit of one memory with evidence |
+| Get memory | `GET /v1/memories/{id}` | Current or historical (`valid_at`, `known_at`) revision with evidence and relations |
+| Feedback | `POST /v1/memories/{id}:feedback` | `useful`, `incorrect`, `stale` or `not_relevant`; queued for reassessment |
+| Propose change set | `POST /v1/changesets` | Validated, persisted proposal |
+| Commit change set | `POST /v1/changesets/{id}:commit` | Rechecks access, rights and revisions; atomic |
+| Recall | `POST /v1/recall` | Mode, budget and time selection; Context Pack |
+| Changes | `GET /v1/changes` | Opaque cursor, `limit` 1–200 (default 50) |
+| Enable source | `POST /v1/connectors` | Owner; enabling requires `consent: true` |
+| Capture | `POST /v1/captures` | `Idempotency-Key`; 202 with job ID |
+| Capture status | `GET /v1/captures/{id}` | `accepted`, `processing`, `committed`, `held`, `failed` |
+| Reviews | `GET /v1/review`, `GET /v1/review/{id}`, `POST /v1/review/{id}:decision` | Owner; decision requires `expected_revision` |
+| Forget | `POST /v1/forget`, `GET /v1/forget/{id}` | Owner; immediate suppression, purge progress |
+| Source rights | `PUT /v1/sources/{id}:rights` | Owner; `granted` or `revoked` |
+| Grants | `PUT /v1/scopes/{id}/grants` | Owner; capabilities, expiry or revocation for a principal |
+| Retention | `PUT /v1/scopes/{id}/retention` | Owner; bounded observation and memory ages |
+| Export | `POST /v1/exports`, `GET /v1/exports/{id}`, `GET /v1/exports/{id}:download` | Owner for create and download; asynchronous encrypted bundle |
+| Import | `POST /v1/imports` | Owner; `Idempotency-Key`; authenticated bundle |
+
+`/v1/capture`, `/v1/jobs/{id}` and `/v1/reviews` remain as aliases. Every response carries `request_id` and `trace_id`.
+
+## Remember and change sets
+
+`remember_memory` commits one memory—kind, statement, structured context, subjects, valid-time interval, epistemic status and 1–64 evidence items—synchronously and returns its revision. Authority comes from the authenticated principal: the owner's explicit remember is an owner assertion, a client's is a candidate. Use it only for what the user explicitly asked to remember or correct.
+
+A change set holds 1–64 operations (CREATE, CORROBORATE, REFINE, SUPERSEDE, CONTEST, RELATE, RETRACT, NO_OP) for one scope, each with the target's `expected_revision`. Proposal and commit are separate; a commit is all-or-nothing and returns `409 revision_conflict` when any target moved. Replaying a committed proposal returns its stored response only to the proposing principal or the owner.
+
+## Capture and review
+
+The owner first enables a source (`chat`, `document`, `tool_result` or `episode`) with consent. Capture then submits the source revision and 1–256 immutable observations (locator, content up to 32 KiB, speaker, event time) with an `operation_id` and an `Idempotency-Key`. Observations are deduplicated by source, revision, canonical locator and content hash, so replays under another operation ID do not multiply evidence. Capture returns `202` and a job ID.
+
+The worker checkpoints provider output before reconciliation; retries reuse the checkpoint, and a lease token fences every write. Revoking consent revokes the source and advances the scope authorization epoch, so a saved checkpoint cannot commit under the old authorization. Safe inferred facts may be committed automatically. Preferences, decisions, conflicts and proposals that require reconciliation are held for owner review. Episode sources must yield one experience that cites the complete observation with matching condition, action and outcome; otherwise the proposal is held as invalid output.
+
+Review decisions (`approve` or `reject`) require the current `expected_revision`. `accept_candidate` approves under curator attribution; `owner_statement` records a separate owner confirmation for the owner's own policy or preference without rewriting the original speaker or verifying an external claim. A candidate that matches existing memories cannot be approved as a new CREATE: reject it and commit the intended operation, such as CORROBORATE, against the existing memory. Decisions are idempotent per key and principal; replay does not bypass a revoked source.
+
+## Recall
+
+`recall_memories` / `POST /v1/recall` accepts `query`, `scope_ids`, optional `subject_ids` and `memory_ids`, `mode`, `token_budget` (64–32,000, default 4,000), `valid_at`, `known_at` and `limit` (1–100, default 20).
+
+| Mode | Contract |
+| --- | --- |
+| `precise` (default) | Exact decisions, names and IDs; exact lexical matching first |
+| `contextual` | Currently valid policy, background and applicability |
+| `historical` | Revision valid at `valid_at`, as known at `known_at` |
+| `exploratory` | Related experiences and hypotheses, separated from confirmed memories |
+| `changes` | Differences since a point; never substituted by full-text search |
+
+Candidates are filtered by scope access, current source rights and Forget suppression before ranking, then by valid time, lifecycle and evidence. The response contains `matches`, a `context_pack`, `coverage`, `insufficiencies`, `unknown` and `estimated_tokens`. The complete pack, including coverage and uncertainty metadata, fits `token_budget`; truncation never drops evidence references or uncertainty flags. When evidence is insufficient, `unknown` is true instead of an invented answer. Recall reads the source of truth, so an explicit remember is visible before indexing completes and recall continues when the embedding provider is unavailable.
+
+## Changes and cursors
+
+`get_changes` / `GET /v1/changes` returns committed changes in per-scope commit order with `next_cursor` and `has_more`. Start without a cursor and keep the returned cursor with your own state; advance only after applying a page. The cursor is signed and bound to the principal, scope set and authorization epochs: a tampered or mismatched cursor is rejected, an authorization change requires a fresh start, and an expired cursor returns `410 cursor_expired`. Forgotten memories appear as tombstones with ID and last revision only; imported memories appear as content-free `IMPORT` events. Reading the feed does not mark anything as read or confirmed.
+
+## Forget, source rights and retention
+
+`forget_memory` / `POST /v1/forget` takes a scope, a selector of memory, source or subject IDs, a reason (`user_requested`, `source_revoked`, `retention_expired`, `correction`) and an idempotency key. It commits suppression and content-free `RETRACT` tombstones atomically and appends the deletion instruction to the independent ledger; the response carries `forget_request_id`, distinct from the per-call `request_id`. Poll `forget_status` for progress; status never returns forgotten content. Physical completion is reported only after queued export files are also removed. Protected reads and MCP fail closed while the ledger is unavailable, corrupt or ahead of the database.
+
+Source-rights revocation is separate from Forget. It blocks dependent reads under current rights checks, advances the scope's authorization epoch and invalidates every earlier ready export in that scope. A grant of rights is a current-scope decision and does not rewrite imported provenance or owner attribution. Retention policies bound observation and memory ages; expiry goes through the same suppression, ledger and purge path as Forget.
+
+## Export and import
+
+`request_export` creates an idempotent asynchronous job for a complete scope. Status and download require current authorization, matching deletion and authorization epochs, a ready artifact and an unexpired job. Expired artifacts receive durable cleanup tombstones and are removed; claim tokens fence stale workers.
+
+`import_bundle` authenticates the encrypted bundle, validates its schema, remaps entity and lineage IDs and commits records and change events atomically. Each version's original `recorded_at` is preserved; the change event uses the import time. An authenticated bundle proves origin and integrity, not ownership: the importer becomes `created_by`, current attribution becomes connector `third_party_claim`, and the previous owner's authority is kept only as provenance. Imported sources are not readable in the destination unless `grant_imported_sources` is set. Reusing a key with a different bundle or option is a conflict.
+
+## Responses and recovery
+
+| Error | Meaning and caller action |
+| --- | --- |
+| `400 invalid_request`, `invalid_cursor`, `invalid_evidence_anchor` | Fix the request; do not retry unchanged |
+| `401 unauthorized` | Obtain a token for this exact resource |
+| `403 forbidden`, `owner_required`, `source_not_authorized` | Outside the principal's grant or source rights |
+| `404 not_found` | Missing or not visible; existence of inaccessible records is not revealed |
+| `409 revision_conflict` | Re-read and reconcile, then propose against the new revision |
+| `409 idempotency_conflict` | Same key, different body; a caller bug |
+| `410 cursor_expired` | Recall afresh and restart the feed |
+| `413 payload_too_large` | Request body over 1 MiB |
+| `429 rate_limited` | Retry after the indicated delay |
+| `503 restore_not_ready`, `curator_timeout`, `database_error` | Retryable after a delay; protected reads stay closed during restore reconciliation |
+
+Keep the exact operation, `operation_id`, idempotency key and arguments of every write until its result is known. A lost response is an unknown outcome: resend the identical request or read the job status, never retry with a fresh ID.
