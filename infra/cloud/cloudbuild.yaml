@@ -1,0 +1,13 @@
+serviceAccount: projects/example-project/serviceAccounts/lore-build@example-project.iam.gserviceaccount.com
+timeout: 1800s
+options:
+  logging: CLOUD_LOGGING_ONLY
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=Dockerfile
+      - --tag=asia-southeast1-docker.pkg.dev/example-project/lore/runtime:$BUILD_ID
+      - .
+images:
+  - asia-southeast1-docker.pkg.dev/example-project/lore/runtime:$BUILD_ID

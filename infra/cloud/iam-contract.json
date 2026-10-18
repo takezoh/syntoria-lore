@@ -1,0 +1,391 @@
+{
+  "project": "example-project",
+  "region": "asia-southeast1",
+  "readbackFiles": {
+    "projectPolicy": "lore-project-iam-readback.json",
+    "ledgerPolicy": "lore-ledger-iam-readback.json",
+    "artifactPolicy": "lore-artifact-iam-readback.json",
+    "workerPolicy": "lore-worker-final-policy.json",
+    "artifactBucket": "lore-artifact-bucket-readback.json",
+    "customRoles": "lore-gcs-custom-role-readbacks.json",
+    "secretPolicies": "lore-secret-iam-readbacks.json",
+    "resourcePolicies": "lore-resource-iam-readbacks.json",
+    "serviceAccountPolicies": "lore-service-account-policy-readbacks.json"
+  },
+  "serviceAccounts": {
+    "api": "lore-api@example-project.iam.gserviceaccount.com",
+    "worker": "lore-worker@example-project.iam.gserviceaccount.com",
+    "migration": "lore-migration@example-project.iam.gserviceaccount.com",
+    "taskInvoker": "lore-task-invoker@example-project.iam.gserviceaccount.com",
+    "schedulerInvoker": "lore-scheduler-invoker@example-project.iam.gserviceaccount.com",
+    "build": "lore-build@example-project.iam.gserviceaccount.com",
+    "identity": "lore-identity@example-project.iam.gserviceaccount.com",
+    "identityBootstrap": "lore-identity-bootstrap@example-project.iam.gserviceaccount.com"
+  },
+  "principals": {
+    "api": {
+      "secrets": [
+        "lore-app-database-url:1",
+        "lore-forget-hmac-key:1",
+        "lore-portability-master-key:1",
+        "lore-cursor-hmac-keys:1"
+      ],
+      "roles": [
+        "roles/aiplatform.user on project example-project",
+        "custom ledger HEAD role on object ledger/HEAD.json only",
+        "custom ledger node role on prefix ledger/objects/",
+        "custom artifact read role on bucket example-lore-artifacts"
+      ]
+    },
+    "worker": {
+      "secrets": [
+        "lore-worker-database-url:1",
+        "lore-forget-hmac-key:1",
+        "lore-portability-master-key:1",
+        "lore-cursor-hmac-keys:1"
+      ],
+      "roles": [
+        "roles/aiplatform.user on project example-project",
+        "custom ledger HEAD role on object ledger/HEAD.json only",
+        "custom ledger node role on prefix ledger/objects/",
+        "custom artifact worker role on bucket example-lore-artifacts",
+        "roles/cloudtasks.enqueuer on queue lore-capture",
+        "roles/iam.serviceAccountUser on lore-task-invoker only"
+      ]
+    },
+    "migration": {
+      "secrets": [
+        "lore-migration-direct-url:1",
+        "lore-app-database-url:1",
+        "lore-worker-database-url:1"
+      ],
+      "roles": [],
+      "forbidden": [
+        "No Secret Accessor on identity, OAuth bootstrap, or runtime HMAC secrets",
+        "No runtime, ledger, artifact, Vertex, or Cloud Tasks permissions"
+      ]
+    },
+    "taskInvoker": {
+      "roles": [
+        "roles/run.invoker on service lore-worker only"
+      ]
+    },
+    "schedulerInvoker": {
+      "roles": [
+        "roles/run.invoker on service lore-worker only"
+      ]
+    },
+    "build": {
+      "roles": [
+        "roles/artifactregistry.writer on repository lore",
+        "roles/storage.objectViewer on bucket example-lore-build-source",
+        "roles/logging.logWriter on project example-project"
+      ]
+    },
+    "identity": {
+      "secrets": [
+        "lore-identity-jdbc-url:1",
+        "lore-identity-db-password:1"
+      ],
+      "roles": []
+    },
+    "identityBootstrap": {
+      "secrets": [
+        "lore-identity-jdbc-url:1",
+        "lore-identity-db-password:1",
+        "lore-identity-bootstrap-password:1"
+      ],
+      "roles": []
+    }
+  },
+  "workerService": {
+    "ingress": "all; Cloud Run IAM remains required",
+    "serviceLevelCustomAudience": "https://lore-worker-123456789012.asia-southeast1.run.app",
+    "expectedServiceAccountInvokers": [
+      "lore-task-invoker@example-project.iam.gserviceaccount.com",
+      "lore-scheduler-invoker@example-project.iam.gserviceaccount.com"
+    ],
+    "publicInvokerAllowed": false,
+    "operatorExistingInvoker": "existing operator access is inherited at project scope; do not add a service-level operator invoker binding"
+  },
+  "gcsBoundary": {
+    "ledgerBucket": "example-lore-ledger",
+    "artifactBucket": "example-lore-artifacts",
+    "artifactBucketSettings": {
+      "versioningEnabled": false,
+      "softDeleteRetentionSeconds": 0,
+      "uniformBucketLevelAccess": true,
+      "publicAccessPrevention": "enforced"
+    },
+    "customRoles": {
+      "ledgerHead": {
+        "name": "projects/example-project/roles/loreLedgerHead",
+        "title": "Memory service ledger HEAD CAS",
+        "stage": "GA",
+        "permissions": [
+          "storage.objects.create",
+          "storage.objects.delete",
+          "storage.objects.get"
+        ]
+      },
+      "ledgerNode": {
+        "name": "projects/example-project/roles/loreLedgerNode",
+        "title": "Memory service immutable ledger nodes",
+        "stage": "GA",
+        "permissions": [
+          "storage.objects.create",
+          "storage.objects.get"
+        ]
+      },
+      "artifactRead": {
+        "name": "projects/example-project/roles/loreArtifactRead",
+        "title": "Memory service artifact download",
+        "stage": "GA",
+        "permissions": [
+          "storage.objects.get"
+        ]
+      },
+      "artifactWorker": {
+        "name": "projects/example-project/roles/loreArtifactWorker",
+        "title": "Memory service artifact lifecycle",
+        "stage": "GA",
+        "permissions": [
+          "storage.objects.create",
+          "storage.objects.delete",
+          "storage.objects.get",
+          "storage.objects.list"
+        ]
+      }
+    },
+    "bucketBindings": {
+      "ledger": [
+        {
+          "role": "projects/example-project/roles/loreLedgerHead",
+          "members": [
+            "serviceAccount:lore-api@example-project.iam.gserviceaccount.com",
+            "serviceAccount:lore-worker@example-project.iam.gserviceaccount.com"
+          ],
+          "condition": {
+            "title": "ledger-head-only",
+            "expression": "resource.name == 'projects/_/buckets/example-lore-ledger/objects/ledger/HEAD.json'"
+          }
+        },
+        {
+          "role": "projects/example-project/roles/loreLedgerNode",
+          "members": [
+            "serviceAccount:lore-api@example-project.iam.gserviceaccount.com",
+            "serviceAccount:lore-worker@example-project.iam.gserviceaccount.com"
+          ],
+          "condition": {
+            "title": "ledger-immutable-nodes",
+            "expression": "resource.name.startsWith('projects/_/buckets/example-lore-ledger/objects/ledger/objects/')"
+          }
+        }
+      ],
+      "artifacts": [
+        {
+          "role": "projects/example-project/roles/loreArtifactRead",
+          "members": [
+            "serviceAccount:lore-api@example-project.iam.gserviceaccount.com"
+          ]
+        },
+        {
+          "role": "projects/example-project/roles/loreArtifactWorker",
+          "members": [
+            "serviceAccount:lore-worker@example-project.iam.gserviceaccount.com"
+          ]
+        }
+      ]
+    },
+    "preservedBucketBindings": [
+      {
+        "role": "roles/storage.legacyBucketOwner",
+        "members": [
+          "projectEditor:example-project",
+          "projectOwner:example-project"
+        ],
+        "condition": null
+      },
+      {
+        "role": "roles/storage.legacyBucketReader",
+        "members": [
+          "projectViewer:example-project"
+        ],
+        "condition": null
+      },
+      {
+        "role": "roles/storage.legacyObjectOwner",
+        "members": [
+          "projectEditor:example-project",
+          "projectOwner:example-project"
+        ],
+        "condition": null
+      },
+      {
+        "role": "roles/storage.legacyObjectReader",
+        "members": [
+          "projectViewer:example-project"
+        ],
+        "condition": null
+      }
+    ]
+  },
+  "serviceAccountProjectRoles": {
+    "api": [
+      "roles/aiplatform.user"
+    ],
+    "worker": [
+      "roles/aiplatform.user"
+    ],
+    "migration": [],
+    "taskInvoker": [],
+    "schedulerInvoker": [],
+    "build": [
+      "roles/logging.logWriter"
+    ],
+    "identity": [],
+    "identityBootstrap": []
+  },
+  "secretAccessors": {
+    "lore-app-database-url": [
+      "api",
+      "migration"
+    ],
+    "lore-worker-database-url": [
+      "worker",
+      "migration"
+    ],
+    "lore-migration-direct-url": [
+      "migration"
+    ],
+    "lore-forget-hmac-key": [
+      "api",
+      "worker"
+    ],
+    "lore-portability-master-key": [
+      "api",
+      "worker"
+    ],
+    "lore-cursor-hmac-keys": [
+      "api",
+      "worker"
+    ],
+    "lore-identity-jdbc-url": [
+      "identity",
+      "identityBootstrap"
+    ],
+    "lore-identity-db-password": [
+      "identity",
+      "identityBootstrap"
+    ],
+    "lore-identity-bootstrap-password": [
+      "identityBootstrap"
+    ]
+  },
+  "resourceServiceAccountRoles": {
+    "queue": {
+      "api": [],
+      "worker": [
+        "roles/cloudtasks.enqueuer"
+      ],
+      "migration": [],
+      "taskInvoker": [],
+      "schedulerInvoker": [],
+      "build": [],
+      "identity": [],
+      "identityBootstrap": []
+    },
+    "registry": {
+      "api": [],
+      "worker": [],
+      "migration": [],
+      "taskInvoker": [],
+      "schedulerInvoker": [],
+      "build": [
+        "roles/artifactregistry.writer"
+      ],
+      "identity": [],
+      "identityBootstrap": []
+    },
+    "build-source": {
+      "api": [],
+      "worker": [],
+      "migration": [],
+      "taskInvoker": [],
+      "schedulerInvoker": [],
+      "build": [
+        "roles/storage.objectViewer"
+      ],
+      "identity": [],
+      "identityBootstrap": []
+    },
+    "task-sa": {
+      "api": [],
+      "worker": [
+        "roles/iam.serviceAccountUser"
+      ],
+      "migration": [],
+      "taskInvoker": [],
+      "schedulerInvoker": [],
+      "build": [],
+      "identity": [],
+      "identityBootstrap": []
+    }
+  },
+  "preservedResourceBindings": {
+    "build-source": [
+      {
+        "role": "roles/storage.legacyBucketOwner",
+        "members": [
+          "projectEditor:example-project",
+          "projectOwner:example-project"
+        ],
+        "condition": null
+      },
+      {
+        "role": "roles/storage.legacyBucketReader",
+        "members": [
+          "projectViewer:example-project"
+        ],
+        "condition": null
+      },
+      {
+        "role": "roles/storage.legacyObjectOwner",
+        "members": [
+          "projectEditor:example-project",
+          "projectOwner:example-project"
+        ],
+        "condition": null
+      },
+      {
+        "role": "roles/storage.legacyObjectReader",
+        "members": [
+          "projectViewer:example-project"
+        ],
+        "condition": null
+      }
+    ]
+  },
+  "serviceAccountPolicyBindings": {
+    "api": [],
+    "worker": [],
+    "migration": [],
+    "taskInvoker": [
+      {
+        "role": "roles/iam.serviceAccountUser",
+        "members": [
+          "worker"
+        ]
+      }
+    ],
+    "schedulerInvoker": [],
+    "build": [],
+    "identity": [],
+    "identityBootstrap": []
+  },
+  "secretPayloadsInRepository": false,
+  "publicIdentityInvokerBinding": "pending explicit user approval; do not grant allUsers",
+  "publicApiInvokerBinding": "not requested or attempted in this deployment; keep API IAM-authenticated during private verification",
+  "productDisplayName": "Syntoria Lore",
+  "targetActivationStatus": "pending"
+}

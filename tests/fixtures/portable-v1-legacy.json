@@ -1,0 +1,14 @@
+{
+  "masterKey": "rename-regression-fixture-key-00000000000000",
+  "signerId": "thymesis-local",
+  "payload": {
+    "format": "thymesis.portable.data",
+    "marker": "pre-rename-fixture",
+    "memories": [
+      {
+        "content": "Synthetic compatibility witness"
+      }
+    ]
+  },
+  "bundle": "v1.OukbIU5URYNeyJs8.XfaSunfLeCbAZB416ReRcw._j7Tv_mEjqJZXi7Lwwka8WO-iBLuv9eaFRGkYvs_f7iN_He_ZzhJc81b__vUYWleWJWr8-y1uvS6T5UxVB3QPOPVL6atYW785lxceYv-amqfnWV8lzrHyICG-Qn6G_q_K-RW53ADQ8IdLf8bbcDjf6sZNSD-4yXTAvHl5BIgXKWt2-XLg8nvWLzzE03yNtlywaUkzZzmfcmuEhdzjDsDUn3eNuvBIJzo6Ihxr5CQ129Kzke7AkMjDMP-O9tbm8H0-4_FD8FZF-buYGsuICsRQSW58ghlLHflKApzvN2L6X9KqM88NwAe8GFTkI1utgCZKbuKiCUh_efcg2UxSHlr"
+}

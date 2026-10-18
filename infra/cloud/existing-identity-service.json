@@ -1,0 +1,134 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {
+    "name": "thymesis-identity",
+    "namespace": "123456789012",
+    "annotations": {
+      "run.googleapis.com/ingress": "all"
+    }
+  },
+  "spec": {
+    "template": {
+      "metadata": {
+        "annotations": {
+          "autoscaling.knative.dev/minScale": "0",
+          "autoscaling.knative.dev/maxScale": "1",
+          "run.googleapis.com/execution-environment": "gen2",
+          "run.googleapis.com/container-dependencies": "{\"proxy\":[\"keycloak\"]}",
+          "run.googleapis.com/startup-cpu-boost": "true",
+          "run.googleapis.com/cpu-throttling": "true"
+        }
+      },
+      "spec": {
+        "serviceAccountName": "thymesis-identity@example-project.iam.gserviceaccount.com",
+        "containerConcurrency": 8,
+        "timeoutSeconds": 120,
+        "containers": [
+          {
+            "name": "proxy",
+            "image": "asia-southeast1-docker.pkg.dev/example-project/thymesis/identity-proxy@sha256:2a59e8a68e81e2d86777d49c41ea6f21961fba9a570d9115ab8528bf85a1fdf0",
+            "ports": [
+              {
+                "containerPort": 8080
+              }
+            ],
+            "env": [
+              {
+                "name": "IDENTITY_PUBLIC_URL",
+                "value": "https://thymesis-identity-123456789012.asia-southeast1.run.app"
+              },
+              {
+                "name": "IDENTITY_BACKEND_URL",
+                "value": "http://127.0.0.1:8081"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "0.08",
+                "memory": "128Mi"
+              }
+            },
+            "startupProbe": {
+              "tcpSocket": {
+                "port": 8080
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 5,
+              "failureThreshold": 48
+            }
+          },
+          {
+            "name": "keycloak",
+            "image": "asia-southeast1-docker.pkg.dev/example-project/thymesis/identity-keycloak@sha256:9ae7bb7a596dbf0aaf235c264f8ce1621120f53221f9e808b34ec7890e57dc52",
+            "env": [
+              {
+                "name": "KC_HOSTNAME",
+                "value": "https://thymesis-identity-123456789012.asia-southeast1.run.app"
+              },
+              {
+                "name": "KC_HOSTNAME_STRICT",
+                "value": "true"
+              },
+              {
+                "name": "KC_DB_USERNAME",
+                "value": "thymesis_identity"
+              },
+              {
+                "name": "KC_DB_POOL_INITIAL_SIZE",
+                "value": "1"
+              },
+              {
+                "name": "KC_DB_POOL_MIN_SIZE",
+                "value": "0"
+              },
+              {
+                "name": "KC_DB_POOL_MAX_SIZE",
+                "value": "5"
+              },
+              {
+                "name": "KC_DB_URL",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "name": "thymesis-identity-jdbc-url",
+                    "key": "2"
+                  }
+                }
+              },
+              {
+                "name": "KC_DB_PASSWORD",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "name": "thymesis-identity-db-password",
+                    "key": "1"
+                  }
+                }
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "memory": "2Gi"
+              }
+            },
+            "startupProbe": {
+              "httpGet": {
+                "path": "/health/ready",
+                "port": 9000
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 5,
+              "failureThreshold": 48
+            }
+          }
+        ]
+      }
+    },
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100
+      }
+    ]
+  }
+}

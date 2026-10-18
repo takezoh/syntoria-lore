@@ -1,0 +1,67 @@
+name: Local contract checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        env:
+          POSTGRES_USER: memory_admin
+          POSTGRES_PASSWORD: local-ci-admin-password
+          POSTGRES_DB: memory_service
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memory_admin -d memory_service"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      MIGRATION_DATABASE_URL: postgresql://memory_admin:local-ci-admin-password@127.0.0.1:5432/memory_service
+      TEST_MIGRATION_DATABASE_URL: postgresql://memory_admin:local-ci-admin-password@127.0.0.1:5432/memory_service_test
+      TEST_ADMIN_URL: postgresql://memory_admin:local-ci-admin-password@127.0.0.1:5432/memory_service_test
+      TEST_APP_URL: postgresql://memory_app:local-ci-app-password@127.0.0.1:5432/memory_service_test
+      DB_ROLE_SOURCE_PREFIX: thymesis
+      APP_DB_PASSWORD: local-ci-app-password
+      WORKER_DB_PASSWORD: local-ci-worker-password
+      AUTH_ISSUER: https://issuer.memory.local.test/
+      DELETION_LEDGER_DIR: ${{ runner.temp }}/memory-service-deletion-ledger
+      FORGET_HMAC_KEY: local-ci-forget-hmac-key-with-32-bytes-minimum
+      PORTABILITY_MASTER_KEY: local-ci-portability-master-key-with-32-bytes
+      CURSOR_HMAC_ACTIVE_KEY: local-ci
+      CURSOR_HMAC_KEYS: local-ci=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Build workspace imports before database bootstrap
+        run: npm run build
+      - name: Create the isolated integration database
+        env:
+          PGPASSWORD: local-ci-admin-password
+        run: psql postgresql://memory_admin@127.0.0.1:5432/memory_service -v ON_ERROR_STOP=1 -c 'CREATE DATABASE memory_service_test'
+      - name: Bootstrap migrations and non-bypass roles
+        run: node scripts/local-bootstrap.mjs
+      - name: Run required local contract checks
+        run: npm run verify:local
+      - name: Build and verify the non-root runtime image
+        run: |
+          docker build -t memory-service:ci .
+          test "$(docker image inspect --format '{{.Config.User}}' memory-service:ci)" = node
+          docker run --rm --entrypoint node memory-service:ci -e 'if (process.getuid() === 0) process.exit(1)'

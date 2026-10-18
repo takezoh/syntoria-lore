@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/runtime" },
+    { "path": "./packages/contracts" },
+    { "path": "./packages/db" },
+    { "path": "./packages/auth" },
+    { "path": "./packages/domain" },
+    { "path": "./packages/connectors" },
+    { "path": "./packages/curator" },
+    { "path": "./packages/recall" },
+    { "path": "./packages/jobs" },
+    { "path": "./packages/governance" },
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" }
+  ]
+}

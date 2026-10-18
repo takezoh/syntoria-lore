@@ -1,0 +1,1708 @@
+import { getProductDisplayName } from '@memory/runtime';
+import { LEGACY_PORTABILITY_MIME_TYPE } from '@memory/contracts';
+
+const apiContract = {
+  openapi: '3.1.0',
+  info: { title: 'Memory Service API', version: '0.1.0' },
+  servers: [{ url: '/' }],
+  security: [{ bearerAuth: [] }],
+  paths: {
+    '/healthz': {
+      get: { security: [], summary: 'Liveness', responses: { '200': { description: 'Alive' } } },
+    },
+    '/readyz': {
+      get: {
+        security: [],
+        summary: 'Database readiness',
+        responses: { '200': { description: 'Ready' }, '503': { description: 'Unavailable' } },
+      },
+    },
+    '/openapi.json': {
+      get: {
+        security: [],
+        summary: 'This OpenAPI document',
+        responses: { '200': { description: 'OpenAPI 3.1 document' } },
+      },
+    },
+    '/v1/memories:remember': {
+      post: {
+        operationId: 'remember',
+        summary: 'Record an explicitly supplied memory',
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/RememberRequest' } },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Committed ChangeSet',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/CommittedChangeSet' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '413': { $ref: '#/components/responses/CoreError' },
+          '415': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/captures': {
+      post: {
+        operationId: 'submitCapture',
+        summary: 'Submit consented source observations for asynchronous curation',
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CaptureRequest' } },
+          },
+        },
+        responses: {
+          '202': {
+            description: 'Capture accepted or replayed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/CaptureAccepted' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/connectors': {
+      post: {
+        operationId: 'configureConnectorConsent',
+        summary: 'Enable or revoke a source connector with Owner consent',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ConnectorAuthorization' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Connector consent state',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ConnectorAuthorizationResult' },
+              },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/captures/{capture_id}': {
+      get: {
+        operationId: 'getCaptureStatus',
+        summary: 'Read the authorized state of a capture job',
+        parameters: [
+          {
+            name: 'capture_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Capture job state',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/CaptureJobStatus' } },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/review': {
+      get: {
+        operationId: 'listCurationReviews',
+        summary: 'List owner-visible curation reviews for one scope',
+        parameters: [
+          {
+            name: 'scope_id',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'status',
+            in: 'query',
+            schema: { enum: ['held', 'approved', 'rejected', 'stale'], default: 'held' },
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+          },
+          { name: 'before', in: 'query', schema: { type: 'string', format: 'date-time' } },
+        ],
+        responses: {
+          '200': {
+            description: 'Curation review queue',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ReviewList' } },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/review/{review_id}': {
+      get: {
+        operationId: 'getCurationReview',
+        summary: 'Read an owner-visible curation review',
+        parameters: [
+          {
+            name: 'review_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Curation review',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Review' } } },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/review/{review_id}:decision': {
+      post: {
+        operationId: 'decideCurationReview',
+        summary: 'Approve or reject a held curation review with revision compare-and-set',
+        parameters: [
+          {
+            name: 'review_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ReviewDecision' } },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Review decision and resulting ChangeSet',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/CommittedChangeSet' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/changesets': {
+      post: {
+        operationId: 'proposeChangeSet',
+        summary: 'Validate and persist a ChangeSet proposal',
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/ChangeSet' } } },
+        },
+        responses: {
+          '200': {
+            description: 'Persisted proposal; no memory mutation has occurred',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ProposedChangeSet' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '413': { $ref: '#/components/responses/CoreError' },
+          '415': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/changesets/{change_set_id}:commit': {
+      post: {
+        operationId: 'commitChangeSet',
+        summary: 'Commit a previously validated ChangeSet proposal atomically',
+        parameters: [
+          {
+            name: 'change_set_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Committed ChangeSet',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/CommittedChangeSet' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/recall': {
+      post: {
+        operationId: 'recall',
+        summary: 'Perform exact, authorization-filtered Recall',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/RecallQuery' } } },
+        },
+        responses: {
+          '200': {
+            description: 'Exact matches and coverage',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/RecallResponse' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '413': { $ref: '#/components/responses/CoreError' },
+          '415': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/memories/{memory_id}': {
+      get: {
+        operationId: 'getMemory',
+        summary: 'Read a memory at valid-time and known-time',
+        parameters: [
+          {
+            name: 'memory_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'scope_id',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          { name: 'valid_at', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'known_at', in: 'query', schema: { type: 'string', format: 'date-time' } },
+        ],
+        responses: {
+          '200': {
+            description: 'Authorized memory view',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/MemoryView' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/changes': {
+      get: {
+        operationId: 'getChanges',
+        summary: 'Read scope change feed',
+        parameters: [
+          {
+            name: 'scope_ids',
+            in: 'query',
+            schema: {
+              type: 'array',
+              maxItems: 100,
+              items: { type: 'string', format: 'uuid' },
+            },
+            style: 'form',
+            explode: true,
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          },
+          { name: 'cursor', in: 'query', schema: { type: 'string', maxLength: 4096 } },
+        ],
+        responses: {
+          '200': {
+            description: 'Changes and signed continuation cursor',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ChangePage' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '410': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/forget': {
+      post: {
+        operationId: 'forget',
+        summary: 'Immediately suppress selected content and queue durable ledger purge',
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ForgetRequest' } },
+          },
+        },
+        responses: {
+          '202': {
+            description: 'Content is unavailable immediately; physical purge is asynchronous',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForgetAccepted' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/forget/{request_id}': {
+      get: {
+        operationId: 'getForgetStatus',
+        summary: 'Read the state of a scoped Forget request',
+        parameters: [
+          {
+            name: 'request_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'scope_id',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Forget state without forgotten content',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ForgetStatus' } },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/sources/{source_id}:rights': {
+      put: {
+        operationId: 'updateSourceRights',
+        summary: 'Change source access and consent with an Owner grant',
+        parameters: [
+          {
+            name: 'source_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/SourceRightsUpdate' } },
+          },
+        },
+        responses: {
+          '200': { description: 'Updated source rights state' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/scopes/{scope_id}/grants': {
+      put: {
+        operationId: 'mutateScopeGrant',
+        summary: 'Grant or revoke a principal capability set',
+        parameters: [
+          {
+            name: 'scope_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/GrantMutation' } },
+          },
+        },
+        responses: {
+          '200': { description: 'Grant state' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/scopes/{scope_id}/retention': {
+      put: {
+        operationId: 'updateRetentionPolicy',
+        summary: 'Store the Owner retention policy used by bounded worker sweeps',
+        parameters: [
+          {
+            name: 'scope_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/RetentionPolicy' } },
+          },
+        },
+        responses: {
+          '200': { description: 'Saved retention policy' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/memories/{memory_id}:feedback': {
+      post: {
+        operationId: 'submitMemoryFeedback',
+        summary: 'Record feedback for a memory; worker routes reassessment to Owner review',
+        parameters: [
+          {
+            name: 'memory_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/FeedbackRequest' } },
+          },
+        },
+        responses: {
+          '200': { description: 'Feedback accepted for reassessment' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/exports': {
+      post: {
+        operationId: 'requestEncryptedExport',
+        summary: 'Queue an encrypted history export',
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ExportRequest' } },
+          },
+        },
+        responses: {
+          '202': {
+            description: 'Export queued',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ExportAccepted' } },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/exports/{export_id}': {
+      get: {
+        operationId: 'getExportStatus',
+        summary: 'Read an authorized export job state',
+        parameters: [
+          {
+            name: 'export_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'scope_id',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Export state',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ExportStatus' } },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/exports/{export_id}:download': {
+      get: {
+        operationId: 'downloadEncryptedExport',
+        summary:
+          'Download an encrypted artifact while current authority, deletion, and source-rights epochs match',
+        parameters: [
+          {
+            name: 'export_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'scope_id',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Encrypted portable bundle',
+            content: {
+              [LEGACY_PORTABILITY_MIME_TYPE]: {
+                schema: { type: 'string', format: 'binary' },
+              },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          '410': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/imports': {
+      post: {
+        operationId: 'importEncryptedHistory',
+        summary:
+          'Import portable history while keeping origin attribution separate from current authority',
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/ImportRequest' } },
+          },
+        },
+        responses: {
+          '200': { description: 'Import result with current-environment id mapping' },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/.well-known/oauth-protected-resource/mcp/read': {
+      get: {
+        security: [],
+        operationId: 'readMcpProtectedResourceMetadata',
+        summary: 'Read-only MCP OAuth resource metadata',
+        responses: {
+          '200': { description: 'Protected resource metadata with memory:read scope' },
+          '403': { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/.well-known/oauth-protected-resource/mcp/write': {
+      get: {
+        security: [],
+        operationId: 'writeMcpProtectedResourceMetadata',
+        summary: 'Write MCP OAuth resource metadata',
+        responses: {
+          '200': {
+            description: 'Protected resource metadata with memory:write and memory:admin scopes',
+          },
+          '403': { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/mcp/read': {
+      post: {
+        operationId: 'mcpReadTransport',
+        summary: 'Official MCP Streamable HTTP read endpoint',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/McpProtocolMessage' } },
+          },
+        },
+        responses: {
+          '200': { description: 'MCP JSON or event stream' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '503': { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/mcp/write': {
+      post: {
+        operationId: 'mcpWriteTransport',
+        summary: 'Official MCP Streamable HTTP write endpoint with a distinct audience',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/McpProtocolMessage' } },
+          },
+        },
+        responses: {
+          '200': { description: 'MCP JSON or event stream' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '503': { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+  },
+  components: {
+    securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
+    responses: {
+      CoreError: {
+        description: 'Application error with stable code and request id',
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+      },
+    },
+    schemas: {
+      ForgetRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'selector', 'reason_code'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          selector: {
+            type: 'object',
+            additionalProperties: false,
+            minProperties: 1,
+            properties: {
+              memory_ids: {
+                type: 'array',
+                maxItems: 100,
+                items: { type: 'string', format: 'uuid' },
+              },
+              source_ids: {
+                type: 'array',
+                maxItems: 100,
+                items: { type: 'string', format: 'uuid' },
+              },
+              subject_ids: {
+                type: 'array',
+                maxItems: 100,
+                items: { type: 'string', format: 'uuid' },
+              },
+            },
+          },
+          reason_code: {
+            enum: ['user_requested', 'source_revoked', 'retention_expired', 'correction'],
+          },
+        },
+      },
+      ForgetAccepted: {
+        type: 'object',
+        required: [
+          'forget_request_id',
+          'status',
+          'ledger_durable',
+          'content_available',
+          'request_id',
+          'trace_id',
+        ],
+        properties: {
+          forget_request_id: { type: 'string', format: 'uuid' },
+          status: { const: 'ledger_pending' },
+          ledger_durable: { type: 'boolean' },
+          content_available: { const: false },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ForgetStatus: {
+        type: 'object',
+        required: [
+          'forget_request_id',
+          'status',
+          'requested_at',
+          'content_available',
+          'request_id',
+          'trace_id',
+        ],
+        properties: {
+          forget_request_id: { type: 'string', format: 'uuid' },
+          status: {
+            enum: ['suppressed', 'ledger_pending', 'ledger_acked', 'purging', 'complete', 'failed'],
+          },
+          requested_at: { type: 'string', format: 'date-time' },
+          completed_at: { type: 'string', format: 'date-time' },
+          content_available: { const: false },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      SourceRightsUpdate: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'rights_status', 'consent'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          rights_status: { enum: ['granted', 'revoked'] },
+          consent: { type: 'boolean' },
+        },
+      },
+      GrantMutation: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['principal_id'],
+        properties: {
+          principal_id: { type: 'string', format: 'uuid' },
+          capabilities: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 3,
+            items: { enum: ['read', 'write', 'admin'] },
+          },
+          expires_at: { type: ['string', 'null'], format: 'date-time' },
+          revoke: { type: 'boolean', default: false },
+        },
+      },
+      RetentionPolicy: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['observation_days'],
+        properties: {
+          observation_days: { type: 'integer', minimum: 1, maximum: 36500 },
+          memory_days: { type: ['integer', 'null'], minimum: 1, maximum: 36500 },
+        },
+      },
+      FeedbackRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'feedback_type'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          feedback_type: { enum: ['useful', 'incorrect', 'stale', 'not_relevant'] },
+          metadata: { type: 'object', additionalProperties: true },
+        },
+      },
+      ExportRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id'],
+        properties: { scope_id: { type: 'string', format: 'uuid' } },
+      },
+      ExportAccepted: {
+        type: 'object',
+        required: ['export_id', 'scope_id', 'status'],
+        properties: {
+          export_id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          status: { enum: ['accepted', 'ready'] },
+          replayed: { type: 'boolean' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ExportStatus: {
+        type: 'object',
+        required: ['export_id', 'state', 'created_at', 'content_available'],
+        properties: {
+          export_id: { type: 'string', format: 'uuid' },
+          state: { enum: ['accepted', 'processing', 'ready', 'expired', 'failed'] },
+          created_at: { type: 'string', format: 'date-time' },
+          expires_at: { type: ['string', 'null'], format: 'date-time' },
+          content_available: { type: 'boolean' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ImportRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'encrypted_bundle'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          encrypted_bundle: { type: 'string', minLength: 1, maxLength: 16000000 },
+          grant_imported_sources: { type: 'boolean', default: false },
+        },
+      },
+      McpProtocolMessage: {
+        type: 'object',
+        additionalProperties: true,
+        description:
+          'JSON-RPC message accepted by the official Model Context Protocol SDK Streamable HTTP transport.',
+      },
+      CaptureRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'operation_id', 'source', 'observations'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          operation_id: { type: 'string', minLength: 1, maxLength: 256 },
+          source: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['kind', 'external_id'],
+            properties: {
+              kind: { enum: ['chat', 'document', 'tool_result', 'episode'] },
+              external_id: { type: 'string', minLength: 1, maxLength: 512 },
+              revision: { type: 'string', minLength: 1, maxLength: 128, default: '1' },
+            },
+          },
+          observations: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 256,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['locator', 'content'],
+              properties: {
+                locator: { type: 'string', minLength: 1, maxLength: 2048 },
+                content: { type: 'string', minLength: 1, maxLength: 32768 },
+                speaker: { type: 'string', maxLength: 256 },
+                event_time: { type: 'string', format: 'date-time' },
+                lineage_root: { type: 'string', format: 'uuid' },
+              },
+            },
+          },
+        },
+      },
+      CaptureAccepted: {
+        type: 'object',
+        required: ['status', 'job_id', 'request_id', 'trace_id'],
+        properties: {
+          status: { const: 'accepted' },
+          job_id: { type: 'string', format: 'uuid' },
+          observations: { type: 'integer', minimum: 0 },
+          replayed: { type: 'boolean' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ConnectorAuthorization: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'source_kind', 'external_id', 'enabled', 'consent'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          source_kind: { enum: ['chat', 'document', 'tool_result', 'episode'] },
+          external_id: { type: 'string', minLength: 1, maxLength: 512 },
+          enabled: { type: 'boolean' },
+          consent: { type: 'boolean' },
+          metadata: { type: 'object', additionalProperties: true, default: {} },
+        },
+      },
+      ConnectorAuthorizationResult: {
+        type: 'object',
+        required: [
+          'connector_id',
+          'scope_id',
+          'source_kind',
+          'external_id',
+          'enabled',
+          'consent',
+          'rights_status',
+          'request_id',
+          'trace_id',
+        ],
+        properties: {
+          connector_id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          source_kind: { enum: ['chat', 'document', 'tool_result', 'episode'] },
+          external_id: { type: 'string' },
+          enabled: { type: 'boolean' },
+          consent: { type: 'boolean' },
+          rights_status: { enum: ['granted', 'revoked'] },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      CaptureJobStatus: {
+        type: 'object',
+        required: [
+          'job_id',
+          'scope_id',
+          'status',
+          'attempt',
+          'updated_at',
+          'request_id',
+          'trace_id',
+        ],
+        properties: {
+          job_id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          status: { enum: ['accepted', 'processing', 'committed', 'held', 'failed'] },
+          attempt: { type: 'integer', minimum: 0 },
+          review_id: { type: 'string', format: 'uuid' },
+          updated_at: { type: 'string', format: 'date-time' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ReviewDecision: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['expected_revision', 'decision'],
+        properties: {
+          expected_revision: { type: 'integer', minimum: 1 },
+          decision: { enum: ['approve', 'reject'] },
+          confirmation: {
+            enum: ['accept_candidate', 'owner_statement'],
+            default: 'accept_candidate',
+          },
+          reason: { type: 'string', maxLength: 4000 },
+        },
+      },
+      ReviewList: {
+        type: 'object',
+        required: ['reviews', 'request_id', 'trace_id'],
+        properties: {
+          reviews: { type: 'array', items: { $ref: '#/components/schemas/Review' } },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      Review: {
+        type: 'object',
+        required: [
+          'id',
+          'scope_id',
+          'status',
+          'revision',
+          'reason_codes',
+          'created_at',
+          'updated_at',
+        ],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          status: { enum: ['held', 'approved', 'rejected', 'stale'] },
+          revision: { type: 'integer', minimum: 1 },
+          reason_codes: { type: 'array', items: { type: 'string' } },
+          rationale: { type: ['string', 'null'] },
+          candidate_summary: { type: ['object', 'null'], additionalProperties: true },
+          created_at: { type: 'string', format: 'date-time' },
+          updated_at: { type: 'string', format: 'date-time' },
+          decision_reason: { type: ['string', 'null'] },
+          proposal: { type: ['object', 'null'], additionalProperties: true },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      RememberRequest: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'memory'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          memory: { $ref: '#/components/schemas/MemoryInput' },
+        },
+      },
+      MemoryInput: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['kind', 'statement', 'evidence'],
+        properties: {
+          kind: {
+            enum: ['fact', 'decision', 'preference', 'hypothesis', 'experience', 'procedure'],
+          },
+          statement: { type: 'string', minLength: 1, maxLength: 10000 },
+          context: { type: 'object', additionalProperties: true },
+          subjects: {
+            type: 'array',
+            maxItems: 32,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['name'],
+              properties: {
+                name: { type: 'string', minLength: 1, maxLength: 256 },
+                aliases: {
+                  type: 'array',
+                  maxItems: 32,
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['name'],
+                    properties: {
+                      name: { type: 'string', minLength: 1, maxLength: 256 },
+                      valid_from: { type: ['string', 'null'], format: 'date-time' },
+                      valid_to: { type: ['string', 'null'], format: 'date-time' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          valid_from: { type: ['string', 'null'], format: 'date-time' },
+          valid_to: { type: ['string', 'null'], format: 'date-time' },
+          epistemic_status: { enum: ['asserted', 'observed', 'inferred', 'proposed'] },
+          contested: { type: 'boolean' },
+          evidence: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 64,
+            items: { $ref: '#/components/schemas/EvidenceInput' },
+          },
+        },
+      },
+      EvidenceInput: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['source'],
+        properties: {
+          source: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['kind', 'external_id', 'locator'],
+            properties: {
+              kind: { enum: ['chat', 'document', 'tool_result', 'episode', 'explicit_remember'] },
+              external_id: { type: 'string', minLength: 1, maxLength: 512 },
+              revision: { type: 'string', minLength: 1, maxLength: 128, default: '1' },
+              locator: { type: 'string', minLength: 1, maxLength: 2048 },
+            },
+          },
+          span: { type: 'string', maxLength: 512 },
+          speaker: { type: 'string', maxLength: 256 },
+          event_time: { type: 'string', format: 'date-time' },
+          captured_at: { type: 'string', format: 'date-time' },
+          snippet: { type: 'string', maxLength: 8192 },
+          snippet_allowed: { type: 'boolean', default: false },
+        },
+      },
+      ChangeSet: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['scope_id', 'operations'],
+        properties: {
+          scope_id: { type: 'string', format: 'uuid' },
+          operations: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 64,
+            items: {
+              oneOf: [
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'memory'],
+                  properties: {
+                    op: { const: 'CREATE' },
+                    memory: { $ref: '#/components/schemas/MemoryInput' },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'memory_id', 'expected_revision', 'evidence'],
+                  properties: {
+                    op: { const: 'CORROBORATE' },
+                    memory_id: { type: 'string', format: 'uuid' },
+                    expected_revision: { type: 'integer', minimum: 1 },
+                    evidence: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 64,
+                      items: { $ref: '#/components/schemas/EvidenceInput' },
+                    },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'memory_id', 'expected_revision', 'evidence'],
+                  properties: {
+                    op: { const: 'REFINE' },
+                    memory_id: { type: 'string', format: 'uuid' },
+                    expected_revision: { type: 'integer', minimum: 1 },
+                    statement: { type: 'string', minLength: 1, maxLength: 10000 },
+                    context: { type: 'object', additionalProperties: true },
+                    valid_from: { type: ['string', 'null'], format: 'date-time' },
+                    valid_to: { type: ['string', 'null'], format: 'date-time' },
+                    epistemic_status: { enum: ['asserted', 'observed', 'inferred', 'proposed'] },
+                    evidence: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 64,
+                      items: { $ref: '#/components/schemas/EvidenceInput' },
+                    },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'memory_id', 'expected_revision', 'replacement'],
+                  properties: {
+                    op: { const: 'SUPERSEDE' },
+                    memory_id: { type: 'string', format: 'uuid' },
+                    expected_revision: { type: 'integer', minimum: 1 },
+                    replacement: { $ref: '#/components/schemas/MemoryInput' },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'memory_id', 'expected_revision', 'reason', 'evidence'],
+                  properties: {
+                    op: { const: 'CONTEST' },
+                    memory_id: { type: 'string', format: 'uuid' },
+                    expected_revision: { type: 'integer', minimum: 1 },
+                    reason: { type: 'string', minLength: 1, maxLength: 4000 },
+                    evidence: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 64,
+                      items: { $ref: '#/components/schemas/EvidenceInput' },
+                    },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: [
+                    'op',
+                    'from_memory_id',
+                    'from_expected_revision',
+                    'to_memory_id',
+                    'to_expected_revision',
+                    'relation',
+                  ],
+                  properties: {
+                    op: { const: 'RELATE' },
+                    from_memory_id: { type: 'string', format: 'uuid' },
+                    from_expected_revision: { type: 'integer', minimum: 1 },
+                    to_memory_id: { type: 'string', format: 'uuid' },
+                    to_expected_revision: { type: 'integer', minimum: 1 },
+                    relation: {
+                      enum: [
+                        'supersedes',
+                        'supports',
+                        'contradicts',
+                        'related_to',
+                        'same_subject',
+                        'depends_on_context',
+                      ],
+                    },
+                    context: { type: 'object', additionalProperties: true },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'memory_id', 'expected_revision', 'reason'],
+                  properties: {
+                    op: { const: 'RETRACT' },
+                    memory_id: { type: 'string', format: 'uuid' },
+                    expected_revision: { type: 'integer', minimum: 1 },
+                    reason: { type: 'string', minLength: 1, maxLength: 4000 },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'reason'],
+                  properties: {
+                    op: { const: 'NO_OP' },
+                    reason: { type: 'string', minLength: 1, maxLength: 4000 },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      RecallQuery: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['query'],
+        properties: {
+          query: { type: 'string', minLength: 1, maxLength: 2000 },
+          scope_ids: {
+            type: 'array',
+            maxItems: 100,
+            items: { type: 'string', format: 'uuid' },
+          },
+          mode: {
+            enum: ['precise', 'contextual', 'historical', 'exploratory', 'changes'],
+            default: 'precise',
+          },
+          token_budget: { type: 'integer', minimum: 64, maximum: 32000, default: 4000 },
+          valid_at: { type: 'string', format: 'date-time' },
+          known_at: { type: 'string', format: 'date-time' },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+        },
+      },
+      RequestMetadata: {
+        type: 'object',
+        required: ['request_id', 'trace_id'],
+        properties: {
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ProposedChangeSet: {
+        type: 'object',
+        required: ['change_set_id', 'scope_id', 'status', 'request_id', 'trace_id'],
+        properties: {
+          change_set_id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          status: { const: 'proposed' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      OperationResult: {
+        type: 'object',
+        required: ['op', 'memory_ids', 'revisions', 'changed'],
+        properties: {
+          op: {
+            enum: [
+              'CREATE',
+              'CORROBORATE',
+              'REFINE',
+              'SUPERSEDE',
+              'CONTEST',
+              'RELATE',
+              'RETRACT',
+              'NO_OP',
+            ],
+          },
+          memory_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+          revisions: { type: 'array', items: { type: 'integer', minimum: 1 } },
+          changed: { type: 'boolean' },
+        },
+      },
+      CommittedChangeSet: {
+        type: 'object',
+        required: [
+          'change_set_id',
+          'scope_id',
+          'sequence_from',
+          'sequence_to',
+          'operations',
+          'request_id',
+          'trace_id',
+        ],
+        properties: {
+          change_set_id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          sequence_from: { type: ['string', 'null'], pattern: '^\\d+$' },
+          sequence_to: { type: ['string', 'null'], pattern: '^\\d+$' },
+          operations: { type: 'array', items: { $ref: '#/components/schemas/OperationResult' } },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      MemorySnapshot: {
+        type: 'object',
+        required: [
+          'id',
+          'scope_id',
+          'kind',
+          'statement',
+          'subjects',
+          'attribution',
+          'context',
+          'time',
+          'epistemic',
+          'lifecycle',
+          'revision',
+          'evidence_ids',
+          'evidence',
+          'index',
+        ],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          kind: {
+            enum: ['fact', 'decision', 'preference', 'hypothesis', 'experience', 'procedure'],
+          },
+          statement: { type: 'string' },
+          subjects: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['id', 'name', 'aliases'],
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                name: { type: 'string' },
+                aliases: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    required: ['name', 'valid_from', 'valid_to'],
+                    properties: {
+                      name: { type: 'string' },
+                      valid_from: { type: ['string', 'null'], format: 'date-time' },
+                      valid_to: { type: ['string', 'null'], format: 'date-time' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          attribution: {
+            type: 'object',
+            required: ['actor_kind', 'authority'],
+            properties: {
+              actor_kind: { enum: ['owner', 'client', 'connector', 'curator'] },
+              authority: {
+                enum: [
+                  'owner_decision',
+                  'owner_preference',
+                  'owner_assertion',
+                  'third_party_claim',
+                  'observed_state',
+                  'ai_proposal',
+                ],
+              },
+            },
+          },
+          context: { type: 'object', additionalProperties: true },
+          time: {
+            type: 'object',
+            required: ['valid_from', 'valid_to', 'recorded_at', 'superseded_at'],
+            properties: {
+              valid_from: { type: ['string', 'null'], format: 'date-time' },
+              valid_to: { type: ['string', 'null'], format: 'date-time' },
+              recorded_at: { type: 'string', format: 'date-time' },
+              superseded_at: { type: ['string', 'null'], format: 'date-time' },
+            },
+          },
+          epistemic: {
+            type: 'object',
+            required: ['status', 'contested'],
+            properties: {
+              status: { enum: ['asserted', 'observed', 'inferred', 'proposed'] },
+              contested: { type: 'boolean' },
+            },
+          },
+          lifecycle: { enum: ['candidate', 'active', 'superseded', 'retracted', 'forgotten'] },
+          revision: { type: 'integer', minimum: 1 },
+          evidence_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+          evidence: { type: 'array', items: { $ref: '#/components/schemas/EvidenceView' } },
+          index: {
+            type: 'object',
+            required: ['committed_revision', 'indexed_revision'],
+            properties: {
+              committed_revision: { type: 'integer', minimum: 1 },
+              indexed_revision: { type: 'integer', minimum: 0 },
+            },
+          },
+        },
+      },
+      MemoryView: {
+        allOf: [
+          { $ref: '#/components/schemas/MemorySnapshot' },
+          {
+            type: 'object',
+            required: ['request_id', 'trace_id'],
+            properties: {
+              request_id: { type: 'string', format: 'uuid' },
+              trace_id: { type: 'string', format: 'uuid' },
+            },
+          },
+        ],
+      },
+      EvidenceView: {
+        type: 'object',
+        required: [
+          'id',
+          'source_id',
+          'source_revision',
+          'locator',
+          'span',
+          'speaker',
+          'captured_at',
+          'event_time',
+          'lineage_root',
+        ],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          source_id: { type: 'string', format: 'uuid' },
+          source_revision: { type: 'string' },
+          locator: { type: 'string' },
+          span: { type: ['string', 'null'] },
+          speaker: { type: ['string', 'null'] },
+          captured_at: { type: 'string', format: 'date-time' },
+          event_time: { type: ['string', 'null'], format: 'date-time' },
+          lineage_root: { type: 'string', format: 'uuid' },
+          snippet: { type: 'string' },
+        },
+      },
+      RecallResponse: {
+        type: 'object',
+        required: [
+          'query',
+          'mode',
+          'unknown',
+          'token_budget',
+          'estimated_tokens',
+          'matches',
+          'context_pack',
+          'insufficiencies',
+          'coverage',
+          'request_id',
+          'trace_id',
+        ],
+        properties: {
+          query: { type: 'string' },
+          mode: { enum: ['precise', 'contextual', 'historical', 'exploratory', 'changes'] },
+          exact: { type: 'boolean' },
+          unknown: { type: 'boolean' },
+          token_budget: { type: 'integer', minimum: 64, maximum: 32000 },
+          estimated_tokens: { type: 'integer', minimum: 0 },
+          matches: { type: 'array', items: { $ref: '#/components/schemas/MemorySnapshot' } },
+          context_pack: { type: 'object', additionalProperties: true },
+          insufficiencies: { type: 'array', items: { type: 'string' } },
+          coverage: { type: 'object', additionalProperties: true },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ChangePage: {
+        type: 'object',
+        required: ['changes', 'next_cursor', 'has_more', 'request_id', 'trace_id'],
+        properties: {
+          changes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: [
+                'id',
+                'scope_id',
+                'sequence',
+                'operation',
+                'memory_id',
+                'revision',
+                'tombstone',
+                'occurred_at',
+              ],
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                scope_id: { type: 'string', format: 'uuid' },
+                sequence: { type: 'string', pattern: '^\\d+$' },
+                operation: { type: 'string' },
+                memory_id: { type: ['string', 'null'], format: 'uuid' },
+                revision: { type: ['integer', 'null'], minimum: 1 },
+                tombstone: { type: 'boolean' },
+                occurred_at: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+          next_cursor: { type: 'string' },
+          has_more: { type: 'boolean' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ErrorResponse: {
+        type: 'object',
+        required: ['error'],
+        properties: {
+          error: {
+            type: 'object',
+            required: ['code', 'message', 'request_id', 'retryable'],
+            properties: {
+              code: { type: 'string' },
+              message: { type: 'string' },
+              request_id: { type: 'string', format: 'uuid' },
+              retryable: { type: 'boolean' },
+              details: {},
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+export function createOpenApiDocument(productDisplayName = getProductDisplayName()) {
+  return {
+    ...apiContract,
+    info: { ...apiContract.info, title: `${productDisplayName} API` },
+  };
+}
+
+export const openApiDocument = createOpenApiDocument();

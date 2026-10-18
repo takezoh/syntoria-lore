@@ -1,0 +1,19 @@
+{
+  "name": "@memory/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@google-cloud/storage": "8.4.0",
+    "@memory/governance": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc --build"
+  }
+}
