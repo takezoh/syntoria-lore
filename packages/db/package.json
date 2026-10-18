@@ -1,0 +1,21 @@
+{
+  "name": "@memory/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "migrate": "node --import tsx src/migrate-cli.ts",
+    "setup-role": "node --import tsx src/setup-role.ts",
+    "seed:local": "node --import tsx src/seed-local-cli.ts"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@memory/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@memory/runtime": "0.1.0",
+    "@memory/contracts": "0.1.0",
+    "@memory/db": "0.1.0",
+    "@memory/domain": "0.1.0",
+    "@memory/governance": "0.1.0",
+    "@memory/connectors": "0.1.0",
+    "@memory/curator": "0.1.0",
+    "@memory/recall": "0.1.0",
+    "@memory/jobs": "0.1.0",
+    "google-auth-library": "11.3.1"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "npm run build --workspace @memory/runtime && node --env-file-if-exists=../../.env --import tsx --watch src/main.ts",
+    "start": "node --env-file-if-exists=../../.env dist/main.js"
+  }
+}

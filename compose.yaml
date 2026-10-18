@@ -1,0 +1,282 @@
+name: ${COMPOSE_PROJECT_NAME:-memory-service-local}
+
+x-app: &app
+  image: ${CONTAINER_IMAGE_NAME:-memory-service-local}:2026-10-14
+  build:
+    context: .
+    dockerfile: Dockerfile
+  init: true
+  restart: unless-stopped
+
+services:
+  db:
+    image: pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    environment:
+      POSTGRES_USER: ${DB_ADMIN_ROLE:-memory_admin}
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:?run scripts/local.sh start to create local secrets}
+      POSTGRES_DB: ${DATABASE_NAME:-memory_service}
+    ports:
+      - '127.0.0.1:55433:5432'
+    volumes:
+      - configured_db_data:/var/lib/postgresql/data
+      - ./infra/local/create-test-database.sql:/docker-entrypoint-initdb.d/10-create-test-database.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_ADMIN_ROLE:-memory_admin} -d ${DATABASE_NAME:-memory_service}']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+  bootstrap:
+    <<: *app
+    command: ['node', 'scripts/local-bootstrap.mjs']
+    environment:
+      AUTH_ISSUER: http://localhost:19090/
+      PRODUCT_DISPLAY_NAME: ${PRODUCT_DISPLAY_NAME:-Memory Service}
+      DB_ROLE_SOURCE_PREFIX: ${DB_ROLE_SOURCE_PREFIX:?deployment config must set the source role prefix}
+      MIGRATION_DATABASE_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      TEST_MIGRATION_DATABASE_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${TEST_DATABASE_NAME:-memory_service_test}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD}
+      FORGET_HMAC_KEY: ${FORGET_HMAC_KEY}
+      PORTABILITY_MASTER_KEY: ${PORTABILITY_MASTER_KEY}
+      LOCAL_SEED: '1'
+      DELETION_LEDGER_DIR: /var/memory-service/deletion-ledger
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - configured_artifacts:/var/memory-service
+    restart: 'no'
+
+  issuer:
+    <<: *app
+    command: ['node', 'scripts/local-fixtures.mjs', 'issuer']
+    environment:
+      LOCAL_ISSUER: http://localhost:19090/
+      LOCAL_ISSUER_PORT: '9090'
+      LOCAL_ISSUER_STATE_DIR: /var/memory-service-issuer
+      LOCAL_RESOURCE_BASE_URL: http://localhost:18080
+      LOCAL_SCOPE_ID: 22222222-2222-4222-8222-222222222222
+    ports:
+      - '127.0.0.1:19090:9090'
+    volumes:
+      - configured_issuer_data:/var/memory-service-issuer
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:9090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    <<: *app
+    command: ['node', 'apps/worker/dist/main.js']
+    environment:
+      WORKER_HOST: 0.0.0.0
+      PRODUCT_DISPLAY_NAME: ${PRODUCT_DISPLAY_NAME:-Memory Service}
+      WORKER_PORT: '8081'
+      WORKER_DATABASE_URL: postgresql://${DB_WORKER_LOGIN_ROLE:-memory_worker_login}:${WORKER_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      CURSOR_HMAC_ACTIVE_KEY: local-1
+      CURSOR_HMAC_KEYS: local-1=${CURSOR_HMAC_KEY}
+      DELETION_LEDGER_DIR: /var/memory-service/deletion-ledger
+      FORGET_HMAC_KEY: ${FORGET_HMAC_KEY}
+      PORTABILITY_STORAGE_DIR: /var/memory-service/portable-exports
+      PORTABILITY_MASTER_KEY: ${PORTABILITY_MASTER_KEY}
+      PORTABILITY_SIGNER_ID: ${PORTABILITY_SIGNER_ID:?deployment config must set the legacy signer ID}
+      WORKER_TASK_TOKEN: ${WORKER_TASK_TOKEN}
+      WORKER_TASK_URL: http://tasks:9091
+      LOCAL_TASK_FIXTURE: '1'
+      CURATOR_PROVIDER: local
+      CURATOR_PROMPT_VERSION: local-fixture-v1
+      CURATOR_MODEL_ID: local-deterministic-v1
+      LOCAL_FAKE_FAILURE_DIR: /var/memory-service/provider-failures
+    expose:
+      - '8081'
+    volumes:
+      - configured_artifacts:/var/memory-service
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8081/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  tasks:
+    <<: *app
+    command: ['node', 'scripts/local-fixtures.mjs', 'tasks']
+    environment:
+      LOCAL_TASKS_PORT: '9091'
+      LOCAL_WORKER_URL: http://worker:8081
+      WORKER_TASK_TOKEN: ${WORKER_TASK_TOKEN}
+      LOCAL_CONTROL_TOKEN: ${LOCAL_CONTROL_TOKEN}
+      LOCAL_ARTIFACTS_DIR: /var/memory-service
+    ports:
+      - '127.0.0.1:19091:9091'
+    volumes:
+      - configured_artifacts:/var/memory-service
+    depends_on:
+      worker:
+        condition: service_healthy
+
+  scheduler:
+    <<: *app
+    command: ['node', 'scripts/local-fixtures.mjs', 'scheduler']
+    environment:
+      LOCAL_SCHEDULER_PORT: '9092'
+      LOCAL_WORKER_URL: http://worker:8081
+      WORKER_TASK_TOKEN: ${WORKER_TASK_TOKEN}
+      LOCAL_CONTROL_TOKEN: ${LOCAL_CONTROL_TOKEN}
+      LOCAL_SCHEDULER_INTERVAL_MS: '30000'
+    ports:
+      - '127.0.0.1:19092:9092'
+    depends_on:
+      worker:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: ['node', 'apps/api/dist/main.js']
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: '8080'
+      DATABASE_URL: postgresql://${DB_APP_ROLE:-memory_app}:${APP_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      AUTH_ISSUER: http://localhost:19090/
+      PRODUCT_DISPLAY_NAME: ${PRODUCT_DISPLAY_NAME:-Memory Service}
+      AUTH_AUDIENCE: http://localhost:18080
+      AUTH_JWKS_URL: http://issuer:9090/.well-known/jwks.json
+      LOCAL_AUTH_FIXTURE: '1'
+      LOCAL_RATE_LIMIT: '10000'
+      AUTH_MCP_READ_AUDIENCE: http://localhost:18080/mcp/read
+      AUTH_MCP_WRITE_AUDIENCE: http://localhost:18080/mcp/write
+      MCP_BASE_URL: http://localhost:18080
+      MCP_ALLOWED_HOSTS: localhost,127.0.0.1,::1
+      DELETION_LEDGER_DIR: /var/memory-service/deletion-ledger
+      FORGET_HMAC_KEY: ${FORGET_HMAC_KEY}
+      PORTABILITY_STORAGE_DIR: /var/memory-service/portable-exports
+      PORTABILITY_MASTER_KEY: ${PORTABILITY_MASTER_KEY}
+      PORTABILITY_SIGNER_ID: ${PORTABILITY_SIGNER_ID:?deployment config must set the legacy signer ID}
+      CURSOR_HMAC_ACTIVE_KEY: local-1
+      CURSOR_HMAC_KEYS: local-1=${CURSOR_HMAC_KEY}
+      CURATOR_PROVIDER: local
+      CURATOR_PROMPT_VERSION: local-fixture-v1
+      CURATOR_MODEL_ID: local-deterministic-v1
+      LOCAL_FAKE_FAILURE_DIR: /var/memory-service/provider-failures
+    ports:
+      - '127.0.0.1:18080:8080'
+    volumes:
+      - configured_artifacts:/var/memory-service
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      issuer:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  restore-reconcile:
+    <<: *app
+    profiles: [tools]
+    command: ['node', 'scripts/reconcile-restore.mjs']
+    environment:
+      DATABASE_URL: postgresql://${DB_APP_ROLE:-memory_app}:${APP_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      WORKER_DATABASE_URL: postgresql://${DB_WORKER_LOGIN_ROLE:-memory_worker_login}:${WORKER_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      DELETION_LEDGER_DIR: /var/memory-service/deletion-ledger
+      FORGET_HMAC_KEY: ${FORGET_HMAC_KEY}
+    volumes:
+      - configured_artifacts:/var/memory-service
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+  eval-scope-seed:
+    <<: *app
+    profiles: [tools]
+    command: ['node', 'scripts/local-eval-scope.mjs']
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      LOCAL_EVAL_SCOPE_IDS: ${LOCAL_EVAL_SCOPE_IDS:-}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+  diagnostics:
+    <<: *app
+    profiles: [tools]
+    command: ['node', 'scripts/local-diagnostics.mjs']
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      WORKER_DATABASE_URL: postgresql://${DB_WORKER_LOGIN_ROLE:-memory_worker_login}:${WORKER_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+    volumes:
+      - configured_artifacts:/var/memory-service:ro
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+  quality:
+    <<: *app
+    profiles: [tools]
+    command: ['npm', 'run', 'verify:local']
+    environment:
+      DB_ROLE_SOURCE_PREFIX: ${DB_ROLE_SOURCE_PREFIX:?deployment config must set the source role prefix}
+      MIGRATION_DATABASE_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
+      TEST_ADMIN_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${TEST_DATABASE_NAME:-memory_service_test}
+      TEST_APP_URL: postgresql://${DB_APP_ROLE:-memory_app}:${APP_DB_PASSWORD}@db:5432/${TEST_DATABASE_NAME:-memory_service_test}
+      AUTH_ISSUER: http://localhost:19090/
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD}
+      FORGET_HMAC_KEY: ${FORGET_HMAC_KEY}
+      PORTABILITY_MASTER_KEY: ${PORTABILITY_MASTER_KEY}
+      PORTABILITY_SIGNER_ID: ${PORTABILITY_SIGNER_ID:?deployment config must set the legacy signer ID}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+volumes:
+  configured_db_data:
+    name: ${LOCAL_DB_VOLUME:-memory_service_local_db}
+  configured_artifacts:
+    name: ${LOCAL_ARTIFACTS_VOLUME:-memory_service_local_artifacts}
+  configured_issuer_data:
+    name: ${LOCAL_ISSUER_VOLUME:-memory_service_local_issuer}

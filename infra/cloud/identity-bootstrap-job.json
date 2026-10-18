@@ -1,0 +1,156 @@
+{
+  "apiVersion": "run.googleapis.com/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "thymesis-identity-bootstrap",
+    "namespace": "533289977919"
+  },
+  "spec": {
+    "template": {
+      "spec": {
+        "taskCount": 1,
+        "parallelism": 1,
+        "template": {
+          "spec": {
+            "serviceAccountName": "thymesis-identity-bootstrap@syntoria.iam.gserviceaccount.com",
+            "maxRetries": 0,
+            "timeoutSeconds": "900",
+            "containers": [
+              {
+                "image": "asia-southeast1-docker.pkg.dev/syntoria/thymesis/identity-keycloak@sha256:9ae7bb7a596dbf0aaf235c264f8ce1621120f53221f9e808b34ec7890e57dc52",
+                "command": [
+                  "/opt/keycloak/cloud-oauth-bootstrap.sh"
+                ],
+                "env": [
+                  {
+                    "name": "IDENTITY_PUBLIC_URL",
+                    "value": "https://thymesis-identity-533289977919.asia-southeast1.run.app"
+                  },
+                  {
+                    "name": "API_RESOURCE_URL",
+                    "value": "https://thymesis-api-533289977919.asia-southeast1.run.app"
+                  },
+                  {
+                    "name": "MCP_RESOURCE_BASE_URL",
+                    "value": "https://thymesis-api-533289977919.asia-southeast1.run.app"
+                  },
+                  {
+                    "name": "KC_DB_USERNAME",
+                    "value": "thymesis_identity"
+                  },
+                  {
+                    "name": "KC_HOSTNAME",
+                    "value": "https://thymesis-identity-533289977919.asia-southeast1.run.app"
+                  },
+                  {
+                    "name": "KC_BOOTSTRAP_ADMIN_USERNAME",
+                    "value": "thymesis-bootstrap-admin"
+                  },
+                  {
+                    "name": "OWNER_ID",
+                    "value": "ad1f3a02-e8f5-4ced-84e0-511bbaf6f712"
+                  },
+                  {
+                    "name": "OWNER_SUBJECT_ID",
+                    "value": "cf567b8c-39a8-41ff-8105-988605f9aa6d"
+                  },
+                  {
+                    "name": "OWNER_SCOPE_ID",
+                    "value": "cc8b7c3d-a629-43b8-862d-e1672f7bc87e"
+                  },
+                  {
+                    "name": "OWNER_USERNAME",
+                    "value": "owner"
+                  },
+                  {
+                    "name": "OAUTH_PUBLIC_CLIENT_ID",
+                    "value": "thymesis-public-app"
+                  },
+                  {
+                    "name": "OAUTH_PUBLIC_REDIRECT_URI",
+                    "value": "http://127.0.0.1:18970/callback"
+                  },
+                  {
+                    "name": "OAUTH_SMOKE_CLIENT_ID",
+                    "value": "thymesis-cloud-oauth-smoke"
+                  },
+                  {
+                    "name": "OAUTH_SMOKE_REDIRECT_URI",
+                    "value": "http://127.0.0.1:18971/callback"
+                  },
+                  {
+                    "name": "OAUTH_SMOKE_USER_ID",
+                    "value": "559fa46a-ffa4-4b13-9181-404ec992698c"
+                  },
+                  {
+                    "name": "OAUTH_SMOKE_USERNAME",
+                    "value": "cloud-smoke-6642cf90d20f"
+                  },
+                  {
+                    "name": "OAUTH_SMOKE_SCOPE_ID",
+                    "value": "54e68251-5036-4509-b1c9-471a93c54526"
+                  },
+                  {
+                    "name": "OAUTH_SMOKE_ACTION",
+                    "value": "configure"
+                  },
+                  {
+                    "name": "KC_DB_URL",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "thymesis-identity-jdbc-url",
+                        "key": "2"
+                      }
+                    }
+                  },
+                  {
+                    "name": "KC_DB_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "thymesis-identity-db-password",
+                        "key": "1"
+                      }
+                    }
+                  },
+                  {
+                    "name": "KC_BOOTSTRAP_ADMIN_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "thymesis-identity-bootstrap-password",
+                        "key": "1"
+                      }
+                    }
+                  },
+                  {
+                    "name": "OWNER_INITIAL_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "thymesis-owner-initial-password",
+                        "key": "1"
+                      }
+                    }
+                  },
+                  {
+                    "name": "OAUTH_SMOKE_PASSWORD",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "thymesis-oauth-smoke-password",
+                        "key": "1"
+                      }
+                    }
+                  }
+                ],
+                "resources": {
+                  "limits": {
+                    "cpu": "1",
+                    "memory": "2Gi"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

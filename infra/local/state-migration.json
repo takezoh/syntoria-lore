@@ -1,0 +1,32 @@
+{
+  "source": {
+    "volumes": {
+      "db": "thymesis_local_db",
+      "artifacts": "thymesis_local_artifacts",
+      "issuer": "thymesis_local_issuer"
+    },
+    "databases": {
+      "primary": "thymesis",
+      "test": "thymesis_test"
+    },
+    "adminRole": "thymesis_admin",
+    "rolePrefix": "thymesis",
+    "portabilitySignerId": "thymesis-local"
+  },
+  "target": {
+    "volumes": {
+      "db": "lore_local_db",
+      "artifacts": "lore_local_artifacts",
+      "issuer": "lore_local_issuer"
+    },
+    "databases": {
+      "primary": "memory_service",
+      "test": "memory_service_test"
+    },
+    "adminRole": "memory_admin",
+    "rolePrefix": "memory",
+    "portabilitySignerId": "thymesis-local"
+  },
+  "postgresImage": "pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d",
+  "migrationPrefix": "thymesis"
+}

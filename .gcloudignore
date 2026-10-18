@@ -1,0 +1,16 @@
+**/.git
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+**/*secret*
+!scripts/secret-scan.mjs
+**/*credential*
+**/*.pem
+**/*.key
+**/*.log
+**/.cache
+**/.tmp
