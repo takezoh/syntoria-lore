@@ -42,7 +42,7 @@ Lore is a personal service: your memories belong to your account and are not sha
 
 The API-only production correction is deployed: the API and Gate are serving their latest revisions at 100% traffic, and the worker remains private. Gate owns sign-in and sessions, while MCP clients own their OAuth callback. Production probes confirm Lore's old login/session routes are absent and cookie-only or invalid bearer requests are rejected. Positive hosted MCP data access with a real user remains unverified. See the [deployment record](docs/eval/api-only-gate-auth-correction-20261019.md) and [client access guide](docs/usage/sign-in.md).
 
-Protected data still requires an allowed Gate bearer token mapped to an existing user and grant. Signing in does not by itself give an AI access to your memories: each allowed client receives only its existing read or write permission.
+Protected data still requires an approved Gate bearer token mapped to an existing user and grant. Signing in does not by itself give an AI access to your memories: each approved connection receives only the admitted subject’s existing read or write permission.
 
 ## Use cases: ask your AI
 

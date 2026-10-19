@@ -213,7 +213,7 @@ try {
   );
   assert.equal(
     (await admin.query('SELECT count(*)::int AS count FROM schema_migrations')).rows[0]!.count,
-    42,
+    (await readdir(directory)).filter((name) => /^\d+_.*\.sql$/.test(name)).length,
   );
   assert.equal(
     (await admin.query('SELECT count(*)::int AS count FROM external_identity_bindings')).rows[0]!
@@ -249,7 +249,7 @@ try {
     client.release();
   }
   console.log(
-    'Migration 0042: existing user/principal/scope IDs, auth epoch, grants, memory, receipt/hash, v1 cursor, table OID and RLS preserved; 42 migrations and reapply passed.',
+    'Identity migrations: existing user/principal/scope IDs, auth epoch, grants, memory, receipt/hash, v1 cursor, table OID and RLS preserved; current migrations and reapply passed.',
   );
 } finally {
   await app?.end();
