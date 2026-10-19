@@ -13,7 +13,7 @@ const now = 1_800_000_000_000;
 
 function verifier(fetch: typeof globalThis.fetch, timeoutMs = 100) {
   return createIdentityProviderVerifier(
-    { issuer, audience, clientId, clientSecret, allowedClientIds: ['browser', 'mcp'], timeoutMs },
+    { issuer, audience, clientId, clientSecret, timeoutMs },
     { fetch, now: () => now },
   );
 }
@@ -52,7 +52,7 @@ describe('Gate online credential verification', () => {
           iss: issuer,
           sub: 'github:12345',
           connection_id: 'connection-1',
-          client_id: 'mcp',
+          client_id: 'dynamic-registration-arbitrary-id',
           aud: audience,
           exp: now / 1000 + 60,
         });
@@ -65,7 +65,7 @@ describe('Gate online credential verification', () => {
       issuer,
       subject: 'github:12345',
       connectionId: 'connection-1',
-      clientId: 'mcp',
+      clientId: 'dynamic-registration-arbitrary-id',
     });
     await expect(auth.verifyToken(token)).resolves.toMatchObject({ subject: 'github:12345' });
     expect(calls).toBe(2);
@@ -80,11 +80,13 @@ describe('Gate online credential verification', () => {
     expect(requests[1]?.body).not.toContain(clientSecret);
   });
 
-  it('rejects inactive, expired, wrong-client and cross-resource credentials as 401', async () => {
+  it('rejects inactive, expired, malformed-client and cross-resource credentials as 401', async () => {
     const cases = [
       { active: false },
       { active: true, exp: now / 1000 },
-      { active: true, client_id: 'unregistered' },
+      { active: true, client_id: '' },
+      { active: true, client_id: undefined, azp: 'mcp' },
+      { active: true, azp: 'different' },
       { active: true, aud: ['https://other.example.test'] },
     ];
     for (const change of cases) {
@@ -100,7 +102,7 @@ describe('Gate online credential verification', () => {
                   iss: issuer,
                   sub: 'github:12345',
                   connection_id: 'connection-1',
-                  client_id: 'mcp',
+                  client_id: 'dynamic-registration-arbitrary-id',
                   aud: audience,
                   exp: now / 1000 + 60,
                 },

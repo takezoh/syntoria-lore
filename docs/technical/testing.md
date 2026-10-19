@@ -50,3 +50,5 @@ It applies migrations through 0041, writes user/principal/grant/memory and
 receipt data, preserves a v1 cursor and table OID, applies 0042 twice, and
 checks that data and forced RLS remain unchanged while the new binding table is
 empty. This is local PostgreSQL evidence, not a hosted migration check.
+
+The subject-admission migration regression (`scripts/test-subject-admission-migration.ts`) uses a disposable real PostgreSQL database. It verifies equivalent active policy consolidation, inactive policy exclusion, inactive-only denial, and transactional rollback on conflicting active authority. The existing PostgreSQL authentication scenarios retain live grant and local binding revocation/lock checks.

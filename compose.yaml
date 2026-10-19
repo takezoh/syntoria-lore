@@ -135,7 +135,6 @@ services:
       AUTH_ISSUER: ${AUTH_ISSUER:?configure the external Gate issuer in .env.local}
       PRODUCT_DISPLAY_NAME: ${PRODUCT_DISPLAY_NAME:-Memory Service}
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:?configure the HTTPS API resource in .env.local}
-      AUTH_ALLOWED_CLIENT_IDS: ${AUTH_ALLOWED_CLIENT_IDS:?configure allowed Gate clients in .env.local}
       AUTH_API_RESOURCE_CLIENT_ID: ${AUTH_API_RESOURCE_CLIENT_ID:?configure the Gate API resource client in .env.local}
       AUTH_API_RESOURCE_CLIENT_SECRET: ${AUTH_API_RESOURCE_CLIENT_SECRET:?configure the Gate API resource secret in .env.local}
       AUTH_MCP_READ_RESOURCE_CLIENT_ID: ${AUTH_MCP_READ_RESOURCE_CLIENT_ID:?configure the Gate MCP read resource client in .env.local}

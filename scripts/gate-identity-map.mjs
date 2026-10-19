@@ -51,12 +51,11 @@ try {
       if (action === 'activate' && current === undefined) {
         await client.query(
           `INSERT INTO public.external_identity_bindings
-             (external_issuer, external_subject, external_client_id, user_id, principal_id, scope_ids, capability_ceiling)
-           VALUES ($1, $2, $3, $4, $5, $6::uuid[], $7::text[])`,
+             (external_issuer, external_subject, user_id, principal_id, scope_ids, capability_ceiling)
+           VALUES ($1, $2, $3, $4, $5::uuid[], $6::text[])`,
           [
             spec.target.issuer,
             spec.target.subject,
-            spec.target.client_id,
             spec.user_id,
             spec.principal_id,
             spec.scope_ids,
@@ -67,15 +66,15 @@ try {
         await client.query(
           `UPDATE public.external_identity_bindings
            SET active = true, updated_at = clock_timestamp()
-           WHERE external_issuer = $1 AND external_subject = $2 AND external_client_id = $3`,
-          [spec.target.issuer, spec.target.subject, spec.target.client_id],
+           WHERE external_issuer = $1 AND external_subject = $2`,
+          [spec.target.issuer, spec.target.subject],
         );
       } else if (action === 'deactivate' && current?.active === true) {
         await client.query(
           `UPDATE public.external_identity_bindings
            SET active = false, updated_at = clock_timestamp()
-           WHERE external_issuer = $1 AND external_subject = $2 AND external_client_id = $3`,
-          [spec.target.issuer, spec.target.subject, spec.target.client_id],
+           WHERE external_issuer = $1 AND external_subject = $2`,
+          [spec.target.issuer, spec.target.subject],
         );
       }
 
@@ -147,9 +146,9 @@ async function readTargetBinding(client, mapping) {
   const result = await client.query(
     `SELECT user_id::text, principal_id::text, scope_ids::text[], capability_ceiling, active
      FROM public.external_identity_bindings
-     WHERE external_issuer = $1 AND external_subject = $2 AND external_client_id = $3
+     WHERE external_issuer = $1 AND external_subject = $2
      FOR UPDATE`,
-    [mapping.target.issuer, mapping.target.subject, mapping.target.client_id],
+    [mapping.target.issuer, mapping.target.subject],
   );
   return result.rows[0];
 }
@@ -231,9 +230,9 @@ function parseSpec(value) {
     typeof value.target !== 'object' ||
     value.target === null ||
     Array.isArray(value.target) ||
-    !hasExactKeys(value.target, ['issuer', 'subject', 'client_id'])
+    !hasExactKeys(value.target, ['issuer', 'subject'])
   ) {
-    throw new Error('target must contain issuer, subject, and client_id only');
+    throw new Error('target must contain issuer and subject only');
   }
   return {
     expected_source: {
@@ -245,7 +244,6 @@ function parseSpec(value) {
     target: {
       issuer: text(value.target.issuer, 'target.issuer', 2048),
       subject: text(value.target.subject, 'target.subject', 512),
-      client_id: text(value.target.client_id, 'target.client_id', 256),
     },
     scope_ids: [...value.scope_ids].sort(),
     capability_ceiling: [...value.capability_ceiling].sort(),
