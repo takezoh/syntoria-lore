@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 const api = (process.env['LOCAL_API_URL'] ?? 'http://localhost:18080').replace(/\/$/, '');
-const issuer = (process.env['LOCAL_ISSUER_URL'] ?? 'http://localhost:19090').replace(/\/$/, '');
 const scope = process.env['LOCAL_SCOPE_ID'] ?? '22222222-2222-4222-8222-222222222222';
 const captureScopes = (process.env['LOCAL_CAPTURE_SCOPE_IDS'] ?? '').split(/\s+/).filter(Boolean);
 const runId = randomUUID();
@@ -25,24 +24,9 @@ const begunAt = new Date().toISOString();
 try {
   if (captureScopes.length !== 6)
     throw new Error('Local evaluation needs six isolated capture scopes');
-  userToken = await issue(
-    'demo-owner-client',
-    'owner-local-fixture-only',
-    api,
-    'memory:read memory:write memory:admin',
-    [scope, ...captureScopes],
-  );
-  readerToken = await issue('demo-reader-client', 'reader-local-fixture-only', api, 'memory:read', [
-    scope,
-    ...captureScopes,
-  ]);
-  wrongAudienceToken = await issue(
-    'demo-owner-client',
-    'owner-local-fixture-only',
-    `${api}/mcp/read`,
-    'memory:read memory:write',
-    [scope, ...captureScopes],
-  );
+  userToken = required('LOCAL_API_BEARER_TOKEN');
+  readerToken = required('LOCAL_API_READONLY_BEARER_TOKEN');
+  wrongAudienceToken = required('LOCAL_MCP_READ_BEARER_TOKEN');
   const temporal = await seedTemporal();
   const authority = await seedAuthority();
   const evidence = await seedEvidence();
@@ -2048,26 +2032,11 @@ async function waitForCapture(jobId, token) {
   );
 }
 
-async function issue(clientId, secret, resource, requestedScope, scopeIds = [scope]) {
-  const authorization = Buffer.from(`${clientId}:${secret}`).toString('base64');
-  const response = await fetch(`${issuer}/oauth/token`, {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${authorization}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      resource,
-      scope: requestedScope,
-      scope_ids: scopeIds.join(' '),
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  const body = await readBody(response);
-  if (!response.ok || typeof body.access_token !== 'string')
-    throw new Error(`Local issuer token request returned HTTP ${response.status}`);
-  return body.access_token;
+function required(name) {
+  const value = process.env[name];
+  if (!value)
+    throw new Error(`${name} must be supplied by Gate; this script does not issue credentials`);
+  return value;
 }
 
 async function postJson(path, token, body, options = {}) {

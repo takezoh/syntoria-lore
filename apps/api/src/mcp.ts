@@ -30,7 +30,9 @@ export async function handleMcpRequest(
   if (incoming.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405, headers: { allow: 'POST' } });
   }
-  const actor = await options.auth.authenticate(incoming.headers.get('authorization') ?? undefined);
+  const actor = await options.auth.authenticateBearer(
+    incoming.headers.get('authorization') ?? undefined,
+  );
   const requiredCapability = endpoint === 'read' ? 'read' : 'write';
   if (!actor.capabilities.includes(requiredCapability)) {
     throw new CoreError(

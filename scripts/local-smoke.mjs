@@ -2,26 +2,24 @@ import { Client } from '@modelcontextprotocol/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { randomUUID } from 'node:crypto';
 
-const base = 'http://localhost:18080';
+const apiBase = new URL(process.env['LOCAL_API_BASE_URL'] ?? 'https://memory.example.test');
+if (
+  apiBase.protocol !== 'https:' ||
+  apiBase.username !== '' ||
+  apiBase.password !== '' ||
+  apiBase.pathname !== '/' ||
+  apiBase.search !== '' ||
+  apiBase.hash !== ''
+) {
+  throw new Error(
+    'LOCAL_API_BASE_URL must be a canonical HTTPS origin served by the configured TLS proxy',
+  );
+}
+const base = apiBase.origin;
 const scopeId = '22222222-2222-4222-8222-222222222222';
-const restToken = await issue(
-  'demo-owner-client',
-  'owner-local-fixture-only',
-  base,
-  'memory:read memory:write memory:admin',
-);
-const userToken = await issue(
-  'demo-owner-client',
-  'owner-local-fixture-only',
-  `${base}/mcp/write`,
-  'memory:read memory:write memory:admin',
-);
-const readerToken = await issue(
-  'demo-reader-client',
-  'reader-local-fixture-only',
-  `${base}/mcp/read`,
-  'memory:read',
-);
+const restToken = required('LOCAL_API_BEARER_TOKEN');
+const userToken = required('LOCAL_MCP_WRITE_BEARER_TOKEN');
+const readerToken = required('LOCAL_MCP_READ_BEARER_TOKEN');
 const metadata = await fetch(`${base}/.well-known/oauth-protected-resource/mcp/read`).then((r) =>
   r.json(),
 );
@@ -126,17 +124,9 @@ function parseToolJson(content) {
   return JSON.parse(text);
 }
 
-async function issue(clientId, secret, resource, scope) {
-  const authorization = Buffer.from(`${clientId}:${secret}`).toString('base64');
-  const response = await fetch('http://localhost:19090/oauth/token', {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${authorization}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({ grant_type: 'client_credentials', resource, scope }),
-  });
-  if (!response.ok) throw new Error(`Local issuer returned HTTP ${response.status}`);
-  const payload = await response.json();
-  return payload.access_token;
+function required(name) {
+  const value = process.env[name];
+  if (!value)
+    throw new Error(`${name} must be supplied by Gate; this script does not issue credentials`);
+  return value;
 }

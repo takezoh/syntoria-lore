@@ -26,6 +26,9 @@
     "api": {
       "secrets": [
         "lore-app-database-url:1",
+        "lore-gate-api-secret:1",
+        "lore-gate-mcp-read-secret:1",
+        "lore-gate-mcp-write-secret:1",
         "lore-forget-hmac-key:1",
         "lore-portability-master-key:1",
         "lore-cursor-hmac-keys:1"
@@ -251,6 +254,15 @@
       "api",
       "migration"
     ],
+    "lore-gate-api-secret": [
+      "api"
+    ],
+    "lore-gate-mcp-read-secret": [
+      "api"
+    ],
+    "lore-gate-mcp-write-secret": [
+      "api"
+    ],
     "lore-worker-database-url": [
       "worker",
       "migration"
@@ -384,8 +396,8 @@
     "identityBootstrap": []
   },
   "secretPayloadsInRepository": false,
-  "publicIdentityInvokerBinding": "pending explicit user approval; do not grant allUsers",
-  "publicApiInvokerBinding": "not requested or attempted in this deployment; keep API IAM-authenticated during private verification",
+  "publicIdentityInvokerBinding": "legacy identity service is retained as a fallback and is not used by serving Lore; this contract authorizes no new binding",
+  "publicApiInvokerBinding": "explicitly approved and active on the API; worker IAM remains private and unchanged",
   "productDisplayName": "Syntoria Lore",
-  "targetActivationStatus": "pending"
+  "targetActivationStatus": "gate-cutover-deployed; public-https-active; api-only-auth-pending"
 }

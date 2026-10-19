@@ -1,224 +1,308 @@
-import { CoreError, uuidSchema, type ActorContext, type Capability } from '@memory/contracts';
-import { withTransaction, uuidArray } from '@memory/db';
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import {
+  actorKindSchema,
+  bindActorAuthorizationGuard,
+  CoreError,
+  getActorAuthorizationGuard,
+  type ActorContext,
+  type Capability,
+} from '@memory/contracts';
+import { withTransaction, uuidArray, type PoolClient } from '@memory/db';
 import type { Pool } from 'pg';
+import {
+  createIdentityProviderVerifier,
+  IdentityProviderError,
+  type ExternalIdentityPrincipal,
+  type IdentityProviderConfig,
+} from './connection-verifier.js';
 
-const tokenScopesClaim = 'scope_ids';
-const memoryCapabilityScopes = new Set(['memory:read', 'memory:write', 'memory:admin']);
-const memorySupportScopes = new Set([
-  'memory:resource:api',
-  'memory:resource:mcp:read',
-  'memory:resource:mcp:write',
-  'memory:scope_ids',
-]);
-
-export interface AuthenticatorOptions {
+export interface AuthenticatorOptions extends IdentityProviderConfig {
   readonly pool: Pool;
-  readonly issuer: string;
-  readonly audience: string;
-  readonly jwksUrl: string;
-  readonly allowedAlgorithms?: readonly ('RS256' | 'ES256' | 'EdDSA')[];
+  readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => number;
 }
 
-interface PrincipalRow {
-  user_id: string;
-  principal_id: string;
-  actor_kind: ActorContext['actorKind'];
+interface BindingRow {
+  readonly user_id: string;
+  readonly principal_id: string;
+  readonly actor_kind: string;
+  readonly scope_ids: string[];
+  readonly capability_ceiling: string[];
 }
 
 interface GrantRow {
-  scope_id: string;
-  auth_epoch: string;
-  capabilities: string[];
+  readonly scope_id: string;
+  readonly auth_epoch: string;
+  readonly capabilities: string[];
 }
+
+interface ActorCredential {
+  readonly token: string;
+  readonly principal: ExternalIdentityPrincipal;
+  readonly binding: BindingRow;
+}
+
+const knownCapabilities = new Set<Capability>(['read', 'write', 'admin']);
 
 export class Authenticator {
-  private readonly jwks: ReturnType<typeof createRemoteJWKSet>;
-  private readonly algorithms: readonly string[];
+  private readonly verifier: ReturnType<typeof createIdentityProviderVerifier>;
+  private readonly credentials = new WeakMap<ActorContext, ActorCredential>();
 
   constructor(private readonly options: AuthenticatorOptions) {
-    const jwksUrl = new URL(options.jwksUrl);
-    const issuerUrl = new URL(options.issuer);
-    const explicitDockerIssuerFixture =
-      process.env['LOCAL_AUTH_FIXTURE'] === '1' &&
-      jwksUrl.protocol === 'http:' &&
-      jwksUrl.hostname === 'issuer' &&
-      issuerUrl.href === 'http://localhost:19090/';
-    if (
-      jwksUrl.protocol !== 'https:' &&
-      !isLocalHost(jwksUrl.hostname) &&
-      !explicitDockerIssuerFixture
-    ) {
-      throw new Error('AUTH_JWKS_URL must use HTTPS outside localhost');
-    }
-    this.jwks = createRemoteJWKSet(jwksUrl, { timeoutDuration: 5_000, cooldownDuration: 30_000 });
-    this.algorithms = options.allowedAlgorithms ?? ['RS256', 'ES256', 'EdDSA'];
-    if (this.algorithms.length === 0)
-      throw new Error('At least one JWT signing algorithm is required');
+    const { fetch, now } = options;
+    const providerConfig: IdentityProviderConfig = {
+      issuer: options.issuer,
+      audience: options.audience,
+      clientId: options.clientId,
+      clientSecret: options.clientSecret,
+      allowedClientIds: options.allowedClientIds,
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(options.allowLoopbackHttp === undefined
+        ? {}
+        : { allowLoopbackHttp: options.allowLoopbackHttp }),
+    };
+    this.verifier = createIdentityProviderVerifier(providerConfig, {
+      ...(fetch === undefined ? {} : { fetch }),
+      ...(now === undefined ? {} : { now }),
+    });
   }
 
-  async authenticate(authorization: string | undefined): Promise<ActorContext> {
-    const match = /^Bearer ([A-Za-z0-9._~-]+)$/.exec(authorization ?? '');
-    if (match?.[1] === undefined)
-      throw new CoreError(401, 'unauthorized', 'A valid bearer token is required');
+  authenticate(authorization: string | undefined): Promise<ActorContext> {
+    return this.authenticateBearer(authorization);
+  }
 
-    let payload: JWTPayload;
+  async authenticateBearer(authorization: string | undefined): Promise<ActorContext> {
+    let principal: ExternalIdentityPrincipal;
     try {
-      ({ payload } = await jwtVerify(match[1], this.jwks, {
-        issuer: this.options.issuer,
-        audience: this.options.audience,
-        algorithms: [...this.algorithms],
-        requiredClaims: ['sub', 'iss', 'exp', 'iat'],
-      }));
+      principal = await this.verifier.authenticate(authorization);
+    } catch (error) {
+      throw asCoreAuthError(error);
+    }
+    return this.createActor(principal, extractBearer(authorization));
+  }
+
+  async assertCurrent(actor: ActorContext): Promise<void> {
+    const guard = getActorAuthorizationGuard(actor);
+    if (guard === undefined) {
+      throw new CoreError(401, 'unauthorized', 'The Gate credential is no longer available');
+    }
+    await withTransaction(this.options.pool, async () => undefined, {
+      beforeCommit: (client) => guard(client),
+    });
+  }
+
+  private async createActor(
+    principal: ExternalIdentityPrincipal,
+    token: string,
+  ): Promise<ActorContext> {
+    let binding: BindingRow | undefined;
+    try {
+      binding = await this.lookupBinding(this.options.pool, principal);
     } catch {
-      throw new CoreError(401, 'unauthorized', 'The bearer token is invalid or expired');
-    }
-
-    if (!hasExactAudience(payload.aud, this.options.audience)) {
-      throw new CoreError(401, 'unauthorized', 'The bearer token targets a different resource');
-    }
-
-    const subject = payload.sub;
-    const issuer = payload.iss;
-    if (subject === undefined || issuer === undefined) {
-      throw new CoreError(401, 'unauthorized', 'The bearer token has no issuer or subject');
-    }
-    const tokenScopeIds = readTokenScopeIds(payload);
-    if (tokenScopeIds.length === 0)
-      throw new CoreError(403, 'forbidden', 'The token grants no memory scopes');
-    const tokenCapabilities = readTokenCapabilities(payload);
-    if (tokenCapabilities.length === 0) {
-      throw new CoreError(403, 'forbidden', 'The token grants no memory operation scopes');
-    }
-
-    const principalResult = await this.options.pool.query<PrincipalRow>(
-      'SELECT user_id, principal_id, actor_kind FROM app.resolve_principal($1, $2)',
-      [issuer, subject],
-    );
-    const principal = principalResult.rows[0];
-    if (principal === undefined)
-      throw new CoreError(401, 'unauthorized', 'The token subject is not registered');
-
-    const grants = await withTransaction(this.options.pool, async (client) => {
-      await client.query("SELECT set_config('app.user_id', $1, true)", [principal.user_id]);
-      await client.query("SELECT set_config('app.scope_ids', $1, true)", [
-        uuidArray(tokenScopeIds),
-      ]);
-      const result = await client.query<GrantRow>(
-        `SELECT s.id AS scope_id, s.auth_epoch, g.capabilities
-         FROM scopes AS s
-         JOIN grants AS g ON g.user_id = s.user_id AND g.scope_id = s.id
-         WHERE s.user_id = $1 AND g.principal_id = $2 AND s.id = ANY($3::uuid[])
-           AND (g.expires_at IS NULL OR g.expires_at > clock_timestamp())
-         ORDER BY s.id`,
-        [principal.user_id, principal.principal_id, tokenScopeIds],
+      throw new CoreError(
+        503,
+        'authorization_unavailable',
+        'Local authorization is unavailable',
+        true,
       );
-      return result.rows;
-    });
-
-    if (grants.length === 0)
-      throw new CoreError(403, 'forbidden', 'The principal has no grant in the requested scopes');
-    const scopeIds = grants.map((grant) => grant.scope_id);
-    const authEpochs = Object.fromEntries(
-      grants.map((grant) => [grant.scope_id, Number(grant.auth_epoch)]),
-    );
-    const databaseCapabilities = expandCapabilities(
-      grants.flatMap((grant) => grant.capabilities).filter(isCapability),
-    );
-    const capabilities = tokenCapabilities.filter((capability) =>
-      databaseCapabilities.has(capability),
-    );
-    return Object.freeze({
-      userId: principal.user_id,
-      principalId: principal.principal_id,
-      actorKind: principal.actor_kind,
+    }
+    if (binding === undefined) {
+      throw new CoreError(403, 'forbidden', 'The Gate identity and client are not admitted');
+    }
+    const actorKind = actorKindSchema.safeParse(binding.actor_kind);
+    if (!actorKind.success) {
+      throw new CoreError(
+        503,
+        'authorization_unavailable',
+        'The local identity binding is invalid',
+        true,
+      );
+    }
+    const boundScopeIds = sortedUnique(binding.scope_ids);
+    const ceiling = new Set(binding.capability_ceiling.filter(isCapability));
+    if (boundScopeIds.length === 0 || ceiling.size === 0) {
+      throw new CoreError(403, 'forbidden', 'The Gate identity has no local authorization bounds');
+    }
+    let grants: GrantRow[];
+    try {
+      grants = await withTransaction(this.options.pool, async (client) => {
+        await setActorDatabaseContext(client, binding.user_id, binding.principal_id, boundScopeIds);
+        const result = await client.query<GrantRow>(
+          `SELECT scope_id, auth_epoch, capabilities
+           FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,
+          [binding.user_id, binding.principal_id, actorKind.data, boundScopeIds],
+        );
+        return result.rows;
+      });
+    } catch {
+      throw new CoreError(
+        503,
+        'authorization_unavailable',
+        'Local authorization is unavailable',
+        true,
+      );
+    }
+    if (grants.length === 0) {
+      throw new CoreError(403, 'forbidden', 'The admitted principal has no current grant');
+    }
+    const scopeIds = sortedUnique(grants.map((grant) => grant.scope_id));
+    const capabilities = effectiveCapabilities(grants, ceiling);
+    const actor = Object.freeze({
+      userId: binding.user_id,
+      principalId: binding.principal_id,
+      actorKind: actorKind.data,
       scopeIds: Object.freeze(scopeIds),
-      tokenScopeIds: Object.freeze(tokenScopeIds),
+      tokenScopeIds: Object.freeze(boundScopeIds),
       capabilities: Object.freeze(capabilities),
-      authEpochs: Object.freeze(authEpochs),
+      authEpochs: Object.freeze(
+        Object.fromEntries(grants.map((grant) => [grant.scope_id, Number(grant.auth_epoch)])),
+      ),
     });
-  }
-}
-
-export function hasExactAudience(audience: JWTPayload['aud'], expected: string): boolean {
-  return (
-    audience === expected ||
-    (Array.isArray(audience) && audience.length === 1 && audience[0] === expected)
-  );
-}
-
-export function hasExactOAuthScopeClaims(
-  payload: JWTPayload,
-  expectedScopeId: string,
-  expectedMemoryScope: 'memory:read' | 'memory:write',
-): boolean {
-  const scopeIds = payload[tokenScopesClaim];
-  if (!Array.isArray(scopeIds) || scopeIds.length !== 1 || scopeIds[0] !== expectedScopeId) {
-    return false;
+    const state = Object.freeze({ token, principal, binding });
+    this.credentials.set(actor, state);
+    bindActorAuthorizationGuard(actor, (transaction) =>
+      this.revalidateBeforeCommit(actor, transaction as PoolClient),
+    );
+    return actor;
   }
 
-  const scopes = typeof payload['scope'] === 'string' ? payload['scope'].split(/\s+/) : [];
-  const capabilityScopes = scopes.filter((scope) => memoryCapabilityScopes.has(scope));
-  const unsupportedMemoryScopes = scopes.filter(
-    (scope) =>
-      scope.startsWith('memory:') &&
-      !memoryCapabilityScopes.has(scope) &&
-      !memorySupportScopes.has(scope),
-  );
-  return (
-    scopes.includes(expectedMemoryScope) &&
-    capabilityScopes.length === 1 &&
-    capabilityScopes[0] === expectedMemoryScope &&
-    unsupportedMemoryScopes.length === 0
-  );
-}
-
-function readTokenScopeIds(payload: JWTPayload): string[] {
-  const raw = payload[tokenScopesClaim];
-  if (!Array.isArray(raw) || raw.length > 100) {
-    throw new CoreError(403, 'forbidden', 'The bearer token has no valid scope grant');
+  private async lookupBinding(
+    client: Pool | PoolClient,
+    principal: ExternalIdentityPrincipal,
+  ): Promise<BindingRow | undefined> {
+    const result = await client.query<BindingRow>(
+      `SELECT user_id, principal_id, actor_kind, scope_ids, capability_ceiling
+       FROM app.lock_external_identity_binding($1, $2, $3)`,
+      [principal.issuer, principal.subject, principal.clientId],
+    );
+    return result.rows[0];
   }
-  const values = raw.map((value) => uuidSchema.safeParse(value));
-  if (values.some((value) => !value.success)) {
-    throw new CoreError(403, 'forbidden', 'The bearer token has an invalid scope grant');
-  }
-  return [...new Set(values.flatMap((value) => (value.success ? [value.data] : [])))].sort();
-}
 
-function readTokenCapabilities(payload: JWTPayload): Capability[] {
-  const raw = payload['scope'];
-  if (typeof raw !== 'string') return [];
-  const mapped = new Set<Capability>();
-  for (const value of raw.split(/\s+/).filter(Boolean)) {
-    if (value === 'memory:read') mapped.add('read');
-    if (value === 'memory:write') mapped.add('write');
-    if (value === 'memory:admin') {
-      mapped.add('read');
-      mapped.add('write');
-      mapped.add('admin');
+  private async revalidateBeforeCommit(actor: ActorContext, client: PoolClient): Promise<void> {
+    const state = this.credentials.get(actor);
+    if (state === undefined) {
+      throw new CoreError(401, 'unauthorized', 'The Gate credential is no longer available');
+    }
+    // Acquire the local binding/principal locks before the final online check. This keeps
+    // the Gate result immediately adjacent to COMMIT even if lock acquisition had to wait.
+    let binding: BindingRow | undefined;
+    try {
+      binding = await this.lookupBinding(client, state.principal);
+    } catch {
+      throw new CoreError(
+        503,
+        'authorization_unavailable',
+        'Local authorization is unavailable',
+        true,
+      );
+    }
+    if (binding === undefined) {
+      throw new CoreError(403, 'forbidden', 'The Gate identity or local binding was revoked');
+    }
+    if (
+      binding.user_id !== actor.userId ||
+      binding.principal_id !== actor.principalId ||
+      binding.actor_kind !== actor.actorKind ||
+      !sameStrings(sortedUnique(binding.scope_ids), sortedUnique(state.binding.scope_ids)) ||
+      !sameStrings(
+        sortedUnique(binding.capability_ceiling),
+        sortedUnique(state.binding.capability_ceiling),
+      )
+    ) {
+      throw new CoreError(
+        403,
+        'stale_authorization',
+        'The local Gate binding changed; retry with a newly verified credential',
+        true,
+      );
+    }
+    let refreshed: ExternalIdentityPrincipal;
+    try {
+      refreshed = await this.verifier.verifyToken(state.token);
+    } catch (error) {
+      throw asCoreAuthError(error);
+    }
+    if (
+      refreshed.issuer !== state.principal.issuer ||
+      refreshed.subject !== state.principal.subject ||
+      refreshed.connectionId !== state.principal.connectionId ||
+      refreshed.clientId !== state.principal.clientId
+    ) {
+      throw new CoreError(401, 'unauthorized', 'The Gate connection changed during the request');
     }
   }
-  return [...mapped];
 }
 
-function expandCapabilities(values: readonly Capability[]): Set<Capability> {
-  const caps = new Set(values);
-  if (caps.has('admin')) {
-    caps.add('read');
-    caps.add('write');
+export { createIdentityProviderVerifier, IdentityProviderError } from './connection-verifier.js';
+export type { ExternalIdentityPrincipal, IdentityProviderConfig } from './connection-verifier.js';
+
+async function setActorDatabaseContext(
+  client: PoolClient,
+  userId: string,
+  principalId: string,
+  scopeIds: readonly string[],
+): Promise<void> {
+  await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
+  await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
+  await client.query("SELECT set_config('app.principal_id', $1, true)", [principalId]);
+}
+
+function effectiveCapabilities(
+  grants: readonly GrantRow[],
+  ceiling: ReadonlySet<Capability>,
+): Capability[] {
+  const granted = new Set<Capability>();
+  for (const grant of grants) {
+    for (const capability of grant.capabilities.filter(isCapability)) granted.add(capability);
   }
-  return caps;
+  if (granted.has('admin')) {
+    granted.add('read');
+    granted.add('write');
+  }
+  const allowed = new Set(ceiling);
+  if (allowed.has('admin')) {
+    allowed.add('read');
+    allowed.add('write');
+  }
+  return [...knownCapabilities].filter(
+    (capability) => granted.has(capability) && allowed.has(capability),
+  );
+}
+
+function asCoreAuthError(error: unknown): CoreError {
+  if (error instanceof IdentityProviderError) {
+    return error.status === 401
+      ? new CoreError(401, 'unauthorized', 'The Gate credential is invalid or expired')
+      : new CoreError(
+          503,
+          'authorization_unavailable',
+          'Gate authorization is temporarily unavailable',
+          true,
+        );
+  }
+  return new CoreError(
+    503,
+    'authorization_unavailable',
+    'Gate authorization is temporarily unavailable',
+    true,
+  );
+}
+
+function extractBearer(authorization: string | undefined): string {
+  const match = /^Bearer ([A-Za-z0-9\-._~+/]+=*)(?![\s\S])/i.exec(authorization ?? '');
+  if (match?.[1] === undefined) {
+    throw new CoreError(401, 'unauthorized', 'A single Gate Bearer token is required');
+  }
+  return match[1];
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function isCapability(value: string): value is Capability {
-  return value === 'read' || value === 'write' || value === 'admin';
-}
-
-function isLocalHost(hostname: string): boolean {
-  return (
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname === '[::1]' ||
-    hostname === '::1'
-  );
+  return knownCapabilities.has(value as Capability);
 }

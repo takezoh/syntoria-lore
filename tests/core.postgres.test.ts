@@ -1,18 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import { createServer as createHttpServer, request as httpRequest } from 'node:http';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateKeyPair, exportJWK, SignJWT, type JWK, type KeyInput } from 'jose';
 import { Pool } from 'pg';
 import { Client as McpClient, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { Authenticator } from '@memory/auth';
 import { LEGACY_PORTABILITY_MIME_TYPE } from '@memory/contracts';
 import {
   assertNobypassRls,
   assertWorkerMember,
-  cutoverPrincipalIssuer,
   provisionWorkerRole,
   withTemporarySuperuserAuthorization,
   withTransaction,
@@ -128,6 +127,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   const recoveryUserSubject = `integration-recovery-owner-${randomUUID()}`;
   const importedUserSubject = `integration-import-owner-${randomUUID()}`;
   const importedReaderSubject = `integration-import-reader-${randomUUID()}`;
+  const gateIssuer = 'https://gate.integration.test';
   const audience = 'memory-local-test';
   const mcpBaseUrl = 'http://127.0.0.1:8080';
   const mcpReadAudience = `${mcpBaseUrl}/mcp/read`;
@@ -138,10 +138,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   let server: ReturnType<typeof createApiServer>;
   let workerServer: ReturnType<typeof createWorkerServer>;
   let outboxDispatcher: OutboxDispatcher;
-  let jwksServer: ReturnType<typeof createHttpServer>;
   let baseUrl: string;
-  let key: KeyInput;
-  let publicJwk: JWK;
   let principalId: string;
   let clientPrincipalId: string;
   let importedPrincipalId: string;
@@ -157,6 +154,31 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   let portabilityDirectory: string;
   let workerTaskToken: string;
   let workerBaseUrl: string;
+  const gateTokens = new Map<string, Record<string, unknown>>();
+  const introspectionCount = new Map<string, number>();
+  const gateFetch: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url === `${gateIssuer}/.well-known/openid-configuration`) {
+      return jsonResponse({
+        issuer: gateIssuer,
+        introspection_endpoint: `${gateIssuer}/oauth/introspect`,
+      });
+    }
+    if (url === `${gateIssuer}/oauth/introspect`) {
+      const body = new URLSearchParams(init?.body?.toString() ?? '');
+      const tokenValue = body.get('token') ?? '';
+      const data = gateTokens.get(tokenValue);
+      const count = (introspectionCount.get(tokenValue) ?? 0) + 1;
+      introspectionCount.set(tokenValue, count);
+      if (data === undefined) return jsonResponse({ active: false });
+      if (data['fail_on_call'] === count) throw new Error('synthetic Gate outage');
+      return jsonResponse({
+        ...data,
+        active: data['active'] !== false && count < Number(data['revoke_on_call'] ?? Infinity),
+      });
+    }
+    throw new Error(`Unexpected Gate verification URL ${url}`);
+  };
 
   beforeAll(async () => {
     admin = new Pool({ connectionString: adminUrl, max: 3 });
@@ -241,37 +263,30 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       [userId, scopeA, principalId, scopeB, clientPrincipalId],
     );
 
-    const keys = await generateKeyPair('RS256');
-    key = keys.privateKey;
-    publicJwk = await exportJWK(keys.publicKey);
-    publicJwk.kid = 'local-test-key';
-    publicJwk.alg = 'RS256';
-    publicJwk.use = 'sig';
-    jwksServer = createHttpServer((_request, response) => {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ keys: [publicJwk] }));
-    });
-    await new Promise<void>((resolve) => jwksServer.listen(0, '127.0.0.1', resolve));
-    const jwksAddress = jwksServer.address();
-    if (jwksAddress === null || typeof jwksAddress === 'string')
-      throw new Error('JWKS test server did not bind');
-    authenticator = new Authenticator({
+    const clients = ['integration-app-client'];
+    const authConfig = {
       pool: app,
-      issuer,
+      issuer: gateIssuer,
+      clientId: 'integration-api-resource',
+      clientSecret: 'synthetic-api-resource-secret',
+      allowedClientIds: clients,
+      fetch: gateFetch,
+    } as const;
+    authenticator = new Authenticator({
+      ...authConfig,
       audience,
-      jwksUrl: `http://127.0.0.1:${jwksAddress.port}/jwks`,
     });
     const mcpReadAuth = new Authenticator({
-      pool: app,
-      issuer,
+      ...authConfig,
       audience: mcpReadAudience,
-      jwksUrl: `http://127.0.0.1:${jwksAddress.port}/jwks`,
+      clientId: 'integration-mcp-read-resource',
+      clientSecret: 'synthetic-mcp-read-secret',
     });
     const mcpWriteAuth = new Authenticator({
-      pool: app,
-      issuer,
+      ...authConfig,
       audience: mcpWriteAudience,
-      jwksUrl: `http://127.0.0.1:${jwksAddress.port}/jwks`,
+      clientId: 'integration-mcp-write-resource',
+      clientSecret: 'synthetic-mcp-write-secret',
     });
     const cursorKey = Buffer.alloc(32, 7);
     const cursorCodec = new CursorCodec('test', new Map([['test', cursorKey]]));
@@ -314,8 +329,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       auth: authenticator,
       mcpReadAuth,
       mcpWriteAuth,
-      mcpAuthorizationServerUrl: issuer,
+      mcpAuthorizationServerUrl: gateIssuer,
       mcpResourceBaseUrl: mcpBaseUrl,
+      apiAllowedOrigins: ['https://app.integration.test'],
       core: coreService,
       connectors: connectorService,
       recall: apiRecall,
@@ -374,184 +390,125 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
   }, 20_000);
 
-  it('moves an exact issuer cohort without changing principal IDs or grants', async () => {
-    const sourceIssuer = `https://old.identity.test/realms/source-${randomUUID()}`;
-    const targetIssuer = `https://new.identity.test/realms/target-${randomUUID()}`;
-    const cutoverUserId = randomUUID();
-    const cutoverScopeId = randomUUID();
-    const userPrincipalId = randomUUID();
-    const userSubjectId = randomUUID();
-    const clientPrincipalId = randomUUID();
-    const clientSubjectId = randomUUID();
+  it('validates and applies exact Gate identity mappings against a reviewed PostgreSQL baseline', async () => {
+    if (adminUrl === undefined) throw new Error('TEST_ADMIN_URL is required');
+    const directory = await mkdtemp(join(tmpdir(), 'memory-gate-identity-map-'));
+    const mappingPath = join(directory, 'mapping.json');
+    const target = {
+      subject: `operator-mapping-${randomUUID()}`,
+      issuer: 'https://gate.mapping.integration.test',
+      client_id: `mapping-client-${randomUUID()}`,
+    };
+    const mapping = {
+      expected_source: { issuer, subject },
+      user_id: userId,
+      principal_id: principalId,
+      target,
+      scope_ids: [scopeA],
+      capability_ceiling: ['read'],
+    };
+    const runMapping = (...args: string[]) =>
+      spawnSync(
+        process.execPath,
+        ['scripts/gate-identity-map.mjs', '--file', mappingPath, ...args],
+        {
+          cwd: process.cwd(),
+          encoding: 'utf8',
+          timeout: 10_000,
+          env: { ...process.env, IDENTITY_MAPPING_DATABASE_URL: adminUrl },
+        },
+      );
+    const bindingKey = [target.issuer, target.subject, target.client_id];
+
     try {
-      await admin.query('INSERT INTO users(id) VALUES ($1)', [cutoverUserId]);
-      await admin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
-        cutoverUserId,
-        cutoverScopeId,
-        'issuer-cutover-test',
-      ]);
-      await admin.query(
-        `INSERT INTO principals(id, user_id, issuer, subject, actor_kind)
-         VALUES ($1, $2, $3, $4, 'user'), ($5, $2, $3, $6, 'client')`,
-        [
-          userPrincipalId,
-          cutoverUserId,
-          sourceIssuer,
-          userSubjectId,
-          clientPrincipalId,
-          clientSubjectId,
-        ],
-      );
-      await admin.query(
-        `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
-         VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin']),
-                ($1, $2, $4, ARRAY['read'])`,
-        [cutoverUserId, cutoverScopeId, userPrincipalId, clientPrincipalId],
-      );
+      await writeFile(mappingPath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
 
-      const before = await admin.query(
-        `SELECT p.id, p.user_id, p.subject, p.actor_kind, p.active, p.created_at,
-                g.capabilities, g.scope_id
-         FROM principals AS p JOIN grants AS g
-           ON g.user_id = p.user_id AND g.principal_id = p.id
-         WHERE p.issuer = $1 ORDER BY p.id`,
-        [sourceIssuer],
-      );
-      const result = await cutoverPrincipalIssuer(admin, {
-        sourceIssuer,
-        targetIssuer,
-        userPrincipalId,
-        userId: cutoverUserId,
-        userSubjectId,
-      });
-      expect(result).toEqual({
-        status: 'migrated',
-        principalCount: 2,
-        userPrincipalId,
-        principalIdsPreserved: true,
-        grantsPreserved: true,
-      });
-      const after = await admin.query(
-        `SELECT p.id, p.user_id, p.subject, p.actor_kind, p.active, p.created_at,
-                g.capabilities, g.scope_id
-         FROM principals AS p JOIN grants AS g
-           ON g.user_id = p.user_id AND g.principal_id = p.id
-         WHERE p.issuer = $1 ORDER BY p.id`,
-        [targetIssuer],
-      );
-      expect(after.rows).toEqual(before.rows);
-      await expect(
-        cutoverPrincipalIssuer(admin, {
-          sourceIssuer,
-          targetIssuer,
-          userPrincipalId,
-          userId: cutoverUserId,
-          userSubjectId,
-        }),
-      ).resolves.toMatchObject({ status: 'already-current', principalCount: 2 });
-    } finally {
-      await admin.query('DELETE FROM principals WHERE user_id = $1', [cutoverUserId]);
-      await admin.query('DELETE FROM scopes WHERE user_id = $1', [cutoverUserId]);
-      await admin.query('DELETE FROM users WHERE id = $1', [cutoverUserId]);
-    }
-  });
+      const dryRun = runMapping();
+      expect(dryRun.status).toBe(0);
+      expect(dryRun.stderr).toBe('');
+      const baseline = JSON.parse(dryRun.stdout) as { status: string; baseline_sha256: string };
+      expect(baseline.status).toBe('dry_run');
+      expect(baseline.baseline_sha256).toMatch(/^[a-f0-9]{64}$/);
 
-  it('rolls back when a target issuer already has one of the source subjects', async () => {
-    const sourceIssuer = `https://old.identity.test/realms/conflict-${randomUUID()}`;
-    const targetIssuer = `https://new.identity.test/realms/conflict-${randomUUID()}`;
-    const cutoverUserId = randomUUID();
-    const userPrincipalId = randomUUID();
-    const sourceClientPrincipalId = randomUUID();
-    const userSubjectId = randomUUID();
-    const conflictingSubject = randomUUID();
-    const targetUserId = randomUUID();
-    const targetPrincipalId = randomUUID();
-    try {
-      await admin.query('INSERT INTO users(id) VALUES ($1), ($2)', [cutoverUserId, targetUserId]);
-      await admin.query(
-        `INSERT INTO principals(id, user_id, issuer, subject, actor_kind)
-         VALUES ($1, $2, $3, $4, 'user'), ($5, $2, $3, $6, 'client'),
-                ($7, $8, $9, $6, 'client')`,
-        [
-          userPrincipalId,
-          cutoverUserId,
-          sourceIssuer,
-          userSubjectId,
-          sourceClientPrincipalId,
-          conflictingSubject,
-          targetPrincipalId,
-          targetUserId,
-          targetIssuer,
-        ],
+      await writeFile(
+        mappingPath,
+        `${JSON.stringify({ ...mapping, target: { ...target, unexpected: true } })}\n`,
+        { mode: 0o600 },
       );
-      await expect(
-        cutoverPrincipalIssuer(admin, {
-          sourceIssuer,
-          targetIssuer,
-          userPrincipalId,
-          userId: cutoverUserId,
-          userSubjectId,
-        }),
-      ).rejects.toThrow('A principal subject already exists at the target issuer');
-      const remaining = await admin.query(
-        'SELECT id, issuer FROM principals WHERE id = ANY($1::uuid[]) ORDER BY id',
-        [[userPrincipalId, sourceClientPrincipalId, targetPrincipalId]],
-      );
-      expect(Object.fromEntries(remaining.rows.map((row) => [row.id, row.issuer]))).toEqual({
-        [userPrincipalId]: sourceIssuer,
-        [sourceClientPrincipalId]: sourceIssuer,
-        [targetPrincipalId]: targetIssuer,
-      });
-    } finally {
-      await admin.query('DELETE FROM principals WHERE user_id = ANY($1::uuid[])', [
-        [cutoverUserId, targetUserId],
-      ]);
-      await admin.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [
-        [cutoverUserId, targetUserId],
-      ]);
-    }
-  });
+      const malformed = runMapping();
+      expect(malformed.status).toBe(1);
+      expect(malformed.stderr).toContain('target must contain issuer, subject, and client_id only');
 
-  afterAll(async () => {
-    if (server !== undefined) await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (workerServer !== undefined)
-      await new Promise<void>((resolve) => workerServer.close(() => resolve()));
-    if (jwksServer !== undefined)
-      await new Promise<void>((resolve) => jwksServer.close(() => resolve()));
-    if (workerDb !== undefined) await workerDb.end();
-    if (admin !== undefined) {
-      const cleanup = await admin.connect();
-      try {
-        await cleanup.query('BEGIN');
-        await cleanup.query(
-          'ALTER TABLE public.memory_versions DISABLE TRIGGER memory_versions_append_only',
+      await writeFile(mappingPath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
+      const applied = runMapping('--apply', '--expected-baseline', baseline.baseline_sha256);
+      expect(applied.status).toBe(0);
+      expect(JSON.parse(applied.stdout)).toMatchObject({ status: 'active', target });
+
+      const staleBaseline = runMapping('--apply', '--expected-baseline', baseline.baseline_sha256);
+      expect(staleBaseline.status).toBe(1);
+      expect(staleBaseline.stderr).toContain('Baseline changed; rerun dry-run');
+
+      const readBinding = () =>
+        admin.query<{
+          user_id: string;
+          principal_id: string;
+          scope_ids: string[];
+          capability_ceiling: string[];
+          active: boolean;
+          updated_at: string;
+        }>(
+          `SELECT user_id::text, principal_id::text, scope_ids::text[], capability_ceiling,
+                  active, updated_at::text
+           FROM public.external_identity_bindings
+           WHERE external_issuer = $1 AND external_subject = $2 AND external_client_id = $3`,
+          bindingKey,
         );
-        await cleanup.query('DELETE FROM user_confirmations WHERE user_id = $1', [userId]);
-        await cleanup.query('DELETE FROM curation_reviews WHERE user_id = $1', [userId]);
-        await cleanup.query('DELETE FROM scopes WHERE user_id = $1', [userId]);
-        await cleanup.query('DELETE FROM principals WHERE user_id = $1', [userId]);
-        await cleanup.query('DELETE FROM users WHERE id = $1', [userId]);
-        await cleanup.query('DELETE FROM scopes WHERE user_id = $1', [importedUserId]);
-        await cleanup.query('DELETE FROM principals WHERE user_id = $1', [importedUserId]);
-        await cleanup.query('DELETE FROM users WHERE id = $1', [importedUserId]);
-        await cleanup.query(
-          'ALTER TABLE public.memory_versions ENABLE TRIGGER memory_versions_append_only',
-        );
-        await cleanup.query('COMMIT');
-      } catch (error) {
-        await cleanup.query('ROLLBACK');
-        throw error;
-      } finally {
-        cleanup.release();
-      }
-      await admin.end();
+      const firstReadback = await readBinding();
+      expect(firstReadback.rows).toHaveLength(1);
+      expect(firstReadback.rows[0]).toMatchObject({
+        user_id: userId,
+        principal_id: principalId,
+        scope_ids: [scopeA],
+        capability_ceiling: ['read'],
+        active: true,
+      });
+
+      const activeDryRun = runMapping();
+      expect(activeDryRun.status).toBe(0);
+      const activeBaseline = JSON.parse(activeDryRun.stdout) as { baseline_sha256: string };
+      const idempotentApply = runMapping(
+        '--apply',
+        '--expected-baseline',
+        activeBaseline.baseline_sha256,
+      );
+      expect(idempotentApply.status).toBe(0);
+      expect(JSON.parse(idempotentApply.stdout)).toMatchObject({ status: 'active', target });
+      const idempotentReadback = await readBinding();
+      expect(idempotentReadback.rows).toEqual(firstReadback.rows);
+
+      const deactivateDryRun = runMapping('--deactivate');
+      expect(deactivateDryRun.status).toBe(0);
+      const deactivateBaseline = JSON.parse(deactivateDryRun.stdout) as { baseline_sha256: string };
+      const deactivated = runMapping(
+        '--deactivate',
+        '--apply',
+        '--expected-baseline',
+        deactivateBaseline.baseline_sha256,
+      );
+      expect(deactivated.status).toBe(0);
+      expect(JSON.parse(deactivated.stdout)).toMatchObject({ status: 'inactive', target });
+      const inactiveReadback = await readBinding();
+      expect(inactiveReadback.rows).toHaveLength(1);
+      expect(inactiveReadback.rows[0]?.active).toBe(false);
+    } finally {
+      await admin.query(
+        `DELETE FROM public.external_identity_bindings
+         WHERE external_issuer = $1 AND external_subject = $2 AND external_client_id = $3`,
+        bindingKey,
+      );
+      await rm(directory, { recursive: true, force: true });
     }
-    if (app !== undefined) await app.end();
-    if (deletionLedgerDirectory !== undefined)
-      await rm(deletionLedgerDirectory, { recursive: true, force: true });
-    if (portabilityDirectory !== undefined)
-      await rm(portabilityDirectory, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   it('bounds pending deletion batches and defers a failed oldest request without starving later work', async () => {
     const requestIds = [randomUUID(), randomUUID()];
@@ -599,7 +556,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     }
   });
 
-  it('intersects JWT scopes and per-scope grants, commits atomically, preserves evidence history, and pages exact changes', async () => {
+  it('intersects Gate scopes and per-scope grants, commits atomically, preserves evidence history, and pages exact changes', async () => {
     const readonlyToken = await token([scopeB], 'memory:read');
     const readonlyWrite = await post(
       '/v1/memories:remember',
@@ -3093,8 +3050,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(metadata.status).toBe(200);
     expect(await metadata.json()).toMatchObject({
       resource: mcpReadAudience,
-      authorization_servers: [issuer],
-      scopes_supported: ['memory:read'],
+      authorization_servers: [gateIssuer],
+      scopes_supported: ['openid'],
     });
     const badOrigin = await fetch(`${baseUrl}/mcp/read`, {
       method: 'POST',
@@ -3130,6 +3087,99 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       request.end('{}');
     });
     expect(rawHostStatus).toBe(403);
+  });
+
+  it('exposes only bearer-protected API and MCP routes', async () => {
+    const callback = await fetch(`${baseUrl}/auth-return.html?code=synthetic-code`);
+    expect(callback.status).toBe(404);
+    const session = await fetch(`${baseUrl}/v1/session`);
+    expect(session.status).toBe(404);
+
+    const openapi = await fetch(`${baseUrl}/openapi.json`);
+    const document = (await openapi.json()) as {
+      paths: Record<string, unknown>;
+      components: { securitySchemes: Record<string, unknown> };
+    };
+    expect(document.paths).not.toHaveProperty('/v1/session');
+    expect(document.components.securitySchemes).not.toHaveProperty('browserSessionCookie');
+
+    const body = JSON.stringify({ scope_id: scopeB, memory: sampleMemory() });
+    const cookieOnly = await fetch(`${baseUrl}/v1/memories:remember`, {
+      method: 'POST',
+      headers: {
+        cookie: '__Secure-gate_session=synthetic-session',
+        'content-type': 'application/json',
+        'idempotency-key': randomUUID(),
+      },
+      body,
+    });
+    expect(cookieOnly.status).toBe(401);
+
+    const mcpCookieOnly = await fetch(`${baseUrl}/mcp/read`, {
+      method: 'POST',
+      headers: {
+        cookie: '__Secure-gate_session=synthetic-session',
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    expect(mcpCookieOnly.status).toBe(401);
+    const mcpGet = await fetch(`${baseUrl}/mcp/read`, { method: 'GET' });
+    expect(mcpGet.status).toBe(405);
+
+    const bearer = await token([scopeB], 'memory:read memory:write');
+    const committed = await fetch(`${baseUrl}/v1/memories:remember`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        cookie: '__Secure-gate_session=ignored-with-bearer',
+        'content-type': 'application/json',
+        'idempotency-key': randomUUID(),
+      },
+      body,
+    });
+    expect(committed.status).toBe(200);
+    expect(committed.headers.get('access-control-allow-credentials')).toBeNull();
+  });
+
+  it('rejects duplicate Authorization headers and ignores duplicate cookies with a valid bearer', async () => {
+    const url = new URL(baseUrl);
+    const duplicateAuthorization = await rawHttpPost(url, '/v1/memories:remember', [
+      ['authorization', 'Bearer opaque-first'],
+      ['authorization', 'Bearer opaque-second'],
+      ['content-type', 'application/json'],
+    ]);
+    expect(duplicateAuthorization.status).toBe(401);
+
+    const bearer = await token([scopeB], 'memory:read memory:write');
+    const duplicateCookie = await rawHttpPost(url, '/v1/memories:remember', [
+      ['authorization', `Bearer ${bearer}`],
+      ['cookie', '__Secure-gate_session=first'],
+      ['cookie', '__Secure-gate_session=second'],
+      ['content-type', 'application/json'],
+      ['idempotency-key', randomUUID()],
+    ]);
+    expect(duplicateCookie.status).toBe(400);
+  });
+
+  it('rolls back writes when Gate revokes or becomes unavailable at the final commit check', async () => {
+    for (const finalFailure of ['revoke_on_call', 'fail_on_call'] as const) {
+      const bearer = await token([scopeB], 'memory:read memory:write');
+      gateTokens.get(bearer)![finalFailure] = 2;
+      const idempotencyKey = `final-gate-${randomUUID()}`;
+      const response = await post(
+        '/v1/memories:remember',
+        bearer,
+        { scope_id: scopeB, memory: sampleMemory() },
+        idempotencyKey,
+      );
+      expect(response.status).toBe(finalFailure === 'revoke_on_call' ? 401 : 503);
+      const persisted = await admin.query(
+        'SELECT 1 FROM idempotency_keys WHERE user_id=$1 AND idempotency_key=$2',
+        [userId, idempotencyKey],
+      );
+      expect(persisted.rowCount).toBe(0);
+    }
   });
 
   it('completes Remember → Recall → get_changes → Forget → not found with two official SDK clients', async () => {
@@ -3299,6 +3349,18 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(downloaded.headers.get('content-type')).toBe(LEGACY_PORTABILITY_MIME_TYPE);
     const encryptedBundle = await downloaded.text();
     expect(encryptedBundle).toMatch(/^v1\./);
+
+    const revokedDuringRead = await token([scopeB], 'memory:admin');
+    gateTokens.get(revokedDuringRead)!.revoke_on_call = 2;
+    const storageRead = vi.spyOn(portabilityStore, 'read');
+    const revokedDownload = await fetch(
+      `${baseUrl}/v1/exports/${requested.export_id}:download?scope_id=${scopeB}`,
+      { headers: { authorization: `Bearer ${revokedDuringRead}` } },
+    );
+    expect(storageRead).toHaveBeenCalledOnce();
+    expect(revokedDownload.status).toBe(401);
+    expect(await revokedDownload.text()).not.toContain(encryptedBundle);
+    storageRead.mockRestore();
 
     const destinationOwner = await token([importedScopeId], 'memory:admin', importedUserSubject);
     const importKey = `portable-import-${randomUUID()}`;
@@ -4018,14 +4080,55 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     tokenSubject = subject,
     tokenAudience = audience,
   ): Promise<string> {
-    return new SignJWT({ scope_ids: scopeIds, scope })
-      .setProtectedHeader({ alg: 'RS256', kid: 'local-test-key' })
-      .setSubject(tokenSubject)
-      .setIssuer(issuer)
-      .setAudience(tokenAudience)
-      .setIssuedAt()
-      .setExpirationTime('5m')
-      .sign(key);
+    const gateSubject = `gate-${randomUUID()}`;
+    const clientId = 'integration-app-client';
+    const principal = await admin.query<{ id: string; user_id: string }>(
+      'SELECT id, user_id FROM principals WHERE issuer = $1 AND subject = $2',
+      [issuer, tokenSubject],
+    );
+    if (principal.rows[0] === undefined) {
+      throw new Error(`Unknown local integration principal ${tokenSubject}`);
+    }
+    const capabilityCeiling = scope
+      .split(/\s+/u)
+      .map(
+        (value) =>
+          ({
+            'memory:read': 'read',
+            'memory:write': 'write',
+            'memory:admin': 'admin',
+          })[value],
+      )
+      .filter((value): value is 'read' | 'write' | 'admin' => value !== undefined);
+    if (capabilityCeiling.length === 0)
+      throw new Error(`Unknown local capability fixture ${scope}`);
+    await admin.query(
+      `INSERT INTO external_identity_bindings
+         (external_issuer, external_subject, external_client_id, user_id, principal_id, scope_ids, capability_ceiling)
+       VALUES ($1, $2, $3, $4, $5, $6::uuid[], $7::text[])`,
+      [
+        gateIssuer,
+        gateSubject,
+        clientId,
+        principal.rows[0].user_id,
+        principal.rows[0].id,
+        scopeIds,
+        capabilityCeiling,
+      ],
+    );
+    const tokenValue = `opaque-${randomUUID()}`;
+    gateTokens.set(tokenValue, {
+      active: true,
+      token_type: 'Bearer',
+      gate_approved: true,
+      iss: gateIssuer,
+      sub: gateSubject,
+      connection_id: `connection-${randomUUID()}`,
+      client_id: clientId,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      aud: tokenAudience,
+    });
+    return tokenValue;
   }
 
   async function post(
@@ -4054,6 +4157,45 @@ function sampleMemory() {
     subjects: [{ name: 'Elara Voss', aliases: [{ name: 'L. Vega' }] }],
     evidence: [evidence('source-1')],
   };
+}
+
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+function rawHttpPost(
+  target: URL,
+  path: string,
+  headers: readonly (readonly [string, string])[],
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        hostname: target.hostname,
+        port: Number(target.port),
+        path,
+        method: 'POST',
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer | string) =>
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
+        );
+        response.on('end', () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf8'),
+          }),
+        );
+      },
+    );
+    request.on('error', reject);
+    for (const [name, value] of headers) request.appendHeader(name, value);
+    request.appendHeader('content-length', '2');
+    request.end('{}');
+  });
 }
 
 function evidence(externalId: string) {

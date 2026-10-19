@@ -50,9 +50,7 @@ const allowlist = [
   'scripts',
   'tests',
   'infra/cloud',
-  'infra/keycloak',
   'docs/api/openapi.json',
-  'docs/eval/cloud-oauth.md',
 ];
 const manifestEntries = [];
 for (const relativePath of allowlist) {

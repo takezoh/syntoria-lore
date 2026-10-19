@@ -2,14 +2,14 @@
 
 ## Service and runtime
 
-Lore is Syntoria's independent long-term memory service for authorized AI clients. TypeScript on Node.js 24 runs as two GCP Cloud Run services built from one immutable image: an API service for REST, Remote MCP over Streamable HTTP and OpenAPI, and a private worker for capture, curation, indexing, outbox dispatch and governance maintenance. Neon PostgreSQL with pgvector and pg_trgm is the single source of truth for memories, history, relations, search indexes, jobs and the change feed. Cloud Tasks delivers job IDs to the worker and Cloud Scheduler triggers its sweep. Cloud Storage holds the deletion ledger and encrypted export artifacts, Keycloak is the OAuth authorization server, and Vertex AI supplies extraction and embeddings through a provider adapter.
+Lore is Syntoria's independent long-term memory service for authorized AI clients. TypeScript on Node.js 24 runs as two GCP Cloud Run services built from one immutable image: an API service for REST, Remote MCP over Streamable HTTP and OpenAPI, and a private worker for capture, curation, indexing, outbox dispatch and governance maintenance. Neon PostgreSQL with pgvector and pg_trgm is the single source of truth for memories, history, relations, search indexes, jobs and the change feed. Cloud Tasks delivers job IDs to the worker and Cloud Scheduler triggers its sweep. Cloud Storage holds the deletion ledger and encrypted export artifacts. Gate owns sign-in, approvals, sessions and logout; Lore is an API-only bearer resource server, and MCP clients own their OAuth callback. The API-only source correction is pending deployment; the worker remains private. Vertex AI supplies extraction and embeddings through a provider adapter.
 
 The Personal AI interprets intent, decides when to remember or recall and what to do with the result. Lore validates input, derives authority, curates under policy, enforces scope and source rights, preserves evidence and history, and governs Forget, retention and portability. Syntoria Weave is a separately deployed service with its own database, API, credentials, history and cursors; there are no shared tables, mutually required APIs or distributed transactions. Lore does not replicate Weave's actions; a memory that needs a Weave event as evidence references its URI or ID.
 
 ```mermaid
 flowchart LR
   AI[Authorized AI clients] -->|OAuth bearer| Entry[REST /v1, MCP /mcp/read and /mcp/write]
-  Entry --> Auth[Token verification and live grants]
+  Entry --> Auth[Gate online introspection and local admission]
   Auth --> Services[Core, recall, capture, review and governance services]
   Services --> DB[(Neon PostgreSQL + pgvector + pg_trgm)]
   Services --> GCS[(Cloud Storage: deletion ledger, exports)]
@@ -30,7 +30,7 @@ Runtime topology, identity, resources and objectives are defined in [infrastruct
 | apps/api/ | Node HTTP entry, REST routing, MCP read and write tool registration, OpenAPI, health and readiness |
 | apps/worker/ | Private entry for task-delivered jobs and the scheduled sweep |
 | packages/contracts/ | Request schemas, error codes and shared validation types |
-| packages/auth/ | JWT verification of issuer, signature, lifetime, exact audience and scope claims |
+| packages/auth/ | Gate online bearer-token verification, explicit identity binding and live grants |
 | packages/domain/ | Authorized transactions, change set validation and commit, revisions, bitemporal reads, signed cursors |
 | packages/connectors/ | Source registration, consent and rights, locator canonicalization and content hashing |
 | packages/curator/ | Curator and embedding ports; Vertex AI, OpenAI-compatible and deterministic local adapters; proposal and evidence-anchor validation |
@@ -39,7 +39,7 @@ Runtime topology, identity, resources and objectives are defined in [infrastruct
 | packages/governance/ | Forget and purge, deletion ledger, retention, encrypted export and import |
 | packages/runtime/ | Composition helpers: storage selection, health server and product display name |
 | packages/db/ | Pool, transactions, migrations and role provisioning; migrations/ holds schema, constraints, RLS and grants |
-| infra/ | Cloud deployment and IAM contracts, Cloud Build, Keycloak image and local configuration |
+| infra/ | Cloud deployment and IAM contracts, Cloud Build and local configuration |
 | scripts/, tests/ | Local stack, evaluation, load and cloud smoke tooling; unit and real-PostgreSQL suites |
 
 API and worker share the domain packages as a modular monolith; the worker is a separately deployed entry point, not a separate business service. REST and MCP call the same services, so MCP never reimplements core rules. Model output is a proposal: it reaches the database only through change set validation, policy and revision checks. Packages, database roles and OAuth scopes use generic `memory` identifiers; the product name comes from `PRODUCT_DISPLAY_NAME`. Caller and source text is data, never policy or authorization.
@@ -64,7 +64,9 @@ Capture writes observations, a job and an outbox row atomically. The scheduled s
 
 ## Authentication and authorization
 
-Keycloak issues OAuth tokens for three separate resources: the REST API, `/mcp/read` and `/mcp/write`. Token capabilities and scope IDs are intersected with live grants on every operation, and forced row-level security with transaction-local context enforces user and scope in the database. Runtime roles are non-superuser and `NOBYPASSRLS`. The worker accepts only IAM-authenticated OIDC calls from the dedicated task and scheduler identities. Logs carry identifiers, statuses and durations, never memory content, evidence or credentials. Trust boundaries and remaining limits are in [security](docs/technical/security.md).
+Gate issues opaque OAuth tokens for three separate resources: the REST API, `/mcp/read` and `/mcp/write`. Each resource uses its own introspection client credentials. Lore accepts bearer tokens only; it does not serve a login callback, browser session endpoint or shared-cookie authorization. The issuer, immutable Gate subject and client ID must match an operator-approved local identity binding to an existing user and principal; that binding limits scopes and capabilities, which are intersected with live grants on every operation. API and MCP operations revalidate Gate online immediately before commit. Forced row-level security with transaction-local context enforces user and scope in PostgreSQL. Runtime roles are non-superuser and `NOBYPASSRLS`. The worker accepts only IAM-authenticated OIDC calls from the dedicated task and scheduler identities. Logs carry identifiers, statuses and durations, never memory content, evidence or credentials. Trust boundaries and remaining limits are in [security](docs/technical/security.md).
+
+The original Gate production rollout is preserved in the [2026-10-18 release record](docs/eval/gate-production-release-20261018.md). The current API-only source candidate and its operational checklist are in the [2026-10-19 correction record](docs/eval/api-only-gate-auth-correction-20261019.md); positive hosted MCP data acceptance remains unverified.
 
 ## Forget and restore
 

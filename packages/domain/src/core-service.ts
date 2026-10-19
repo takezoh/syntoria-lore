@@ -2,6 +2,7 @@ import { encodeIdentityProvenanceV1 } from '@memory/contracts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   CoreError,
+  getActorAuthorizationGuard,
   changeFeedQuerySchema,
   changeSetSchema,
   memoryInputSchema,
@@ -248,47 +249,52 @@ export class CoreService {
     );
     if (authorizedScopes.length === 0)
       throw new CoreError(403, 'forbidden', 'An authorized scope is required');
-    const proposal = await withTransaction(this.pool, async (client) => {
-      await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-      await client.query("SELECT set_config('app.scope_ids', $1, true)", [
-        uuidArray(authorizedScopes),
-      ]);
-      await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
-      const result = await client.query<{
-        scope_id: string;
-        status: string;
-        principal_id: string;
-        proposal: ChangeSet | null;
-        response: Record<string, unknown>;
-        held_review_id: string | null;
-      }>(
-        `SELECT c.scope_id, c.status, c.principal_id, c.proposal, c.response, r.id AS held_review_id
+    const proposalGuard = getActorAuthorizationGuard(actor);
+    const proposal = await withTransaction(
+      this.pool,
+      async (client) => {
+        await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
+        await client.query("SELECT set_config('app.scope_ids', $1, true)", [
+          uuidArray(authorizedScopes),
+        ]);
+        await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+        const result = await client.query<{
+          scope_id: string;
+          status: string;
+          principal_id: string;
+          proposal: ChangeSet | null;
+          response: Record<string, unknown>;
+          held_review_id: string | null;
+        }>(
+          `SELECT c.scope_id, c.status, c.principal_id, c.proposal, c.response, r.id AS held_review_id
          FROM changesets c LEFT JOIN curation_reviews r ON r.user_id = c.user_id AND r.scope_id = c.scope_id
            AND r.change_set_id = c.id AND r.status = 'held'
          WHERE c.user_id = $1 AND c.id = $2 AND c.scope_id = ANY($3::uuid[])`,
-        [actor.userId, changeSetId, authorizedScopes],
-      );
-      const row = result.rows[0];
-      if (row === undefined) throw new CoreError(404, 'not_found', 'ChangeSet not found');
-      if (row.held_review_id !== null)
-        throw new CoreError(
-          409,
-          'user_review_required',
-          'This ChangeSet must be decided through its User review',
+          [actor.userId, changeSetId, authorizedScopes],
         );
-      if (actor.actorKind !== 'user' && actor.principalId !== row.principal_id) {
-        throw new CoreError(
-          403,
-          'forbidden',
-          'Only the proposing principal or User may commit this ChangeSet',
-        );
-      }
-      if (row.status === 'committed')
-        return { scopeId: row.scope_id, proposal: null, response: row.response };
-      if (row.status !== 'proposed' || row.proposal === null)
-        throw new CoreError(409, 'changeset_not_committable', 'ChangeSet is not awaiting commit');
-      return { scopeId: row.scope_id, proposal: row.proposal, response: null };
-    });
+        const row = result.rows[0];
+        if (row === undefined) throw new CoreError(404, 'not_found', 'ChangeSet not found');
+        if (row.held_review_id !== null)
+          throw new CoreError(
+            409,
+            'user_review_required',
+            'This ChangeSet must be decided through its User review',
+          );
+        if (actor.actorKind !== 'user' && actor.principalId !== row.principal_id) {
+          throw new CoreError(
+            403,
+            'forbidden',
+            'Only the proposing principal or User may commit this ChangeSet',
+          );
+        }
+        if (row.status === 'committed')
+          return { scopeId: row.scope_id, proposal: null, response: row.response };
+        if (row.status !== 'proposed' || row.proposal === null)
+          throw new CoreError(409, 'changeset_not_committable', 'ChangeSet is not awaiting commit');
+        return { scopeId: row.scope_id, proposal: row.proposal, response: null };
+      },
+      proposalGuard === undefined ? {} : { beforeCommit: (client) => proposalGuard(client) },
+    );
     await this.withActor(actor, [proposal.scopeId], writeCapability, async () => undefined);
     if (proposal.proposal === null) {
       return this.withActor(actor, [proposal.scopeId], writeCapability, async (client) => {
@@ -2544,50 +2550,55 @@ export class CoreService {
     if (!hasCapability(actor.capabilities, capability)) {
       throw new CoreError(403, 'forbidden', `The token does not grant ${capability} access`);
     }
-    return withTransaction(this.pool, async (client) => {
-      await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-      await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
-      await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
-      const access = await client.query<ScopeAccessRow>(
-        `SELECT scope_id AS id, auth_epoch, capabilities
+    const guard = getActorAuthorizationGuard(actor);
+    return withTransaction(
+      this.pool,
+      async (client) => {
+        await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
+        await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
+        await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+        const access = await client.query<ScopeAccessRow>(
+          `SELECT scope_id AS id, auth_epoch, capabilities
          FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,
-        [actor.userId, actor.principalId, actor.actorKind, scopeIds],
-      );
-      if (access.rows.length !== scopeIds.length)
-        throw new CoreError(
-          403,
-          'forbidden',
-          'Current database grants do not cover every requested scope',
+          [actor.userId, actor.principalId, actor.actorKind, scopeIds],
         );
-      const requiredGrant = access.rows.every((row) =>
-        hasCapability(row.capabilities.filter(isCapability), capability),
-      );
-      if (!requiredGrant)
-        throw new CoreError(
-          403,
-          'forbidden',
-          `Current database grants do not allow ${capability} access`,
-        );
-      for (const row of access.rows) {
-        if (actor.authEpochs[row.id] !== Number(row.auth_epoch)) {
+        if (access.rows.length !== scopeIds.length)
           throw new CoreError(
             403,
-            'stale_authorization',
-            'Scope authorization changed; retry with a newly verified token',
-            true,
+            'forbidden',
+            'Current database grants do not cover every requested scope',
           );
-        }
-      }
-      if (capability !== readCapability) {
-        for (const scopeId of scopeIds) {
-          await client.query(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))",
-            [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.userId, scopeId],
+        const requiredGrant = access.rows.every((row) =>
+          hasCapability(row.capabilities.filter(isCapability), capability),
+        );
+        if (!requiredGrant)
+          throw new CoreError(
+            403,
+            'forbidden',
+            `Current database grants do not allow ${capability} access`,
           );
+        for (const row of access.rows) {
+          if (actor.authEpochs[row.id] !== Number(row.auth_epoch)) {
+            throw new CoreError(
+              403,
+              'stale_authorization',
+              'Scope authorization changed; retry with a newly verified token',
+              true,
+            );
+          }
         }
-      }
-      return run(client);
-    });
+        if (capability !== readCapability) {
+          for (const scopeId of scopeIds) {
+            await client.query(
+              "SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))",
+              [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.userId, scopeId],
+            );
+          }
+        }
+        return run(client);
+      },
+      guard === undefined ? {} : { beforeCommit: (client) => guard(client) },
+    );
   }
 
   private async assertCurrentJobLease(

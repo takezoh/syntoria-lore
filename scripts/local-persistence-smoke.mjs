@@ -4,12 +4,11 @@ import { join } from 'node:path';
 
 const mode = process.argv[2];
 const api = (process.env['LOCAL_API_URL'] ?? 'http://localhost:18080').replace(/\/$/, '');
-const issuer = (process.env['LOCAL_ISSUER_URL'] ?? 'http://localhost:19090').replace(/\/$/, '');
 const scopeId = process.env['LOCAL_SCOPE_ID'] ?? '22222222-2222-4222-8222-222222222222';
 const proofPath = join('var', 'local-persistence-proof.secret.json');
 
 if (mode === 'prepare') {
-  const token = await issueUserToken(api, issuer);
+  const token = required('LOCAL_API_BEARER_TOKEN');
   const statement = `Local persistence smoke ${randomUUID()}`;
   const remembered = await request(`${api}/v1/memories:remember`, token, {
     method: 'POST',
@@ -40,29 +39,28 @@ if (mode === 'prepare') {
   if (remembered.status !== 200 || typeof memoryId !== 'string')
     throw new Error('Persistence fixture Remember failed');
   await mkdir('var', { recursive: true });
-  await writeFile(
-    proofPath,
-    `${JSON.stringify({ token, memory_id: memoryId, scope_id: scopeId })}\n`,
-    { mode: 0o600 },
-  );
+  await writeFile(proofPath, `${JSON.stringify({ memory_id: memoryId, scope_id: scopeId })}\n`, {
+    mode: 0o600,
+  });
   await chmod(proofPath, 0o600);
-  process.stdout.write(JSON.stringify({ status: 'prepared', signed_before_restart: true }) + '\n');
+  process.stdout.write(
+    JSON.stringify({ status: 'prepared', gate_authorized_before_restart: true }) + '\n',
+  );
 } else if (mode === 'verify') {
   const proof = JSON.parse(await readFile(proofPath, 'utf8'));
   try {
-    const [issuerHealth, ready] = await Promise.all([
-      fetch(`${issuer}/healthz`, { signal: AbortSignal.timeout(5_000) }),
-      fetch(`${api}/readyz`, { signal: AbortSignal.timeout(5_000) }),
-    ]);
-    if (!issuerHealth.ok || !ready.ok)
-      throw new Error('Issuer/API did not become ready after stack restart');
+    const token = required('LOCAL_API_BEARER_TOKEN');
+    const ready = await fetch(`${api}/readyz`, { signal: AbortSignal.timeout(5_000) });
+    if (!ready.ok) throw new Error('API did not become ready after stack restart');
     const memory = await request(
       `${api}/v1/memories/${proof.memory_id}?scope_id=${encodeURIComponent(proof.scope_id)}`,
-      proof.token,
+      token,
     );
     if (memory.status !== 200 || memory.body?.id !== proof.memory_id)
-      throw new Error('A pre-restart JWT or its remembered data did not survive restart');
-    const recall = await request(`${api}/v1/recall`, proof.token, {
+      throw new Error(
+        'Previously stored memory was not accessible through current Gate authorization after restart',
+      );
+    const recall = await request(`${api}/v1/recall`, token, {
       method: 'POST',
       body: {
         query: memory.body.statement,
@@ -81,8 +79,7 @@ if (mode === 'prepare') {
     process.stdout.write(
       JSON.stringify({
         status: 'passed',
-        pre_restart_jwt_still_valid: true,
-        issuer_signing_key_persisted: true,
+        current_gate_authorization_verified: true,
         api_and_worker_ready: true,
         remember_persisted: true,
         recall_persisted: true,
@@ -95,27 +92,11 @@ if (mode === 'prepare') {
   throw new Error('Usage: node scripts/local-persistence-smoke.mjs prepare|verify');
 }
 
-async function issueUserToken(resource, localIssuer) {
-  const authorization = Buffer.from('demo-owner-client:owner-local-fixture-only').toString(
-    'base64',
-  );
-  const response = await fetch(`${localIssuer}/oauth/token`, {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${authorization}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      resource,
-      scope: 'memory:read memory:write memory:admin',
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || typeof body.access_token !== 'string')
-    throw new Error('Local pre-restart OAuth token acquisition failed');
-  return body.access_token;
+function required(name) {
+  const value = process.env[name];
+  if (!value)
+    throw new Error(`${name} must be supplied by Gate; this script does not issue credentials`);
+  return value;
 }
 
 async function request(url, token, options = {}) {

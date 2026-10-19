@@ -1,4 +1,9 @@
-import { CoreError, type ActorContext, type Capability } from '@memory/contracts';
+import {
+  CoreError,
+  getActorAuthorizationGuard,
+  type ActorContext,
+  type Capability,
+} from '@memory/contracts';
 import { uuidArray, withTransaction } from '@memory/db';
 import type { Pool, PoolClient } from 'pg';
 
@@ -27,41 +32,46 @@ export async function withAuthorizedActor<T>(
     throw new CoreError(403, 'forbidden', `The token does not grant ${capability} access`);
   }
 
-  return withTransaction(pool, async (client) => {
-    await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-    await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
-    await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
-    const access = await client.query<ScopeGrantRow>(
-      `SELECT scope_id, auth_epoch, capabilities
+  const guard = getActorAuthorizationGuard(actor);
+  return withTransaction(
+    pool,
+    async (client) => {
+      await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
+      await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
+      await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+      const access = await client.query<ScopeGrantRow>(
+        `SELECT scope_id, auth_epoch, capabilities
        FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,
-      [actor.userId, actor.principalId, actor.actorKind, scopeIds],
-    );
-    if (access.rows.length !== scopeIds.length) {
-      throw new CoreError(
-        403,
-        'forbidden',
-        'Current database grants do not cover every requested scope',
+        [actor.userId, actor.principalId, actor.actorKind, scopeIds],
       );
-    }
-    for (const row of access.rows) {
-      if (!hasCapability(row.capabilities, capability)) {
+      if (access.rows.length !== scopeIds.length) {
         throw new CoreError(
           403,
           'forbidden',
-          `Current database grants do not allow ${capability} access`,
+          'Current database grants do not cover every requested scope',
         );
       }
-      if (actor.authEpochs[row.scope_id] !== Number(row.auth_epoch)) {
-        throw new CoreError(
-          403,
-          'stale_authorization',
-          'Scope authorization changed; retry with a newly verified token',
-          true,
-        );
+      for (const row of access.rows) {
+        if (!hasCapability(row.capabilities, capability)) {
+          throw new CoreError(
+            403,
+            'forbidden',
+            `Current database grants do not allow ${capability} access`,
+          );
+        }
+        if (actor.authEpochs[row.scope_id] !== Number(row.auth_epoch)) {
+          throw new CoreError(
+            403,
+            'stale_authorization',
+            'Scope authorization changed; retry with a newly verified token',
+            true,
+          );
+        }
       }
-    }
-    return run(client);
-  });
+      return run(client);
+    },
+    guard === undefined ? {} : { beforeCommit: (client) => guard(client) },
+  );
 }
 
 function hasCapability(values: readonly string[], required: Capability): boolean {

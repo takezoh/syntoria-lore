@@ -32,7 +32,6 @@ services:
     <<: *app
     command: ['node', 'scripts/local-bootstrap.mjs']
     environment:
-      AUTH_ISSUER: http://localhost:19090/
       PRODUCT_DISPLAY_NAME: ${PRODUCT_DISPLAY_NAME:-Memory Service}
       DB_ROLE_SOURCE_PREFIX: ${DB_ROLE_SOURCE_PREFIX:?deployment config must set the source role prefix}
       MIGRATION_DATABASE_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
@@ -49,31 +48,6 @@ services:
     volumes:
       - configured_artifacts:/var/memory-service
     restart: 'no'
-
-  issuer:
-    <<: *app
-    command: ['node', 'scripts/local-fixtures.mjs', 'issuer']
-    environment:
-      LOCAL_ISSUER: http://localhost:19090/
-      LOCAL_ISSUER_PORT: '9090'
-      LOCAL_ISSUER_STATE_DIR: /var/memory-service-issuer
-      LOCAL_RESOURCE_BASE_URL: http://localhost:18080
-      LOCAL_SCOPE_ID: 22222222-2222-4222-8222-222222222222
-    ports:
-      - '127.0.0.1:19090:9090'
-    volumes:
-      - configured_issuer_data:/var/memory-service-issuer
-    healthcheck:
-      test:
-        [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://127.0.0.1:9090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 2s
-      timeout: 3s
-      retries: 30
 
   worker:
     <<: *app
@@ -158,16 +132,22 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: '8080'
       DATABASE_URL: postgresql://${DB_APP_ROLE:-memory_app}:${APP_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
-      AUTH_ISSUER: http://localhost:19090/
+      AUTH_ISSUER: ${AUTH_ISSUER:?configure the external Gate issuer in .env.local}
       PRODUCT_DISPLAY_NAME: ${PRODUCT_DISPLAY_NAME:-Memory Service}
-      AUTH_AUDIENCE: http://localhost:18080
-      AUTH_JWKS_URL: http://issuer:9090/.well-known/jwks.json
-      LOCAL_AUTH_FIXTURE: '1'
-      LOCAL_RATE_LIMIT: '10000'
-      AUTH_MCP_READ_AUDIENCE: http://localhost:18080/mcp/read
-      AUTH_MCP_WRITE_AUDIENCE: http://localhost:18080/mcp/write
-      MCP_BASE_URL: http://localhost:18080
-      MCP_ALLOWED_HOSTS: localhost,127.0.0.1,::1
+      AUTH_AUDIENCE: ${AUTH_AUDIENCE:?configure the HTTPS API resource in .env.local}
+      AUTH_ALLOWED_CLIENT_IDS: ${AUTH_ALLOWED_CLIENT_IDS:?configure allowed Gate clients in .env.local}
+      AUTH_API_RESOURCE_CLIENT_ID: ${AUTH_API_RESOURCE_CLIENT_ID:?configure the Gate API resource client in .env.local}
+      AUTH_API_RESOURCE_CLIENT_SECRET: ${AUTH_API_RESOURCE_CLIENT_SECRET:?configure the Gate API resource secret in .env.local}
+      AUTH_MCP_READ_RESOURCE_CLIENT_ID: ${AUTH_MCP_READ_RESOURCE_CLIENT_ID:?configure the Gate MCP read resource client in .env.local}
+      AUTH_MCP_READ_RESOURCE_CLIENT_SECRET: ${AUTH_MCP_READ_RESOURCE_CLIENT_SECRET:?configure the Gate MCP read resource secret in .env.local}
+      AUTH_MCP_WRITE_RESOURCE_CLIENT_ID: ${AUTH_MCP_WRITE_RESOURCE_CLIENT_ID:?configure the Gate MCP write resource client in .env.local}
+      AUTH_MCP_WRITE_RESOURCE_CLIENT_SECRET: ${AUTH_MCP_WRITE_RESOURCE_CLIENT_SECRET:?configure the Gate MCP write resource secret in .env.local}
+      AUTH_GATE_ALLOW_LOOPBACK_HTTP: ${AUTH_GATE_ALLOW_LOOPBACK_HTTP:-0}
+      API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-}
+      AUTH_MCP_READ_AUDIENCE: ${AUTH_MCP_READ_AUDIENCE:?configure the HTTPS MCP read resource in .env.local}
+      AUTH_MCP_WRITE_AUDIENCE: ${AUTH_MCP_WRITE_AUDIENCE:?configure the HTTPS MCP write resource in .env.local}
+      MCP_BASE_URL: ${MCP_BASE_URL:?configure the canonical HTTPS API origin in .env.local}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-memory.example.test}
       DELETION_LEDGER_DIR: /var/memory-service/deletion-ledger
       FORGET_HMAC_KEY: ${FORGET_HMAC_KEY}
       PORTABILITY_STORAGE_DIR: /var/memory-service/portable-exports
@@ -186,8 +166,6 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-      issuer:
-        condition: service_healthy
       worker:
         condition: service_healthy
     healthcheck:
@@ -260,7 +238,6 @@ services:
       MIGRATION_DATABASE_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${DATABASE_NAME:-memory_service}
       TEST_ADMIN_URL: postgresql://${DB_ADMIN_ROLE:-memory_admin}:${LOCAL_DB_PASSWORD}@db:5432/${TEST_DATABASE_NAME:-memory_service_test}
       TEST_APP_URL: postgresql://${DB_APP_ROLE:-memory_app}:${APP_DB_PASSWORD}@db:5432/${TEST_DATABASE_NAME:-memory_service_test}
-      AUTH_ISSUER: http://localhost:19090/
       APP_DB_PASSWORD: ${APP_DB_PASSWORD}
       WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD}
       FORGET_HMAC_KEY: ${FORGET_HMAC_KEY}
@@ -278,5 +255,3 @@ volumes:
     name: ${LOCAL_DB_VOLUME:-memory_service_local_db}
   configured_artifacts:
     name: ${LOCAL_ARTIFACTS_VOLUME:-memory_service_local_artifacts}
-  configured_issuer_data:
-    name: ${LOCAL_ISSUER_VOLUME:-memory_service_local_issuer}

@@ -37,7 +37,6 @@ jobs:
       DB_ROLE_SOURCE_PREFIX: thymesis
       APP_DB_PASSWORD: local-ci-app-password
       WORKER_DB_PASSWORD: local-ci-worker-password
-      AUTH_ISSUER: https://issuer.memory.local.test/
       DELETION_LEDGER_DIR: ${{ runner.temp }}/memory-service-deletion-ledger
       FORGET_HMAC_KEY: local-ci-forget-hmac-key-with-32-bytes-minimum
       PORTABILITY_MASTER_KEY: local-ci-portability-master-key-with-32-bytes

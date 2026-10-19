@@ -1,8 +1,10 @@
-# Cloud OAuth and MCP verification
+# Historical pre-Gate cloud OAuth and MCP verification
 
-This record retains the 2026-10-17 hosted identity and OAuth observations and adds the 2026-10-18 Lore cutover verification below. The identity design is in [infrastructure](../technical/infrastructure.md#identity-and-access); setup and smoke commands are in the [infrastructure runbook](../technical/infrastructure-runbook.md#identity-setup). Current status across all cloud boundaries is in the [cloud verification register](cloud-verification.md).
+> Archived snapshot of Lore's pre-Gate Keycloak deployment and verification. The identity URLs, account and credential actions, and deployment descriptions below are historical and must not be used as current setup instructions. See the [current cloud verification register](cloud-verification.md) and [current identity design](../technical/infrastructure.md#identity-and-access).
 
-## Lore cutover verification — 2026-10-18
+This record preserves hosted identity and OAuth observations from 2026-10-17 and the Lore Keycloak cutover verification from 2026-10-18. It documents the former Keycloak account, password and TOTP flow; it is not the current identity contract.
+
+## Historical Lore Keycloak cutover verification — 2026-10-18
 
 The Lore identity, API and worker services are ready on revisions `lore-identity-00001-zsq`, `lore-api-00001-bkf` and `lore-worker-00001-zlf`. The application database migration completed with 40 migrations; the prior 39 checksums, seven role OIDs, attributes and memberships were preserved. The two databases are `lore` and `lore_identity`.
 
@@ -32,7 +34,7 @@ The deployed full-mode run passed these checks. The latest results and their lim
 
 On 2026-10-17, the final strict hosted governance run passed in 33.183s using real PKCE tokens, the private API IAM path, and actual Neon, GCS, and Scheduler resources. It verified encrypted cross-owner Import, destination Recall, immediate Forget suppression, completed ledger purge, and artifact removal. The first full attempt exposed a Scheduler concurrency failure; polling was serialized after a TDZ fix, and the fresh-destination rerun passed. Reusing a destination correctly returned `source_conflict`. Identity setup maintenance was explicitly approved; both setup Jobs succeeded and the original pinned identity configuration and public invocation were restored. API and worker remain private. Cleanup disabled three synthetic app principals and removed their grants (existing tokens returned 401); Keycloak test users/client remain configured, and the temporary setup Job and private credential directory were removed.
 
-## Current owner account entry
+## Owner account entry at the historical snapshot
 
 The personal entry is the public [Keycloak account console](https://lore-identity-123456789012.asia-southeast1.run.app/realms/lore/account/). The earlier 2026-10-17 probe returned 404 before the proxy correction; the 2026-10-18 browser smoke verified the live login, settings, logout and revisit flow described above. The registered 1Password connection entry has not yet been updated.
 

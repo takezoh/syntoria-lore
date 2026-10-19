@@ -1,6 +1,6 @@
-# Current cloud verification register
+# Historical cloud verification register (pre-Gate cutover)
 
-**As of 2026-10-18 UTC, this is the authoritative current cloud-status register, not a full cloud PASS or production release decision.** The current cutover evidence is summarized below; the 2026-10-17 observations and release gates are retained as a dated historical snapshot. [Deployment](../technical/deployment.md) and the [infrastructure runbook](../technical/infrastructure-runbook.md) describe reproducible procedures, including the approved identity route and the private API/worker boundary. Use this register for current status and the runbook for execution steps.
+**Every observation in this file predates the Gate authentication cutover, including entries dated 2026-10-18. It is preserved as history and does not establish active service state, current identity configuration, a deployed Gate path, or readiness for production.** The current Gate-only rollout and remaining acceptance gates are in the [2026-10-18 production release record](gate-production-release-20261018.md) and [deployment status](../technical/deployment.md); this historical register must not be used as a current deployment runbook.
 
 ## Old resource deletion — 2026-10-18
 
@@ -8,7 +8,7 @@ After explicit user authorization, all 37 inventoried old cloud resources were d
 
 Fresh inventories across those nine resource types found zero active Thymesis resources. All three Lore services remained ready. The shared `example-project` project and unrelated services were preserved. Provider soft-deletion and recovery retention may keep deleted records visible; these are not active resources. Historical source names in migration configuration and dated records remain as evidence, not deployable rollback targets.
 
-## Current cloud cutover — 2026-10-18
+## Historical cloud cutover — 2026-10-18
 
 | Boundary | Current observed state | Limit |
 | --- | --- | --- |

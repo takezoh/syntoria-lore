@@ -374,6 +374,8 @@ export class PortabilityService {
       const bundle = await this.store.read(row.artifact_key);
       // Verify the encrypted artifact on every read and never publish a reusable URL.
       this.store.open(bundle);
+      // withAuthorizedActor revalidates the Gate credential immediately before this
+      // transaction commits, after the storage read and before these bytes can be returned.
       return { bundle, filename: row.artifact_key };
     });
   }

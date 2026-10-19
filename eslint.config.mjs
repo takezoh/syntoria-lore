@@ -25,4 +25,8 @@ export default typescriptEslint.config(
     },
   },
   ...typescriptEslint.configs.recommended,
+  {
+    files: ['packages/auth/src/connection-verifier.ts'],
+    rules: { 'no-control-regex': 'off' },
+  },
 );

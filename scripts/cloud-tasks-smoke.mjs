@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { GoogleAuth } from 'google-auth-library';
-import { readOptionalBearerTokenFile } from './cloud-oauth-smoke.mjs';
+import { readOptionalBearerTokenFile } from './bearer-token-file.mjs';
 import { verifyDuplicateWorkerSweeps } from './cloud-tasks-smoke-contract.mjs';
 
 const apiUrl = requiredUrl('CLOUD_SMOKE_API_URL');

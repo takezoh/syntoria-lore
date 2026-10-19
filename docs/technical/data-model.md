@@ -115,5 +115,6 @@ Cursor payload version 1, deletion-ledger version 1, encrypted portability
 payload version 1 and persisted receipt hashes retain their original `owner`
 keys and provenance bytes through explicit codecs. These fixed formats are
 not public API aliases. Database role ownership, existing login usernames,
-OAuth fixture subject/client IDs and deployed secret identifiers retain their
-external meanings and identities.
+prior OAuth subject/client IDs and deployed secret identifiers retain their
+external meanings and identities. Gate bindings are additive and point to
+those existing rows; they do not rewrite historical identity data.

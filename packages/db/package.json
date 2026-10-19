@@ -12,8 +12,7 @@
   "scripts": {
     "build": "tsc --build",
     "migrate": "node --import tsx src/migrate-cli.ts",
-    "setup-role": "node --import tsx src/setup-role.ts",
-    "seed:local": "node --import tsx src/seed-local-cli.ts"
+    "setup-role": "node --import tsx src/setup-role.ts"
   },
   "dependencies": {
     "pg": "^8.16.3"

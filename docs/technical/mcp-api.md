@@ -2,7 +2,7 @@
 
 ## Service boundary
 
-REST and Remote MCP expose the same application services. OAuth tokens establish the principal; business arguments and identity headers cannot select an user or widen a scope. MCP tools are thin adapters over the REST services and never reimplement core rules. Callers decide when to remember, recall or catch up and how to interpret results; Lore attributes, validates, versions and governs. See [infrastructure](infrastructure.md) for identity and transport and the [data model](data-model.md) for memory semantics.
+REST and Remote MCP expose the same application services. Gate credentials establish the principal through online issuer, client and exact-resource checks followed by an explicit local Gate identity binding. Business arguments and identity headers cannot select a user or widen a scope. MCP tools are thin adapters over the REST services and never reimplement core rules. Callers decide when to remember, recall or catch up and how to interpret results; Lore attributes, validates, versions and governs. See [infrastructure](infrastructure.md) for identity and transport and the [data model](data-model.md) for memory semantics.
 
 ## Entry points and authorization
 
@@ -12,7 +12,7 @@ REST and Remote MCP expose the same application services. OAuth tokens establish
 | `POST /mcp/read` | MCP read resource | Recall, get, change feed and status tools only |
 | `POST /mcp/write` | MCP write resource | Remember, capture, change sets, review, governance and portability tools |
 
-A token is valid for exactly one resource. Its `memory:read`, `memory:write` and `memory:admin` capabilities and `scope_ids` claim are intersected with the principal's live grants; `admin` includes read and write. Writes require `write`. Enabling sources, listing and deciding reviews, Forget, source rights, grants, retention, export, download and import require the user (`403 user_required` otherwise). Missing or invalid credentials return 401; the protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the issuer, resource and scopes.
+Each opaque Gate bearer token is valid for exactly one configured resource: the API, `/mcp/read` or `/mcp/write`. Lore does not authenticate shared cookies or provide a login/session route. Gate introspection confirms active status, issuer, immutable subject, allowed client and audience on every request. An operator-maintained binding maps that identity/client pair to an existing principal, scope set and capability ceiling; those bounds intersect with live grants. `admin` includes read and write. Writes require `write`. Enabling sources, listing and deciding reviews, Forget, source rights, grants, retention, export, download and import require the user (`403 user_required` otherwise). Invalid or revoked credentials return 401, a valid but unadmitted identity returns 403, and a Gate outage returns 503. The protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the Gate issuer and exact resource. An unauthenticated MCP POST returns 401 and a GET returns 405.
 
 ## Tool and schema discovery
 

@@ -5,7 +5,7 @@ import type { Database } from '@memory/db';
 import { CloudTasksTaskDispatcher, OutboxDispatcher } from '@memory/jobs';
 import { createWorkerServer } from '../apps/worker/src/server.js';
 import { createDispatchSweep } from '../apps/worker/src/sweep.js';
-import { readCloudDeploymentConfig } from '../scripts/cloud-identity-config.mjs';
+import { readCloudDeploymentConfig } from '../scripts/cloud-deployment-config.mjs';
 
 const cloudDeployment = await readCloudDeploymentConfig();
 const configuration = {

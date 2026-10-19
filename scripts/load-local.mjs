@@ -24,7 +24,6 @@ const changesPercent = boundedPercent(
   'Changes percent',
 );
 const apiUrl = (process.env['LOCAL_API_URL'] ?? 'http://localhost:18080').replace(/\/$/, '');
-const issuerUrl = (process.env['LOCAL_ISSUER_URL'] ?? 'http://localhost:19090').replace(/\/$/, '');
 const scopeId = process.env['LOCAL_SCOPE_ID'] ?? '22222222-2222-4222-8222-222222222222';
 const dbUrl = await migrationDatabaseUrl();
 const operations = {
@@ -51,7 +50,7 @@ const pool = new Pool({
 
 try {
   beforeDb = await databaseSnapshot(pool);
-  token = await issueToken(issuerUrl, apiUrl);
+  token = required('LOCAL_API_BEARER_TOKEN');
 } catch (error) {
   networkExceptions.push({
     operation: 'setup',
@@ -158,7 +157,7 @@ const report = {
     changes_percent_by_deterministic_slot: changesPercent,
     scope_id: scopeId,
     api_origin: new URL(apiUrl).origin,
-    issuer_origin: new URL(issuerUrl).origin,
+    authorization: 'online Gate API resource token',
   },
   completed: {
     remembered_memories: remembered,
@@ -188,7 +187,7 @@ const report = {
     network_exceptions_truncated: Math.max(0, networkExceptions.length - 100),
   },
   limitations: [
-    'One local Compose stack, one user scope, one issuer and a deterministic client workload; not a cloud-capacity or production-SLO measurement.',
+    'One local Compose stack, one explicitly admitted Gate identity, and a deterministic workload; not a cloud-capacity or production-SLO measurement.',
     'Counts and database bytes are exact PostgreSQL snapshots taken before and after the run; concurrent external writes may affect deltas.',
     'Evidence is an independently identified explicit-remember fixture row. This does not model large source artifacts or real-provider latency.',
   ],
@@ -200,28 +199,11 @@ await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
 process.stdout.write(`${JSON.stringify({ ...report, report_file: output }, null, 2)}\n`);
 if (totalErrors > 0 || remembered !== count) process.exitCode = 1;
 
-async function issueToken(issuer, resourceBase) {
-  const authorization = Buffer.from('demo-owner-client:owner-local-fixture-only').toString(
-    'base64',
-  );
-  const response = await fetch(`${issuer}/oauth/token`, {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${authorization}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      resource: resourceBase,
-      scope: 'memory:read memory:write memory:admin',
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) throw new Error(`Local issuer returned HTTP ${response.status}`);
-  const result = await response.json();
-  if (typeof result.access_token !== 'string')
-    throw new Error('Local issuer response had no access token');
-  return result.access_token;
+function required(name) {
+  const value = process.env[name];
+  if (!value)
+    throw new Error(`${name} must be supplied by Gate; this script does not issue credentials`);
+  return value;
 }
 
 async function requestJson(accumulator, exceptions, operation, input, init) {

@@ -1,11 +1,5 @@
 #!/usr/bin/env node
-import {
-  assertNobypassRls,
-  assertWorkerMember,
-  createDatabase,
-  cutoverPrincipalIssuer,
-  migrate,
-} from '@memory/db';
+import { assertNobypassRls, assertWorkerMember, createDatabase, migrate } from '@memory/db';
 
 const migrationUrl = requiredUrl('MIGRATION_DATABASE_URL');
 const databaseName = requiredValue('DATABASE_NAME');
@@ -29,7 +23,6 @@ const targetHelperRoles = helperRoleDefinitions.map((role) => ({
 let preparedHelperRoles = targetHelperRoles;
 let lockClient;
 let temporaryHelperSetup = false;
-let issuerCutover;
 
 try {
   lockClient = await pool.connect();
@@ -55,21 +48,6 @@ try {
       : preparedHelperRoles;
     await removeTemporaryHelperPrivileges(lockClient, currentHelperRoles);
     temporaryHelperSetup = false;
-  }
-
-  const issuerCutoverAction = process.env['IDENTITY_ISSUER_CUTOVER_ACTION'];
-  if (issuerCutoverAction !== undefined) {
-    if (issuerCutoverAction !== 'rename-existing') {
-      throw new Error('IDENTITY_ISSUER_CUTOVER_ACTION is invalid');
-    }
-    issuerCutover = await cutoverPrincipalIssuer(pool, {
-      sourceIssuer: requiredValue('IDENTITY_ISSUER_SOURCE'),
-      targetIssuer: requiredValue('IDENTITY_ISSUER_TARGET'),
-      userPrincipalId: requiredValue('IDENTITY_USER_PRINCIPAL_ID'),
-      userId: requiredValue('IDENTITY_USER_ID'),
-      userSubjectId: requiredValue('IDENTITY_USER_SUBJECT_ID'),
-      databaseAdminRole: requiredValue('IDENTITY_DATABASE_ADMIN_ROLE'),
-    });
   }
 
   await assertHelperCleanup(lockClient, targetHelperRoles);
@@ -99,17 +77,6 @@ try {
       worker_membership: true,
       helper_schema_create_revoked: true,
       helper_membership: 'inherit=false,set=true',
-      ...(issuerCutover === undefined
-        ? {}
-        : {
-            principal_issuer_cutover: {
-              status: issuerCutover.status,
-              principal_count: issuerCutover.principalCount,
-              user_principal_id: issuerCutover.userPrincipalId,
-              principal_ids_preserved: issuerCutover.principalIdsPreserved,
-              grants_preserved: issuerCutover.grantsPreserved,
-            },
-          }),
     })}\n`,
   );
 } catch (error) {
