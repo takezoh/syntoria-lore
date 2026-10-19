@@ -16,9 +16,10 @@ const portVariable = process.env['PORT'] === undefined ? 'API_PORT' : 'PORT';
 const port = parsePort(portValue, portVariable, 8080);
 const pool = createDatabase(process.env['DATABASE_URL'], 5);
 await assertNobypassRls(pool);
-const issuer = requiredEnvironment('AUTH_ISSUER');
+const issuer = canonicalIssuer(requiredEnvironment('AUTH_ISSUER'));
 const audience = requiredEnvironment('AUTH_AUDIENCE');
-const jwksUrl = requiredEnvironment('AUTH_JWKS_URL');
+const allowedClientIds = parseClientIds(requiredEnvironment('AUTH_ALLOWED_CLIENT_IDS'));
+const allowLoopbackHttp = process.env['AUTH_GATE_ALLOW_LOOPBACK_HTTP'] === '1';
 const mcpBaseUrl = requiredEnvironment('MCP_BASE_URL');
 const mcpReadAudience = canonicalMcpResource(mcpBaseUrl, 'read');
 const mcpWriteAudience = canonicalMcpResource(mcpBaseUrl, 'write');
@@ -32,18 +33,32 @@ const mcpAllowedOrigins = (process.env['MCP_ALLOWED_ORIGINS'] ?? '')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
-const auth = new Authenticator({ pool, issuer, audience, jwksUrl });
+const apiAllowedOrigins = parseOrigins(process.env['API_ALLOWED_ORIGINS'] ?? '');
+const commonIdentityProviderConfig = {
+  issuer,
+  allowedClientIds,
+  ...(allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
+};
+const auth = new Authenticator({
+  pool,
+  ...commonIdentityProviderConfig,
+  audience,
+  clientId: requiredEnvironment('AUTH_API_RESOURCE_CLIENT_ID'),
+  clientSecret: requiredEnvironment('AUTH_API_RESOURCE_CLIENT_SECRET'),
+});
 const mcpReadAuth = new Authenticator({
   pool,
-  issuer,
+  ...commonIdentityProviderConfig,
   audience: mcpReadAudience,
-  jwksUrl,
+  clientId: requiredEnvironment('AUTH_MCP_READ_RESOURCE_CLIENT_ID'),
+  clientSecret: requiredEnvironment('AUTH_MCP_READ_RESOURCE_CLIENT_SECRET'),
 });
 const mcpWriteAuth = new Authenticator({
   pool,
-  issuer,
+  ...commonIdentityProviderConfig,
   audience: mcpWriteAudience,
-  jwksUrl,
+  clientId: requiredEnvironment('AUTH_MCP_WRITE_RESOURCE_CLIENT_ID'),
+  clientSecret: requiredEnvironment('AUTH_MCP_WRITE_RESOURCE_CLIENT_SECRET'),
 });
 const core = new CoreService(pool, CursorCodec.fromEnvironment());
 const governanceStorage = createGovernanceStorage();
@@ -58,10 +73,6 @@ const governance = new ForgetService(pool, governanceStorage.deletionLedger);
 const portability = new PortabilityService(pool, governanceStorage.portabilityStore, {
   hmacKey: requiredEnvironment('FORGET_HMAC_KEY'),
 });
-const localRateLimit = process.env['LOCAL_RATE_LIMIT'];
-if (localRateLimit !== undefined && process.env['LOCAL_AUTH_FIXTURE'] !== '1') {
-  throw new Error('LOCAL_RATE_LIMIT requires the explicit local-auth fixture');
-}
 const server = createApiServer({
   productDisplayName,
   auth,
@@ -69,6 +80,7 @@ const server = createApiServer({
   mcpWriteAuth,
   mcpAuthorizationServerUrl: issuer,
   mcpResourceBaseUrl: mcpBaseUrl,
+  apiAllowedOrigins,
   mcpAllowedHosts,
   ...(mcpAllowedOrigins.length === 0 ? {} : { mcpAllowedOrigins }),
   core,
@@ -77,7 +89,6 @@ const server = createApiServer({
   reviews,
   governance,
   portability,
-  ...(localRateLimit === undefined ? {} : { rateLimit: parseLocalRateLimit(localRateLimit) }),
   ready: async () => {
     await pingDatabase(pool);
     await governance.verifyLedgerReadiness();
@@ -98,6 +109,24 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (value === undefined || value.length === 0) throw new Error(`${name} is required`);
   return value;
+}
+
+function canonicalIssuer(value: string): string {
+  const parsed = new URL(value);
+  if (
+    parsed.protocol !== 'https:' ||
+    parsed.username !== '' ||
+    parsed.password !== '' ||
+    parsed.pathname !== '/' ||
+    parsed.search !== '' ||
+    parsed.hash !== '' ||
+    value !== parsed.origin
+  ) {
+    throw new Error(
+      'AUTH_ISSUER must be a canonical HTTPS Gate origin without credentials or a trailing slash',
+    );
+  }
+  return parsed.origin;
 }
 
 function canonicalMcpResource(baseUrl: string, endpoint: 'read' | 'write'): string {
@@ -124,10 +153,31 @@ function assertConfiguredAudience(name: string, canonical: string): void {
   }
 }
 
-function parseLocalRateLimit(value: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 120 || parsed > 100_000) {
-    throw new Error('LOCAL_RATE_LIMIT must be an integer between 120 and 100000');
+function parseClientIds(value: string): string[] {
+  const clients = value.split(',').map((entry) => entry.trim());
+  if (clients.some((entry) => entry.length === 0)) {
+    throw new Error('AUTH_ALLOWED_CLIENT_IDS must be a non-empty comma-separated list');
   }
-  return parsed;
+  if (new Set(clients).size !== clients.length) {
+    throw new Error('AUTH_ALLOWED_CLIENT_IDS must not contain duplicates');
+  }
+  return clients;
+}
+
+function parseOrigins(value: string): string[] {
+  if (value.trim() === '') return [];
+  const origins = value.split(',').map((entry) => entry.trim());
+  if (origins.some((entry) => entry.length === 0)) {
+    throw new Error('API_ALLOWED_ORIGINS must be a comma-separated list of exact origins');
+  }
+  for (const origin of origins) {
+    const parsed = new URL(origin);
+    if (!['https:', 'http:'].includes(parsed.protocol) || parsed.origin !== origin) {
+      throw new Error('API_ALLOWED_ORIGINS entries must be exact HTTP(S) origins');
+    }
+  }
+  if (new Set(origins).size !== origins.length) {
+    throw new Error('API_ALLOWED_ORIGINS must not contain duplicates');
+  }
+  return origins;
 }

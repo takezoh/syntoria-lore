@@ -33,7 +33,7 @@ case "$COMMAND" in
     compose stop
     ;;
   reset)
-    printf '%s\n' 'This removes only the configured Compose project and its three target volumes.'
+    printf '%s\n' 'This removes only the configured Compose project and its two target volumes.'
     node scripts/local-env.mjs
     compose down --volumes --remove-orphans
     rm -f .env.local
@@ -45,9 +45,6 @@ case "$COMMAND" in
   logs)
     node scripts/local-env.mjs
     compose logs --tail=100 "${2:-api}"
-    ;;
-  token)
-    node scripts/issue-local-token.mjs "${2:-user}" "${3:-http://localhost:18080}" "${4:-}"
     ;;
   diagnostics)
     node scripts/local-env.mjs
@@ -100,14 +97,14 @@ Usage: sh scripts/local.sh COMMAND [ARGS]
 
   start                 build and start the loopback-only local stack
   stop                  stop containers while preserving all local volumes
-  reset                 remove this stack, its three named volumes, and .env.local
+  reset                 remove this stack, its two named volumes, and .env.local
   status | logs [NAME]  inspect services
-  token [user|reader] [RESOURCE] [SCOPE]
   diagnostics           show counts for failed jobs, outbox lag, purge, index, and ledger
   restore-reconcile     replay the separate deletion ledger through the non-bypass worker role
   scheduler | duplicate-scheduler | fail-next-task | fail-next-provider [curator|embedding]
   smoke | recovery-smoke | eval | load [COUNT] [CONCURRENCY] | acceptance
-  acceptance also restarts the Compose stack and checks pre-restart token/data persistence
+  smoke/eval/load require Gate bearer tokens in LOCAL_*_BEARER_TOKEN environment variables
+  acceptance also restarts the Compose stack and verifies previously stored data
 EOF
     ;;
 esac

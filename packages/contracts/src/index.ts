@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 export * from './legacy-storage-contract.js';
+export { bindActorAuthorizationGuard, getActorAuthorizationGuard } from './actor-authorization.js';
+export type { ActorAuthorizationGuard } from './actor-authorization.js';
 
 export const uuidSchema = z.uuid();
 export const timestampSchema = z.iso.datetime({ offset: true });

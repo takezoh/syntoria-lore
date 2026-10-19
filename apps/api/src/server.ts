@@ -36,6 +36,7 @@ export interface ApiServerOptions {
   readonly mcpResourceBaseUrl?: string;
   readonly mcpAllowedHosts?: readonly string[];
   readonly mcpAllowedOrigins?: readonly string[];
+  readonly apiAllowedOrigins?: readonly string[];
   readonly ready?: () => Promise<void>;
   readonly maxBodyBytes?: number;
   readonly rateLimit?: number;
@@ -109,6 +110,11 @@ async function handleRequest(
     sendJson(response, 200, createOpenApiDocument(options?.productDisplayName));
     return;
   }
+  if (url.pathname === '/v1/session') {
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('Not Found');
+    return;
+  }
   if (
     request.method === 'GET' &&
     /^\/\.well-known\/oauth-protected-resource\/mcp\/(read|write)$/.test(url.pathname)
@@ -138,10 +144,35 @@ async function handleRequest(
     sendJson(response, 200, {
       resource,
       authorization_servers: [options.mcpAuthorizationServerUrl],
-      scopes_supported: endpoint === 'read' ? ['memory:read'] : ['memory:write', 'memory:admin'],
+      scopes_supported: ['openid'],
       bearer_methods_supported: ['header'],
     });
     return;
+  }
+  if (url.pathname.startsWith('/v1/') && request.method === 'OPTIONS') {
+    const origin = request.headers.origin;
+    if (!isOriginAllowed(origin, options?.apiAllowedOrigins)) {
+      sendError(
+        response,
+        new CoreError(403, 'origin_forbidden', 'Browser Origin is not allowed'),
+        requestId,
+      );
+      return;
+    }
+    setApiCors(response, origin!);
+    response.writeHead(204, {
+      'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'access-control-allow-headers': 'Authorization, Content-Type, Idempotency-Key',
+      'access-control-max-age': '300',
+    });
+    response.end();
+    return;
+  }
+  if (url.pathname.startsWith('/v1/') && request.headers.origin !== undefined) {
+    response.setHeader('vary', 'Origin');
+    if (isOriginAllowed(request.headers.origin, options?.apiAllowedOrigins)) {
+      setApiCors(response, request.headers.origin);
+    }
   }
   if (
     options?.ready !== undefined &&
@@ -166,6 +197,14 @@ async function handleRequest(
     if (options === undefined || endpointAuth === undefined) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('Not Found');
+      return;
+    }
+    if (hasDuplicateRawHeader(request, 'authorization')) {
+      sendError(
+        response,
+        new CoreError(401, 'unauthorized', 'Duplicate Authorization headers are not allowed'),
+        requestId,
+      );
       return;
     }
     const host = request.headers.host ?? '';
@@ -289,7 +328,10 @@ async function handleRequest(
   }
 
   try {
-    const actor = await options.auth.authenticate(request.headers.authorization);
+    if (hasDuplicateRawHeader(request, 'authorization')) {
+      throw new CoreError(401, 'unauthorized', 'Duplicate Authorization headers are not allowed');
+    }
+    const actor = await options.auth.authenticateBearer(request.headers.authorization);
     let result: unknown;
     let responseStatus = 200;
     if (request.method === 'POST' && url.pathname === '/v1/memories:remember') {
@@ -573,6 +615,23 @@ function requestOrigin(request: IncomingMessage): string {
       ? forwarded
       : 'http';
   return `${protocol}://${request.headers.host ?? 'localhost'}`;
+}
+
+function isOriginAllowed(origin: string | undefined, allowedOrigins?: readonly string[]): boolean {
+  return origin !== undefined && allowedOrigins !== undefined && allowedOrigins.includes(origin);
+}
+
+function setApiCors(response: ServerResponse, origin: string): void {
+  response.setHeader('access-control-allow-origin', origin);
+  response.setHeader('vary', 'Origin');
+}
+
+function hasDuplicateRawHeader(request: IncomingMessage, target: string): boolean {
+  let count = 0;
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase() === target) count += 1;
+  }
+  return count > 1;
 }
 
 function mcpHostAllowed(host: string, allowedHosts: readonly string[]): boolean {

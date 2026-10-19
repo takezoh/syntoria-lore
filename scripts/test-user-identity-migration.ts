@@ -129,8 +129,20 @@ try {
     oid.rows[0]!.oid,
   );
   await admin.query('DROP VIEW migration_dependency_guard');
-  await migrate(admin, { roleSourcePrefix: 'thymesis' });
-  await migrate(admin, { roleSourcePrefix: 'thymesis' });
+  const renameSource = await readFile(new URL('0041_user_identity.sql', directory), 'utf8');
+  await admin.query('BEGIN');
+  try {
+    await admin.query("SELECT set_config('memory.role_source_prefix','thymesis',true)");
+    await admin.query(renameSource);
+    await admin.query('INSERT INTO schema_migrations(version,checksum) VALUES ($1,$2)', [
+      '0041_user_identity.sql',
+      createHash('sha256').update(renameSource).digest('hex'),
+    ]);
+    await admin.query('COMMIT');
+  } catch (error) {
+    await admin.query('ROLLBACK');
+    throw error;
+  }
   const renamed = await admin.query<{ oid: number }>("SELECT 'users'::regclass::oid AS oid");
   assert.equal(renamed.rows[0]!.oid, oid.rows[0]!.oid);
   const preserved = await admin.query(
@@ -165,6 +177,49 @@ try {
     ['https://fixture.invalid/', 'preserved-subject'],
   );
   assert.deepEqual(resolved.rows, [{ user_id: user, principal_id: principal }]);
+  const beforeExternalBinding = await admin.query(
+    `SELECT u.id AS user_id, s.id AS scope_id, s.auth_epoch, p.id AS principal_id,
+            p.issuer, p.subject, p.actor_kind, p.active, g.capabilities,
+            m.id AS memory_id, m.statement, m.authority,
+            i.idempotency_key, i.payload_hash, i.response
+     FROM users u JOIN scopes s ON s.user_id=u.id
+     JOIN principals p ON p.user_id=u.id
+     JOIN grants g ON g.user_id=u.id AND g.scope_id=s.id AND g.principal_id=p.id
+     JOIN memories m ON m.user_id=u.id AND m.scope_id=s.id
+     JOIN idempotency_keys i ON i.user_id=u.id AND i.scope_id=s.id AND i.principal_id=p.id
+     WHERE u.id=$1 AND s.id=$2 AND p.id=$3 AND m.id=$4 AND i.idempotency_key=$5`,
+    [user, scope, principal, memory, key],
+  );
+  assert.equal(beforeExternalBinding.rowCount, 1);
+  await migrate(admin, { roleSourcePrefix: 'thymesis' });
+  await migrate(admin, { roleSourcePrefix: 'thymesis' });
+  assert.deepEqual(
+    (
+      await admin.query(
+        `SELECT u.id AS user_id, s.id AS scope_id, s.auth_epoch, p.id AS principal_id,
+                p.issuer, p.subject, p.actor_kind, p.active, g.capabilities,
+                m.id AS memory_id, m.statement, m.authority,
+                i.idempotency_key, i.payload_hash, i.response
+         FROM users u JOIN scopes s ON s.user_id=u.id
+         JOIN principals p ON p.user_id=u.id
+         JOIN grants g ON g.user_id=u.id AND g.scope_id=s.id AND g.principal_id=p.id
+         JOIN memories m ON m.user_id=u.id AND m.scope_id=s.id
+         JOIN idempotency_keys i ON i.user_id=u.id AND i.scope_id=s.id AND i.principal_id=p.id
+         WHERE u.id=$1 AND s.id=$2 AND p.id=$3 AND m.id=$4 AND i.idempotency_key=$5`,
+        [user, scope, principal, memory, key],
+      )
+    ).rows,
+    beforeExternalBinding.rows,
+  );
+  assert.equal(
+    (await admin.query('SELECT count(*)::int AS count FROM schema_migrations')).rows[0]!.count,
+    42,
+  );
+  assert.equal(
+    (await admin.query('SELECT count(*)::int AS count FROM external_identity_bindings')).rows[0]!
+      .count,
+    0,
+  );
   const password = 'synthetic-user-migration-app-only';
   await admin.query(
     `CREATE ROLE "${appRole}" LOGIN PASSWORD 'synthetic-user-migration-app-only' NOSUPERUSER NOBYPASSRLS INHERIT`,
@@ -194,7 +249,7 @@ try {
     client.release();
   }
   console.log(
-    'Populated user migration: IDs, table OID, grants, exact receipt/hash, v1 cursor and RLS preserved; reapply passed.',
+    'Migration 0042: existing user/principal/scope IDs, auth epoch, grants, memory, receipt/hash, v1 cursor, table OID and RLS preserved; 42 migrations and reapply passed.',
   );
 } finally {
   await app?.end();

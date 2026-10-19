@@ -13,20 +13,15 @@ sh scripts/local.sh stop
 sh scripts/local.sh start
 ```
 
-`start` builds the pinned Node image, starts PostgreSQL, reapplies migrations, verifies the existing deletion-ledger snapshot, and waits for API/worker readiness. It does not replay the ledger into a restored database. Use the explicit `restore-reconcile` command for that operation. `stop` preserves all three named volumes. The last `start` therefore reuses the same local database, issuer signing key, export artifacts, and deletion ledger. `reset` is destructive: it removes only this Compose project's three named volumes and `.env.local`, so the next start creates an empty test stack.
+`start` generates local-only infrastructure secrets, starts PostgreSQL, reapplies migrations, verifies the existing deletion-ledger snapshot, and waits for API/worker readiness. It does not replay the ledger into a restored database. Use the explicit `restore-reconcile` command for that operation. `stop` preserves the named volumes, database, export artifacts, and deletion ledger. `reset` is destructive: it removes only this Compose project's named volumes and `.env.local`, so the next start creates an empty test stack.
 
-API, issuer, Tasks fixture, and Scheduler fixture listen only on loopback. Generated local secrets have user-only permissions; never copy them into a shared environment. API/worker request logs contain correlation ID, route template, result code, and duration, never statement/evidence text or bearer tokens. Diagnostics returns database counters and ledger checkpoint metadata, not remembered content; the ledger checkpoint is read through the checked non-bypass worker login. Outbox diagnostics distinguishes the `capture.accepted` task-dispatch queue from `memory.change` rows served by the change feed and `forget.accepted` metadata handled by the worker's deletion poll. Only the capture rows count as pending Task deliveries.
+API, Tasks fixture, and Scheduler fixture listen only on loopback. Generated local secrets have user-only permissions; never copy them into a shared environment. The API needs the operator-configured Gate issuer and its independent API/read/write resource credentials. API/worker request logs contain correlation ID, route template, result code, and duration, never statement/evidence text or bearer tokens. Diagnostics returns database counters and ledger checkpoint metadata, not remembered content; the ledger checkpoint is read through the checked non-bypass worker login. Outbox diagnostics distinguishes the `capture.accepted` task-dispatch queue from `memory.change` rows served by the change feed and `forget.accepted` metadata handled by the worker's deletion poll. Only the capture rows count as pending Task deliveries.
 
 ## OAuth and client boundary
 
-Use separate principals and canonical resources:
+The API listener binds to `127.0.0.1:18080` for local use, while Gate resource audiences use HTTPS URLs. Configure an operator-controlled local TLS proxy for `https://memory.example.test` to the loopback API and register the API, MCP read and MCP write resources with the test Gate. Lore has no callback or shared-cookie configuration; an MCP client owns its OAuth callback. The repository does not provide or start a TLS proxy.
 
-```sh
-sh scripts/local.sh token user http://localhost:18080
-sh scripts/local.sh token reader http://localhost:18080/mcp/read
-```
-
-The read-only MCP resource is `http://localhost:18080/mcp/read`; the write resource is `http://localhost:18080/mcp/write`. The resource requested at the local issuer must match the token audience and the protected-resource metadata. `sh scripts/local.sh smoke` obtains both tokens, proves REST-to-MCP Recall, and checks the wrong audience is rejected and the read-only tool list has no write tools.
+Supply short-lived Gate bearer tokens to the smoke process through its protected environment: `LOCAL_API_BEARER_TOKEN`, `LOCAL_MCP_READ_BEARER_TOKEN` and `LOCAL_MCP_WRITE_BEARER_TOKEN`. Set `LOCAL_API_BASE_URL` to the canonical HTTPS origin served by the proxy; it defaults to `https://memory.example.test`. The API, read and write resource URLs must exactly match the Gate audiences and metadata. `sh scripts/local.sh smoke` proves REST-to-MCP Recall and rejects a wrong audience and write tools on the read-only endpoint.
 
 ## Provider and queue retry
 
@@ -76,4 +71,4 @@ The command checks that the app login is non-superuser and `NOBYPASSRLS`, checks
 
 ## Boundaries
 
-The local queue, Scheduler, JWT issuer, filesystem ledger, and encrypted export store are test adapters. Their deterministic failure/retry and local fsync behavior do not establish Cloud Tasks delivery guarantees, cloud identity, managed key custody, external-source OAuth, Neon backup retention, production alerting, or production RPO/RTO.
+The local queue, Scheduler, filesystem ledger, and encrypted export store are test adapters. Their deterministic failure/retry and local fsync behavior do not establish Cloud Tasks delivery guarantees, hosted Gate or GitHub identity, managed key custody, external-source OAuth, Neon backup retention, production alerting, or production RPO/RTO.

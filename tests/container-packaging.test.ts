@@ -8,7 +8,7 @@ describe('sanitized build context exclusions', () => {
     const dockerfile = await readFile(join(process.cwd(), 'Dockerfile'), 'utf8');
     expect(dockerfile).toContain('COPY Dockerfile .dockerignore .gcloudignore ./');
     expect(dockerfile).toContain('COPY infra ./infra');
-    expect(dockerfile).toContain('COPY docs/eval/cloud-oauth.md ./docs/eval/cloud-oauth.md');
+    expect(dockerfile).not.toContain('cloud-oauth');
   });
 
   it('includes only the exact repository secret scanner exception', async () => {

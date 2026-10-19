@@ -28,8 +28,6 @@ const deploymentConfig = JSON.parse(
   await readFile(join(process.cwd(), 'infra/cloud/deployment.json'), 'utf8'),
 );
 const immutableImage = `${deploymentConfig.artifactRegistry}/${deploymentConfig.imageName}@sha256:${'a'.repeat(64)}`;
-const identityKeycloakImage = `${deploymentConfig.artifactRegistry}/${deploymentConfig.identity.keycloakImageName}@sha256:${'b'.repeat(64)}`;
-const identityProxyImage = `${deploymentConfig.artifactRegistry}/${deploymentConfig.identity.proxyImageName}@sha256:${'c'.repeat(64)}`;
 
 type SecretReference = { name: string; key: string };
 type EnvironmentEntry = {
@@ -74,33 +72,50 @@ type SourceContextSummary = {
 
 describe('cloud deployment manifests', () => {
   it('keeps local defaults generic while deployment.env pins Lore physical volumes', async () => {
-    const [compose, deploymentEnv, workflow] = await Promise.all([
+    const [compose, deploymentEnv, workflow, envExample] = await Promise.all([
       readFile(join(process.cwd(), 'compose.yaml'), 'utf8'),
       readFile(join(process.cwd(), 'infra/local/deployment.env'), 'utf8'),
       readFile(join(process.cwd(), '.github/workflows/local-contract.yml'), 'utf8'),
+      readFile(join(process.cwd(), '.env.example'), 'utf8'),
     ]);
 
     expect(compose).toContain('${LOCAL_DB_VOLUME:-memory_service_local_db}');
     expect(compose).toContain('${LOCAL_ARTIFACTS_VOLUME:-memory_service_local_artifacts}');
-    expect(compose).toContain('${LOCAL_ISSUER_VOLUME:-memory_service_local_issuer}');
     expect(deploymentEnv).toContain('LOCAL_DB_VOLUME=lore_local_db');
     expect(deploymentEnv).toContain('LOCAL_ARTIFACTS_VOLUME=lore_local_artifacts');
-    expect(deploymentEnv).toContain('LOCAL_ISSUER_VOLUME=lore_local_issuer');
+    expect(envExample).toContain('AUTH_AUDIENCE=https://memory.example.test');
+    expect(envExample).toContain('MCP_BASE_URL=https://memory.example.test');
+    expect(compose).not.toContain('LOCAL_ISSUER_VOLUME');
 
     expect(workflow).toContain('POSTGRES_USER: memory_admin');
     expect(workflow).toContain('memory_service_test');
     expect(workflow).toContain('TEST_ADMIN_URL:');
     expect(workflow).toContain('TEST_APP_URL:');
     expect(workflow).toContain('DB_ROLE_SOURCE_PREFIX: thymesis');
-    expect(workflow).toContain('AUTH_ISSUER: https://issuer.memory.local.test/');
     expect(workflow).toContain('docker build -t memory-service:ci .');
     expect(workflow).not.toContain('THYMESIS_TEST_ADMIN_URL');
   });
 
-  it('pins the offline mapper maintenance contract to the existing immutable identity image', () => {
-    expect(deploymentConfig.identity.existing.keycloakVersion).toBe('26.8.1');
-    expect(deploymentConfig.identity.existing.keycloakImage).toMatch(/@sha256:[a-f0-9]{64}$/);
-    expect(deploymentConfig.identity.migration.mapperNameCutover.mappings).toHaveLength(4);
+  it('configures API-only Gate resources with separate resource audiences', () => {
+    expect(deploymentConfig.gate.issuer).toBe('https://gate.syntoria.com');
+    expect(deploymentConfig.services.api.url).toMatch(/^https:\/\/[^/]+\.run\.app$/);
+    expect(deploymentConfig.services.api.publicUrl).toBe(deploymentConfig.gate.resourceOrigin);
+    expect(deploymentConfig.gate.resourceOrigin).toBe('https://memory.syntoria.com');
+    expect(deploymentConfig.gate.allowedClientIds).toEqual(['memory-mcp-client']);
+    expect(deploymentConfig.gate).not.toHaveProperty('browserAppId');
+    expect(deploymentConfig.gate).not.toHaveProperty('browserClientId');
+    expect(deploymentConfig.gate).not.toHaveProperty('browserRedirectUri');
+    expect(
+      new Set([
+        deploymentConfig.gate.apiResource.clientId,
+        deploymentConfig.gate.readResource.clientId,
+        deploymentConfig.gate.writeResource.clientId,
+      ]).size,
+    ).toBe(3);
+    expect(deploymentConfig.neon.sourceMigrationCount).toBe(41);
+    expect(deploymentConfig.neon.targetActivationStatus).toBe(
+      'gate-cutover-deployed; public-https-active; api-only-auth-pending',
+    );
   });
 
   it('pins runtime image, exact database secrets, and canonical private worker audience', async () => {
@@ -109,38 +124,43 @@ describe('cloud deployment manifests', () => {
     try {
       const result = spawnSync(
         process.execPath,
-        [
-          renderer,
-          '--image',
-          immutableImage,
-          '--identity-keycloak-image',
-          identityKeycloakImage,
-          '--identity-proxy-image',
-          identityProxyImage,
-          '--output-dir',
-          outputDirectory,
-        ],
+        [renderer, '--image', immutableImage, '--output-dir', outputDirectory],
         { encoding: 'utf8' },
       );
       expect(result.status, result.stderr).toBe(0);
 
-      const [api, worker, migration, ledger, queue, scheduler, identity, identityMigration] =
-        await Promise.all([
-          readManifest<ServiceManifest>(outputDirectory, 'api-service.json'),
-          readManifest<ServiceManifest>(outputDirectory, 'worker-service.json'),
-          readManifest<JobManifest>(outputDirectory, 'neon-migration-job.json'),
-          readManifest<JobManifest>(outputDirectory, 'ledger-reconcile-job.json'),
-          readManifest<QueueManifest>(outputDirectory, 'task-queue.json'),
-          readManifest<SchedulerManifest>(outputDirectory, 'scheduler-job.json'),
-          readManifest<ServiceManifest>(outputDirectory, 'identity-service.json'),
-          readManifest<JobManifest>(outputDirectory, 'identity-migration-job.json'),
-        ]);
-      expect(await readdir(outputDirectory)).toHaveLength(8);
+      const [api, worker, migration, ledger, queue, scheduler] = await Promise.all([
+        readManifest<ServiceManifest>(outputDirectory, 'api-service.json'),
+        readManifest<ServiceManifest>(outputDirectory, 'worker-service.json'),
+        readManifest<JobManifest>(outputDirectory, 'neon-migration-job.json'),
+        readManifest<JobManifest>(outputDirectory, 'ledger-reconcile-job.json'),
+        readManifest<QueueManifest>(outputDirectory, 'task-queue.json'),
+        readManifest<SchedulerManifest>(outputDirectory, 'scheduler-job.json'),
+      ]);
+      expect(await readdir(outputDirectory)).toHaveLength(6);
 
       expect(container(api).image).toBe(immutableImage);
       expect(container(worker).image).toBe(immutableImage);
       expect(envSecret(api, 'DATABASE_URL')).toEqual({
         name: deploymentConfig.secrets.appDatabase,
+        key: '1',
+      });
+      expect(envValue(api, 'AUTH_ISSUER')).toBe(deploymentConfig.gate.issuer);
+      expect(envValue(api, 'AUTH_AUDIENCE')).toBe(deploymentConfig.gate.resourceOrigin);
+      expect(envValue(api, 'AUTH_ALLOWED_CLIENT_IDS')).toBe(
+        deploymentConfig.gate.allowedClientIds.join(','),
+      );
+      expect(envValue(api, 'GATE_BROWSER_APP_ID')).toBeUndefined();
+      expect(envValue(api, 'AUTH_BROWSER_CLIENT_ID')).toBeUndefined();
+      expect(envValue(api, 'GATE_BROWSER_REDIRECT_URI')).toBeUndefined();
+      expect(envValue(api, 'API_ALLOWED_ORIGINS')).toBe('');
+      expect(envValue(api, 'MCP_BASE_URL')).toBe(deploymentConfig.gate.resourceOrigin);
+      expect(envValue(api, 'MCP_ALLOWED_HOSTS')).toBe(
+        new URL(deploymentConfig.gate.resourceOrigin).host,
+      );
+      expect(envValue(api, 'AUTH_JWKS_URL')).toBeUndefined();
+      expect(envSecret(api, 'AUTH_API_RESOURCE_CLIENT_SECRET')).toEqual({
+        name: deploymentConfig.gate.apiResource.clientSecretSecret,
         key: '1',
       });
       expect(envSecret(worker, 'WORKER_DATABASE_URL')).toEqual({
@@ -172,16 +192,7 @@ describe('cloud deployment manifests', () => {
       expect(scheduler.httpTarget.oidcToken.audience).toBe(
         deploymentConfig.services.worker.customAudience,
       );
-      expect(container(identity).image).toBe(identityProxyImage);
-      const identityMigrationContainer = container(identityMigration);
-      expect(identityMigrationContainer.image).toBe(identityKeycloakImage);
-      expect(envValue(identityMigration, 'OAUTH_SMOKE_ACTION')).toBe('rename-existing');
-      expect(envValue(identityMigration, 'IDENTITY_REALM')).toBe(
-        deploymentConfig.identity.migration.targetRealm,
-      );
-      expect(envValue(migration, 'IDENTITY_ISSUER_TARGET')).toBe(
-        deploymentConfig.migration.identityIssuerCutover.targetIssuer,
-      );
+      expect(envValue(migration, 'IDENTITY_ISSUER_TARGET')).toBeUndefined();
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });
     }
@@ -250,10 +261,8 @@ describe('cloud deployment manifests', () => {
         '.dockerignore',
         '.gcloudignore',
         'scripts/secret-scan.mjs',
-        'infra/keycloak/proxy.mjs',
         'infra/cloud/iam-contract.json',
         'infra/cloud/deployment.json',
-        'docs/eval/cloud-oauth.md',
       ];
       for (const sourcePath of requiredSourcePaths) {
         expect(sourcePaths.has(sourcePath), `missing Cloud Build source: ${sourcePath}`).toBe(true);
@@ -293,14 +302,13 @@ describe('cloud deployment manifests', () => {
         'tsconfig.test.json',
         'vitest.config.ts',
         'docs/api/openapi.json',
-        'docs/eval/cloud-oauth.md',
       ];
       for (const sourcePath of requiredFiles) {
         const targetPath = join(sourceRoot, sourcePath);
         await mkdir(join(targetPath, '..'), { recursive: true });
         await writeFile(targetPath, 'fixture\n');
       }
-      for (const sourcePath of ['apps', 'packages', 'tests', 'infra/keycloak']) {
+      for (const sourcePath of ['apps', 'packages', 'tests']) {
         await mkdir(join(sourceRoot, sourcePath), { recursive: true });
       }
       await mkdir(sourceScripts, { recursive: true });

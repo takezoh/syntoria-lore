@@ -9,7 +9,7 @@ import {
   type CuratorInput,
   type CuratorObservation,
 } from '@memory/curator';
-import { readCloudDeploymentConfig } from '../scripts/cloud-identity-config.mjs';
+import { readCloudDeploymentConfig } from '../scripts/cloud-deployment-config.mjs';
 
 const cloudDeployment = await readCloudDeploymentConfig();
 const source = 'I prefer a blue notebook for my morning work.';

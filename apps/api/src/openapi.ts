@@ -838,7 +838,13 @@ const apiContract = {
     },
   },
   components: {
-    securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
+    securitySchemes: {
+      bearerAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'opaque Gate token',
+      },
+    },
     responses: {
       CoreError: {
         description: 'Application error with stable code and request id',

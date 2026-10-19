@@ -6,12 +6,6 @@ import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 export type { PoolClient, QueryResultRow };
 export type Database = Pool;
 export { withTemporarySuperuserAuthorization } from './local-session-authorization.js';
-export {
-  cutoverPrincipalIssuer,
-  type PrincipalIssuerCutoverOptions,
-  type PrincipalIssuerCutoverResult,
-} from './identity-issuer-cutover.js';
-
 export function createDatabase(connectionString = process.env['DATABASE_URL'], max = 10): Pool {
   if (connectionString === undefined || connectionString.length === 0) {
     throw new Error('DATABASE_URL is required');
@@ -27,12 +21,14 @@ export function createDatabase(connectionString = process.env['DATABASE_URL'], m
 export async function withTransaction<T>(
   pool: Pool,
   run: (client: PoolClient) => Promise<T>,
+  options: TransactionOptions = {},
 ): Promise<T> {
   const client = await pool.connect();
   let discardConnection: Error | undefined;
   try {
     await client.query('BEGIN');
     const result = await run(client);
+    await options.beforeCommit?.(client);
     await client.query('COMMIT');
     return result;
   } catch (error) {
@@ -46,6 +42,10 @@ export async function withTransaction<T>(
   } finally {
     client.release(discardConnection);
   }
+}
+
+export interface TransactionOptions {
+  readonly beforeCommit?: (client: PoolClient) => Promise<void>;
 }
 
 const migrationDirectory = fileURLToPath(new URL('../migrations/', import.meta.url));

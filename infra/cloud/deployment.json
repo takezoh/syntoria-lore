@@ -14,7 +14,8 @@
       "timeoutSeconds": 60,
       "cpu": "1",
       "memory": "1Gi",
-      "poolMax": 5
+      "poolMax": 5,
+      "publicUrl": "https://memory.syntoria.com"
     },
     "worker": {
       "name": "lore-worker",
@@ -29,141 +30,6 @@
       "poolMax": 5
     }
   },
-  "identity": {
-    "serviceName": "lore-identity",
-    "keycloakImageName": "identity-keycloak",
-    "proxyImageName": "identity-proxy",
-    "publicClientId": "memory-public-app",
-    "smokeClientId": "memory-cloud-oauth-smoke",
-    "url": "https://lore-identity-533289977919.asia-southeast1.run.app",
-    "realm": "lore",
-    "existing": {
-      "status": "private-ready",
-      "revision": "thymesis-identity-00001-lks",
-      "buildId": "3b2663e5-e843-4f88-8f2a-65c68a4afd29",
-      "keycloakVersion": "26.8.1",
-      "keycloakImage": "asia-southeast1-docker.pkg.dev/syntoria/thymesis/identity-keycloak@sha256:9ae7bb7a596dbf0aaf235c264f8ce1621120f53221f9e808b34ec7890e57dc52",
-      "proxyImage": "asia-southeast1-docker.pkg.dev/syntoria/thymesis/identity-proxy@sha256:2a59e8a68e81e2d86777d49c41ea6f21961fba9a570d9115ab8528bf85a1fdf0",
-      "url": "https://thymesis-identity-533289977919.asia-southeast1.run.app",
-      "database": "thymesis_identity",
-      "databaseRole": "thymesis_identity",
-      "databaseJdbcSecretVersion": "2",
-      "userPrincipalId": "f77b5dc8-71ab-45f4-b9df-ee65744fbd30",
-      "userSubjectId": "cf567b8c-39a8-41ff-8105-988605f9aa6d",
-      "userId": "ad1f3a02-e8f5-4ced-84e0-511bbaf6f712",
-      "userScopeId": "cc8b7c3d-a629-43b8-862d-e1672f7bc87e",
-      "userUsername": "owner",
-      "userEnrollment": "human password and TOTP enrollment pending",
-      "smokeSubjectId": "559fa46a-ffa4-4b13-9181-404ec992698c",
-      "smokePrincipalId": "4f73d0bf-900d-4c74-b2b5-ac4dc0e8c19e",
-      "smokeUserId": "7b6e7b0c-7a90-4c63-9eba-5a1da9af3138",
-      "smokeScopeId": "54e68251-5036-4509-b1c9-471a93c54526",
-      "smokeUsername": "cloud-smoke-6642cf90d20f"
-    },
-    "realmSource": "thymesis",
-    "activationStatus": "active",
-    "migration": {
-      "jobName": "lore-identity-bootstrap",
-      "action": "rename-existing",
-      "bootstrapAdminUsername": "thymesis-bootstrap-admin",
-      "sourceRealm": "thymesis",
-      "targetRealm": "lore",
-      "userSubjectId": "cf567b8c-39a8-41ff-8105-988605f9aa6d",
-      "userPrincipalId": "f77b5dc8-71ab-45f4-b9df-ee65744fbd30",
-      "userId": "ad1f3a02-e8f5-4ced-84e0-511bbaf6f712",
-      "userScopeId": "cc8b7c3d-a629-43b8-862d-e1672f7bc87e",
-      "sourcePublicClientId": "thymesis-public-app",
-      "targetPublicClientId": "memory-public-app",
-      "sourceSmokeClientId": "thymesis-cloud-oauth-smoke",
-      "targetSmokeClientId": "memory-cloud-oauth-smoke",
-      "scopeRenames": [
-        ["thymesis:resource:api", "memory:resource:api"],
-        ["thymesis:resource:mcp:read", "memory:resource:mcp:read"],
-        ["thymesis:resource:mcp:write", "memory:resource:mcp:write"],
-        ["thymesis:scope_ids", "memory:scope_ids"]
-      ],
-      "clientRenames": [
-        ["thymesis-public-app", "memory-public-app"],
-        ["thymesis-cloud-oauth-smoke", "memory-cloud-oauth-smoke"],
-        [
-          "https://thymesis-api-533289977919.asia-southeast1.run.app",
-          "https://lore-api-533289977919.asia-southeast1.run.app"
-        ],
-        [
-          "https://thymesis-api-533289977919.asia-southeast1.run.app/mcp/read",
-          "https://lore-api-533289977919.asia-southeast1.run.app/mcp/read"
-        ],
-        [
-          "https://thymesis-api-533289977919.asia-southeast1.run.app/mcp/write",
-          "https://lore-api-533289977919.asia-southeast1.run.app/mcp/write"
-        ]
-      ],
-      "userUsername": "owner",
-      "publicRedirectUri": "http://127.0.0.1:18970/callback",
-      "smokeRedirectUri": "http://127.0.0.1:18971/callback",
-      "sourceAudienceMapperName": "thymesis-resource-audience",
-      "targetAudienceMapperName": "memory-resource-audience",
-      "sourceScopeIdsMapperName": "thymesis-scope-ids",
-      "targetScopeIdsMapperName": "memory-scope-ids",
-      "mapperNameCutover": {
-        "realmId": "697219f6-4327-4052-bf93-6c6eeaa34b0d",
-        "mappings": [
-          {
-            "scopeId": "3bb64169-42a2-4b3e-bf6f-9c85f3d9ed34",
-            "sourceScopeName": "thymesis:resource:api",
-            "targetScopeName": "memory:resource:api",
-            "mapperId": "8edfdc53-ab5f-45a1-96ce-3e9c572bcade",
-            "sourceMapperName": "thymesis-resource-audience",
-            "targetMapperName": "memory-resource-audience",
-            "mapperType": "oidc-audience-mapper"
-          },
-          {
-            "scopeId": "10be9d9b-1150-43f8-8be8-e6b69524883f",
-            "sourceScopeName": "thymesis:resource:mcp:read",
-            "targetScopeName": "memory:resource:mcp:read",
-            "mapperId": "ba084c47-f2ec-46ce-998a-643834518ba5",
-            "sourceMapperName": "thymesis-resource-audience",
-            "targetMapperName": "memory-resource-audience",
-            "mapperType": "oidc-audience-mapper"
-          },
-          {
-            "scopeId": "80369799-45b5-4a80-898e-a8cd30294c83",
-            "sourceScopeName": "thymesis:resource:mcp:write",
-            "targetScopeName": "memory:resource:mcp:write",
-            "mapperId": "9b5f3d9b-0ffe-417a-bd23-c7152205b7d2",
-            "sourceMapperName": "thymesis-resource-audience",
-            "targetMapperName": "memory-resource-audience",
-            "mapperType": "oidc-audience-mapper"
-          },
-          {
-            "scopeId": "6246d86e-39e9-4d2c-8ce0-ff28145f0098",
-            "sourceScopeName": "thymesis:scope_ids",
-            "targetScopeName": "memory:scope_ids",
-            "mapperId": "66c58776-07ed-42d2-9f23-84fd2f9ac14e",
-            "sourceMapperName": "thymesis-scope-ids",
-            "targetMapperName": "memory-scope-ids",
-            "mapperType": "oidc-usermodel-attribute-mapper"
-          }
-        ]
-      },
-      "sourceScopeIdsScopeName": "thymesis:scope_ids",
-      "targetScopeIdsScopeName": "memory:scope_ids",
-      "sourceApiScopeName": "thymesis:resource:api",
-      "sourceReadScopeName": "thymesis:resource:mcp:read",
-      "sourceWriteScopeName": "thymesis:resource:mcp:write",
-      "sourceApiUrl": "https://thymesis-api-533289977919.asia-southeast1.run.app",
-      "targetApiUrl": "https://lore-api-533289977919.asia-southeast1.run.app"
-    },
-    "bootstrapPasswordSecret": "lore-identity-bootstrap-password",
-    "jdbcSecret": "lore-identity-jdbc-url",
-    "databasePasswordSecret": "lore-identity-db-password",
-    "userInitialPasswordSecret": "lore-owner-initial-password",
-    "jdbcSecretVersion": "1",
-    "database": "lore_identity",
-    "databaseRole": "memory_identity",
-    "bootstrapImage": null,
-    "proxyImage": null
-  },
   "neon": {
     "projectId": "ancient-butterfly-18185264",
     "region": "aws-ap-southeast-1",
@@ -172,9 +38,9 @@
     "workerRole": "memory_worker",
     "runtimeRolesNonBypassRls": true,
     "helperRoleCleanup": "CREATE revoked; INHERIT false and SET true for every membership",
-    "sourceMigrationStatus": "through-0039-verified",
-    "sourceMigrationCount": 39,
-    "targetActivationStatus": "active",
+    "sourceMigrationStatus": "through-0041-verified",
+    "sourceMigrationCount": 41,
+    "targetActivationStatus": "gate-cutover-deployed; public-https-active; api-only-auth-pending",
     "roleSourcePrefix": "thymesis",
     "workerLoginRole": "memory_worker_login"
   },
@@ -184,9 +50,7 @@
     "migration": "lore-migration@syntoria.iam.gserviceaccount.com",
     "taskInvoker": "lore-task-invoker@syntoria.iam.gserviceaccount.com",
     "schedulerInvoker": "lore-scheduler-invoker@syntoria.iam.gserviceaccount.com",
-    "build": "lore-build@syntoria.iam.gserviceaccount.com",
-    "identity": "lore-identity@syntoria.iam.gserviceaccount.com",
-    "identityBootstrap": "lore-identity-bootstrap@syntoria.iam.gserviceaccount.com"
+    "build": "lore-build@syntoria.iam.gserviceaccount.com"
   },
   "build": {
     "serviceAccount": "lore-build@syntoria.iam.gserviceaccount.com",
@@ -222,16 +86,7 @@
     },
     "databaseName": "lore",
     "roleSourcePrefix": "thymesis",
-    "identityIssuerCutover": {
-      "action": "rename-existing",
-      "sourceIssuer": "https://thymesis-identity-533289977919.asia-southeast1.run.app/realms/thymesis",
-      "targetIssuer": "https://lore-identity-533289977919.asia-southeast1.run.app/realms/lore",
-      "userPrincipalId": "f77b5dc8-71ab-45f4-b9df-ee65744fbd30",
-      "userId": "ad1f3a02-e8f5-4ced-84e0-511bbaf6f712",
-      "userSubjectId": "cf567b8c-39a8-41ff-8105-988605f9aa6d",
-      "databaseAdminRole": "neondb_owner"
-    },
-    "targetActivationStatus": "active"
+    "targetActivationStatus": "gate-cutover-deployed; public-https-active; api-only-auth-pending"
   },
   "ledgerReconcile": {
     "job": "lore-ledger-reconcile",
@@ -266,5 +121,24 @@
     "embeddingDimension": "1536"
   },
   "productDisplayName": "Syntoria Lore",
-  "portabilitySignerId": "thymesis-cloud"
+  "portabilitySignerId": "thymesis-cloud",
+  "gate": {
+    "issuer": "https://gate.syntoria.com",
+    "allowedClientIds": [
+      "memory-mcp-client"
+    ],
+    "apiResource": {
+      "clientId": "memory-api-resource",
+      "clientSecretSecret": "lore-gate-memory-api-resource-secret"
+    },
+    "readResource": {
+      "clientId": "memory-mcp-read-resource",
+      "clientSecretSecret": "lore-gate-memory-mcp-read-resource-secret"
+    },
+    "writeResource": {
+      "clientId": "memory-mcp-write-resource",
+      "clientSecretSecret": "lore-gate-memory-mcp-write-resource-secret"
+    },
+    "resourceOrigin": "https://memory.syntoria.com"
+  }
 }

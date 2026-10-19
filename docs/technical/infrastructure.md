@@ -2,100 +2,63 @@
 
 ## Runtime and topology
 
-The service is TypeScript on Node.js 24, using `node:http` servers, node-postgres (`pg`), the official MCP TypeScript SDK and Zod schemas. One immutable container image serves two Cloud Run services and the Cloud Run Jobs. Domain, recall and governance code do not depend on Cloud Run, Google SDKs or a particular model provider; cloud adapters are selected by configuration at the composition root.
+The service is TypeScript on Node.js 24. One immutable container image serves the Cloud Run API, private worker and controlled jobs. The API exposes REST, Remote MCP and OpenAPI. Neon PostgreSQL with pgvector and pg_trgm stores user data and work state; Cloud Tasks delivers durable job IDs; Cloud Scheduler triggers worker sweeps; Cloud Storage holds the deletion ledger and encrypted exports; Vertex AI supplies extraction and embeddings.
+
+Gate owns sign-in, approvals, sessions and logout. The source implementation and public endpoint contract live in the sibling Gate service; this repository consumes Gate through online bearer-token introspection. Production has a public HTTPS API origin, and a real Gate browser login and approval were confirmed. This API-only source correction is pending deployment; positive hosted MCP data access remains unverified. The checked-in `infra/cloud/deployment.json` is a synthetic example profile; it is not the private production configuration or a cloud readback.
 
 ```mermaid
 flowchart LR
-  Clients[OAuth clients] --> API[Cloud Run API: REST, MCP, OpenAPI]
-  API --> Verify[JWT verification + live grants]
-  Verify --> Core[Domain, recall, governance]
-  Core --> DB[(Neon PostgreSQL)]
-  Core --> GCS[(Cloud Storage ledger and artifacts)]
-  IdP[Keycloak + proxy on Cloud Run] -.->|issuer, JWKS| Verify
-  Scheduler[Cloud Scheduler] -->|OIDC| Worker[Private Cloud Run worker]
-  Worker --> Tasks[Cloud Tasks queue]
+  Client[MCP or API client] -->|opaque API bearer| API[REST /v1]
+  Client -->|opaque read/write bearer| MCP[Separate MCP resources]
+  API --> Gate[Gate online introspection]
+  MCP --> Gate
+  API --> Admission[Existing principal + binding + grants]
+  MCP --> Admission
+  Admission --> DB[(Neon PostgreSQL)]
+  DB --> RLS[Forced row-level security]
+  API --> Domain[Core, recall and governance]
+  Domain --> GCS[Deletion ledger and artifacts]
+  Scheduler[Cloud Scheduler] -->|OIDC| Worker[Private worker]
+  Worker --> Tasks[Cloud Tasks]
   Tasks -->|OIDC| Worker
   Worker --> DB
   Worker --> GCS
   Worker --> Vertex[Vertex AI]
-  Jobs[Migration and ledger reconcile Jobs] --> DB
-  Jobs --> GCS
 ```
-
-Services listen on `$PORT` and expose `/healthz` (process only) and `/readyz` (database and deletion-ledger readiness; `503 restore_not_ready` while a restored database is unreconciled). Cloud Run startup probes use `/readyz`, so a revision that cannot verify the ledger never receives traffic. Instances keep no session, cursor or job state in memory.
 
 ## HTTP boundaries
 
 | Service | Route | Contract |
 | --- | --- | --- |
-| API | `/v1/*` | REST operations; bearer token for the API resource |
-| API | `POST /mcp/read`, `POST /mcp/write` | Streamable HTTP MCP; separate resources, audiences and tool sets |
-| API | `/.well-known/oauth-protected-resource/mcp/read`, `.../mcp/write` | Public protected-resource metadata naming the issuer, resource and scopes |
-| API | `/openapi.json`, `/healthz`, `/readyz` | Public; no memory data |
+| API | `/v1/*` | REST; API-resource Gate bearer only |
+| API | `POST /mcp/read`, `POST /mcp/write` | Streamable HTTP MCP; separate resource audiences, credentials and tool sets; Gate bearer only |
+| API | `/.well-known/oauth-protected-resource/mcp/read`, `.../mcp/write` | Public metadata naming Gate, resource URI and supported OAuth scopes |
+| API | `/openapi.json`, `/healthz`, `/readyz` | Health and schema; no memory data |
 | Worker | `POST /internal/jobs/run` | Cloud Tasks delivery of one `job_id` |
-| Worker | `POST /internal/dispatch/sweep` | Scheduler sweep: outbox dispatch, due-job retry, governance and portability passes |
-| Worker | `POST /internal/governance/sweep` | Local fixture mode only; disabled in `cloud-tasks` mode |
+| Worker | `POST /internal/dispatch/sweep` | IAM-authenticated scheduler sweep |
 
-Request bodies are limited to 1 MiB, JSON is required, and the API applies a per-address rate limit (120 requests per minute per instance) before authentication. MCP requests are rejected unless Host and Origin match `MCP_ALLOWED_HOSTS` and `MCP_ALLOWED_ORIGINS`, preventing DNS-rebinding access. Error responses are typed and carry a request ID; they never echo memory content.
+The API rejects duplicate Authorization headers before Node's header normalization. Cookie headers do not participate in authentication: cookie-only requests fail, and cookies accompanying a valid bearer token are ignored. CORS is non-credentialed and allows only configured `API_ALLOWED_ORIGINS`; bearer authentication does not depend on Origin. MCP validates Host and supplied Origin to prevent DNS rebinding. Request bodies are bounded and error responses do not echo memory content. `/auth-return.html` and `/v1/session` are absent and return 404.
 
-## Identity and access
+## Gate identity and admission
 
-Keycloak 26.8.1 is the OAuth authorization server. It runs in its own Cloud Run service with a Node proxy sidecar: ingress reaches only the proxy, which accepts the exact public host, replaces forwarding headers, and forwards only realm discovery, authorization, token, revoke, logout, JWKS, login and required-action routes, static resources and a narrow set of user account-console pages and methods. Administration, master realm, client registration and unrecognized paths are rejected before forwarding. The identity service is the only service with public invocation.
+Gate issues opaque authorization-code tokens for the API, MCP read and MCP write resources. Each resource has its own client ID and secret for introspection; the audiences are the configured public API origin and its `/mcp/read` and `/mcp/write` paths. The verifier discovers Gate's OIDC metadata and introspection endpoint, checks active status, issuer, immutable subject, approved client and exact audience, and fails closed when Gate is unavailable. It does not verify local JWT/JWKS tokens or cache successful authorization.
 
-Keycloak runs `start --optimized` with JDBC-ping cache discovery, a bounded database pool, HTTP bound to loopback, trusted proxy addresses limited to loopback and PostgreSQL TLS verification (`sslmode=verify-full`) through the identity JDBC secret. The service runs with minimum 0 and maximum 1 instances; Keycloak gets 1 vCPU and 2 GiB and the proxy the smallest valid allocation, and the proxy starts only after the Keycloak startup probe succeeds. The runtime identity receives only the identity database URL and password; the bootstrap administrator and the user's initial password reach only the one-time bootstrap Job. Resource indicators are experimental in Keycloak, so any Keycloak upgrade repeats the real PKCE and audience smoke before rollout.
+An operator must map an exact `(Gate issuer, subject, client ID)` tuple in `external_identity_bindings` to an existing Lore user and principal. The binding contains an explicit scope list and capability ceiling; current, unexpired database grants, source rights and authorization epochs further restrict access. OAuth consent alone never creates a Lore user or grants memory access. The mapping tool hashes both the existing principal/grant snapshot and target binding before it applies.
 
-The realm has self-registration disabled, brute-force protection, short access-token lifetimes and no refresh-token reuse. Clients are preregistered with authorization code, PKCE S256, consent and one exact loopback redirect URI; password and implicit grants, wildcard redirects and dynamic client registration are disabled. Resource indicators bind each token to exactly one resource: the API, `/mcp/read` or `/mcp/write`. Tokens carry `memory:read`, `memory:write` or `memory:admin` capabilities and a `scope_ids` claim that only administrators can edit.
+MCP clients own their OAuth callback and send the resulting Gate bearer token to Lore. Lore does not start Gate login, resume a Gate browser session, or expose a device-logout flow. Users manage sign-in, approvals, sessions and logout in Gate; OAuth client grants remain independently revocable there.
 
-The API verifies issuer, signature against the configured JWKS, lifetime, exact audience and scope claims. Verified subjects map to stored principals; their capabilities and scope IDs are intersected with active, unexpired grants on every request and again inside each operation, and scope authorization epochs invalidate stale authorization. User-only operations require the user's own principal; business arguments cannot select an user.
+Every actor-bound operation locks and compares the local binding, principal, grants and source rights. The transaction runs one final Gate check immediately before COMMIT. If the identity, local binding, grant, rights or Gate service is unavailable or changed, the operation fails without committing. PostgreSQL RLS remains forced; application and worker roles are non-superuser and `NOBYPASSRLS`.
 
-Cloud Run IAM protects the worker: only the dedicated task-invoker and scheduler-invoker service accounts hold `roles/run.invoker`, and both mint OIDC tokens for the worker's canonical custom audience. The API service is also IAM-private at present; operators reach it with a Cloud Run ID token in `X-Serverless-Authorization` while the application token stays in `Authorization`. The procedure for renaming realm, clients and scopes in place is in [identity cutover](identity-cutover.md).
+## Worker, storage and deployment boundary
 
-## Persistence
+Cloud Run IAM protects the worker: the task and scheduler identities invoke it using the worker's canonical Cloud Run audience; inherited operator access remains unchanged. The API's Cloud Run URL remains the canonical IAM identity. Production uses the approved direct Cloud Run domain-mapping design; the public API invoker is applied and its HTTPS certificate is Ready. The worker remains private and its IAM boundary is unchanged.
 
-Neon PostgreSQL with the pgvector and pg_trgm extensions is the only durable store for tenant data. Each service holds one bounded `pg` pool and runs every tenant operation in a transaction that sets user, principal and scope context with transaction-local settings. Runtime logins (`memory_app` for the API, a separate worker login that is a member of `memory_worker`) are non-superuser, `NOBYPASSRLS` and do not own tables; forced row-level security applies to every tenant table. The migration identity is separate and its credential never reaches a service. The [data model](data-model.md) defines tables, constraints and transaction contracts.
+`deployment.json` is a synthetic example for names, limits, resource URLs and secret-reference shape; `iam-contract.json` records the intended direct IAM boundary. Neither is itself a cloud readback. Current hosted state, secret version references and pending acceptance work are recorded in the [deployment status](deployment.md) and the [2026-10-18 release record](../eval/gate-production-release-20261018.md).
 
-## Asynchronous delivery
+The surrounding runtime remains GCP project `syntoria` in `asia-southeast1`, with `lore-api` (2 instances, concurrency 8, 60-second requests, pool max 5) and `lore-worker` (2 instances, concurrency 1, 600-second tasks, pool max 5). The worker's canonical audience remains its Cloud Run URL. Neon database `lore` is in AWS `ap-southeast-1`; the previously observed hosted baseline was 41 applied migrations through 0041, while this checkout adds migration 0042. `lore-capture` dispatches at most 2 tasks concurrently and 2 per second, and `lore-worker-sweep` runs once per minute. The migration and ledger-reconcile jobs, ledger/artifact buckets and their object-prefix IAM are unchanged by the Gate implementation. These are declared configuration values; use the verification register for observed state.
 
-`TASK_DISPATCH_MODE` selects `local-http` (Compose fixture with a shared token and polling) or `cloud-tasks`. In cloud mode the worker requires `WORKER_PRIVATE_IAM=true` and rejects fixture configuration. Tasks have random names, a body containing only `job_id`, an OIDC token for the canonical worker audience and a 600-second dispatch deadline. The queue allows 2 concurrent dispatches, 2 dispatches per second, 5 attempts within 3,600 seconds and 10–300 second backoff.
+## Monitoring and remaining limits
 
-Cloud Run starts no timers. Cloud Scheduler calls `/internal/dispatch/sweep` once a minute with OIDC. Each sweep dispatches up to 50 outbox rows, retries up to 100 due capture jobs, then runs a bounded governance pass, a portability pass and a second governance pass so that Forget can complete after export files are removed. Deletion recovery reads at most 100 requests per call and backs off failed requests. Remaining work stays durable for the next sweep. Job status, attempts, last error and next retry time live in PostgreSQL; no queue-level dead-letter storage is assumed.
+Logs carry request ID, route template, status, safe error class and duration, never statement text, evidence, tokens, database URLs or secret values. Restore readiness compares the database checkpoint with the independent deletion-ledger head and fails closed until reconciliation.
 
-## Governance storage
-
-`STORAGE_MODE=gcs` with `GCS_LEDGER_BUCKET` and `GCS_ARTIFACT_BUCKET` selects Cloud Storage; otherwise the local filesystem stores are used. Prefixes default to `ledger/` and `artifacts/`.
-
-The deletion ledger is an append-only chain: immutable node objects under `ledger/objects/` and a single mutable `ledger/HEAD.json` updated by generation-conditioned compare-and-swap. Custom roles limit runtime identities to creating and reading nodes and to updating the head object; ledger nodes cannot be overwritten or deleted. A new ledger namespace is bootstrapped once, after an empty-database check, by a separate setup principal; runtime identities never bootstrap. The artifact bucket holds encrypted export bundles with object versioning disabled, soft delete off, uniform bucket-level access and public access prevention, so a deleted artifact is gone.
-
-## Model providers
-
-`CURATOR_PROVIDER` selects `vertex`, `openai-compatible` or `local` explicitly; there is no fallback between providers. The `local` provider is a deterministic test fixture.
-
-In Vertex mode, extraction uses `gemini-3.5-flash` through the regional `generateContent` endpoint in `asia-southeast1` with JSON response mode and a structural response schema derived from the strict proposal schema. Every proposal is then parsed with the full schema and its statements are validated as exact anchors in the original observation before any commit. Request and response bodies are bounded to 1 MB, output to 4,096 tokens, and each call to a 30-second default deadline (`CURATOR_PROVIDER_TIMEOUT_MS`, 1–120 seconds). Embeddings use `gemini-embedding-001` with 1,536 dimensions, fixed to the recall index contract. Credentials come from the service account through Application Default Credentials; no API key or static token is configured.
-
-## Resource configuration
-
-[deployment.json](../../infra/cloud/deployment.json) is the declarative source for names, limits and secret references; [iam-contract.json](../../infra/cloud/iam-contract.json) declares the direct IAM bindings. These are configured values, not measured results.
-
-| Setting | API | Worker |
-| --- | --- | --- |
-| Region | asia-southeast1 | asia-southeast1 |
-| Min / max instances | 0 / 2 | 0 / 2 |
-| Concurrency | 8 | 1 |
-| Request timeout | 60 s | 600 s |
-| CPU / memory | 1 vCPU / 1 GiB | 1 vCPU / 2 GiB |
-| pg pool maximum | 5 | 5 |
-| Invocation | IAM-private | IAM-private; task and scheduler invokers only |
-
-Neon runs in AWS `ap-southeast-1` (Singapore), close to the Cloud Run region. With two instances per service and five connections per pool, one revision uses at most 20 runtime connections; overlapping revisions during a rollout and Jobs add to that. Do not raise maximum instances without checking the database connection budget.
-
-Secrets live in Secret Manager and are referenced by version: application and worker database URLs, the migration URL, the Forget HMAC key, the portability master key, cursor HMAC keys and the identity database credentials. Each service account can read only its declared secrets.
-
-## Monitoring and objectives
-
-Logs carry request ID, route template, status, error class and duration. They never include statements, evidence, embeddings, tokens, database URLs or secret values. Worker diagnostics report counts and checkpoint metadata only.
-
-Latency, availability, quality and cost targets are defined in the [product requirements](../design/requirements.md#service-targets). Dashboards, alerts, load and soak tests, Neon point-in-time recovery and measured RPO/RTO are not yet in place; see the [cloud verification register](../eval/cloud-verification.md) for what has been observed.
-
-## Naming cutover
-
-The running services, identity realm, Neon database and buckets still carry the former Thymesis names. `deployment.json` declares the Lore-named target resources, which stay inactive until the identity realm, database state and bucket contents have been migrated and read back. Follow [deployment](deployment.md) for the sequence and preservation rules.
+The local actual-Gate harness proves bearer-token resource separation against the local Gate implementation and Firestore Emulator, with synthetic GitHub exchange and isolated PostgreSQL. Local checks cover removed Lore login/session routes, cookie-only rejection, bearer REST access, MCP access and grant revocation. In production, the public HTTPS boundary and Gate browser login/approval were confirmed; positive MCP data access remains unverified. The [API-only correction record](../eval/api-only-gate-auth-correction-20261019.md) tracks deployment and acceptance.

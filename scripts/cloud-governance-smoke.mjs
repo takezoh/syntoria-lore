@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { GoogleAuth } from 'google-auth-library';
-import { readOptionalBearerTokenFile } from './cloud-oauth-smoke.mjs';
+import { readBearerTokenFile, readOptionalBearerTokenFile } from './bearer-token-file.mjs';
 import {
   requireDurableForgetAccepted,
   requireEncryptedExport,
@@ -13,18 +13,33 @@ import {
   requireRecallIncludesMemory,
   requireRememberedMemoryId,
 } from './cloud-governance-contract.mjs';
-import { readCloudIdentityConfig } from './cloud-identity-config.mjs';
 
-const cloudIdentity = await readCloudIdentityConfig();
 const apiUrl = requiredHttpsOrigin('GOVERNANCE_API_URL');
-const identityUrl = requiredHttpsOrigin('IDENTITY_PUBLIC_URL');
-const clientId = process.env['OAUTH_SMOKE_CLIENT_ID'] ?? cloudIdentity.smokeClientId;
-const sourceUsername = required('GOVERNANCE_SOURCE_USERNAME');
-const sourcePassword = required('GOVERNANCE_SOURCE_PASSWORD');
-const destinationUsername = required('GOVERNANCE_DESTINATION_USERNAME');
-const destinationPassword = required('GOVERNANCE_DESTINATION_PASSWORD');
 const sourceScopeId = requiredUuid('GOVERNANCE_SOURCE_SCOPE_ID');
 const destinationScopeId = requiredUuid('GOVERNANCE_DESTINATION_SCOPE_ID');
+const productDisplayName = process.env['PRODUCT_DISPLAY_NAME'] ?? 'Memory Service';
+const tokens = {
+  sourceWrite: await readBearerTokenFile(
+    required('GOVERNANCE_SOURCE_WRITE_TOKEN_FILE'),
+    'GOVERNANCE_SOURCE_WRITE_TOKEN_FILE',
+  ),
+  sourceAdmin: await readBearerTokenFile(
+    required('GOVERNANCE_SOURCE_ADMIN_TOKEN_FILE'),
+    'GOVERNANCE_SOURCE_ADMIN_TOKEN_FILE',
+  ),
+  sourceRead: await readBearerTokenFile(
+    required('GOVERNANCE_SOURCE_READ_TOKEN_FILE'),
+    'GOVERNANCE_SOURCE_READ_TOKEN_FILE',
+  ),
+  destinationAdmin: await readBearerTokenFile(
+    required('GOVERNANCE_DESTINATION_ADMIN_TOKEN_FILE'),
+    'GOVERNANCE_DESTINATION_ADMIN_TOKEN_FILE',
+  ),
+  destinationRead: await readBearerTokenFile(
+    required('GOVERNANCE_DESTINATION_READ_TOKEN_FILE'),
+    'GOVERNANCE_DESTINATION_READ_TOKEN_FILE',
+  ),
+};
 const schedulerJob = required('GOVERNANCE_SCHEDULER_JOB');
 const invokerToken = await readOptionalBearerTokenFile(
   required('CLOUD_API_IAM_TOKEN_FILE'),
@@ -32,41 +47,26 @@ const invokerToken = await readOptionalBearerTokenFile(
 );
 const timeoutMs = positiveInteger(process.env['GOVERNANCE_TIMEOUT_MS'], 1_200_000);
 
-if (sourceScopeId === destinationScopeId || sourceUsername === destinationUsername) {
+if (sourceScopeId === destinationScopeId) {
   throw new Error('Governance smoke requires distinct synthetic source and destination principals');
 }
 if (!/^projects\/[^/]+\/locations\/[^/]+\/jobs\/[^/]+$/.test(schedulerJob)) {
   throw new Error('GOVERNANCE_SCHEDULER_JOB must be a Cloud Scheduler job resource name');
 }
 
-const issuer = `${identityUrl}/realms/${cloudIdentity.realm}`;
 const runId = randomUUID();
 const startedAt = Date.now();
 const results = {};
 const created = { sourceMemoryId: undefined, destinationMemoryId: undefined };
-const tokens = {};
 let stage = 'oauth-pkce';
 let completed = false;
 let schedulerAccessToken;
 
 try {
-  tokens.sourceWrite = await oauthToken(sourceUsername, sourcePassword, 'memory:write');
-  tokens.sourceAdmin = await oauthToken(sourceUsername, sourcePassword, 'memory:admin');
-  tokens.sourceRead = await oauthToken(sourceUsername, sourcePassword, 'memory:read');
-  tokens.destinationAdmin = await oauthToken(
-    destinationUsername,
-    destinationPassword,
-    'memory:admin',
-  );
-  tokens.destinationRead = await oauthToken(
-    destinationUsername,
-    destinationPassword,
-    'memory:read',
-  );
-  results.sourceAndDestinationPkce_tokens = 5;
+  results.gate_bearer_tokens_loaded = 5;
 
   stage = 'synthetic-memory-create';
-  const syntheticStatement = `${cloudIdentity.productDisplayName} cloud governance verification ${runId}`;
+  const syntheticStatement = `${productDisplayName} cloud governance verification ${runId}`;
   const remembered = await apiJson('/v1/memories:remember', tokens.sourceWrite, {
     method: 'POST',
     idempotencyKey: `cloud-governance-remember-${runId}`,
@@ -195,18 +195,6 @@ try {
   process.exitCode = 1;
 } finally {
   if (!completed) await bestEffortForgetCreatedMemories();
-}
-
-async function oauthToken(username, password, permission) {
-  const { acquireOAuthResourceToken } = await import('./cloud-oauth-smoke.mjs');
-  return acquireOAuthResourceToken({
-    issuer,
-    clientId,
-    resource: apiUrl,
-    scope: `openid ${permission} ${cloudIdentity.scopes.api} ${cloudIdentity.scopes.scopeIds}`,
-    username,
-    password,
-  });
 }
 
 async function waitForExport(exportId) {

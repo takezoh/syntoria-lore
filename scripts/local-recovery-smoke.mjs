@@ -4,9 +4,8 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 
 const api = (process.env['LOCAL_API_URL'] ?? 'http://localhost:18080').replace(/\/$/, '');
-const issuer = (process.env['LOCAL_ISSUER_URL'] ?? 'http://localhost:19090').replace(/\/$/, '');
 const baseScopeId = process.env['LOCAL_SCOPE_ID'] ?? '22222222-2222-4222-8222-222222222222';
-const scopeId = randomUUID();
+const scopeId = baseScopeId;
 const localEnv = {
   ...parse(await readFile('infra/local/deployment.env', 'utf8')),
   ...parse(await readFile('.env.local', 'utf8')),
@@ -24,8 +23,7 @@ const statement = `The zephyr kiln ${runId} stores cobalt gaskets inside vault $
 let report;
 
 try {
-  await provisionIsolatedScope(pool, baseScopeId, scopeId, runId);
-  const token = await issueUserToken(api, issuer, scopeId);
+  const token = required('LOCAL_API_BEARER_TOKEN');
   await control('task-fail');
   await control('provider-fail-curator');
   await request(`${api}/v1/connectors`, token, {
@@ -193,58 +191,11 @@ const output = join('var', `recovery-${new Date().toISOString().replaceAll(':', 
 await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 process.stdout.write(`${JSON.stringify({ ...report, report_file: output }, null, 2)}\n`);
 
-async function issueUserToken(resourceBase, issuerUrl, scope) {
-  const authorization = Buffer.from('demo-owner-client:owner-local-fixture-only').toString(
-    'base64',
-  );
-  const response = await fetch(`${issuerUrl}/oauth/token`, {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${authorization}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      resource: resourceBase,
-      scope: 'memory:read memory:write memory:admin',
-      scope_ids: scope,
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || typeof body.access_token !== 'string')
-    throw new Error('Local User token acquisition failed');
-  const claims = JSON.parse(
-    Buffer.from(body.access_token.split('.')[1] ?? '', 'base64').toString(),
-  );
-  if (!Array.isArray(claims.scope_ids) || !claims.scope_ids.includes(scope))
-    throw new Error('Local User token does not include the configured test scope');
-  return body.access_token;
-}
-
-async function provisionIsolatedScope(databasePool, templateScopeId, newScopeId, run) {
-  const template = await databasePool.query(
-    `SELECT s.user_id, p.id AS principal_id
-     FROM scopes s
-     JOIN grants g ON g.user_id = s.user_id AND g.scope_id = s.id
-     JOIN principals p ON p.user_id = g.user_id AND p.id = g.principal_id
-     WHERE s.id = $1 AND p.actor_kind = 'user' AND p.active
-       AND 'admin' = ANY(g.capabilities)
-     LIMIT 1`,
-    [templateScopeId],
-  );
-  const principal = template.rows[0];
-  if (principal === undefined) throw new Error('Local recovery user fixture is unavailable');
-  await databasePool.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
-    principal.user_id,
-    newScopeId,
-    `local recovery ${run}`,
-  ]);
-  await databasePool.query(
-    `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
-     VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])`,
-    [principal.user_id, newScopeId, principal.principal_id],
-  );
+function required(name) {
+  const value = process.env[name];
+  if (!value)
+    throw new Error(`${name} must be supplied by Gate; this script does not issue credentials`);
+  return value;
 }
 
 async function control(name) {
