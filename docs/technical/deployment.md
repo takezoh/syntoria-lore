@@ -1,6 +1,6 @@
 # Deployment and operations
 
-The Gate-only production rollout completed on 2026-10-18. On 2026-10-19, the API-only authentication correction was deployed: the latest API and Gate revisions are Ready and serve 100% traffic. The public API invoker and HTTPS boundary remain active; the worker remains private with unchanged IAM. Gate's image and unrelated environment settings were unchanged. Production probes confirm the API-only negative-authentication boundaries, while positive hosted MCP data access with a real user remains unverified. The original release cutoff remains in the [2026-10-18 record](../eval/gate-production-release-20261018.md); see the [2026-10-19 correction record](../eval/api-only-gate-auth-correction-20261019.md) for scope and readback evidence.
+The DCR-only production release completed on 2026-10-20. Lore and shared Gate serve their DCR-compatible revisions at 100% traffic. Migration 0043 is applied and automatic API scaling is restored. Existing data, effective user authority, RLS and worker/IAM boundaries were preserved. See the [production release record](../eval/dcr-production-release-20261020.md) for source commits, artifacts, preservation checks and hosted limitations. Positive hosted MCP access with a real user remains unverified.
 
 ## Current boundary
 
@@ -17,14 +17,14 @@ The Gate work leaves these non-auth deployment resources and limits unchanged:
 | GCP | Project `example-project`, region `asia-southeast1`; Artifact Registry `asia-southeast1-docker.pkg.dev/example-project/lore` |
 | API | Cloud Run service `lore-api`; canonical service URL remains `https://lore-api-123456789012.asia-southeast1.run.app`; max 2 instances, concurrency 8, 60-second timeout, pool max 5; public invocation enabled, with Gate bearer authentication required for protected data |
 | Worker | Cloud Run service `lore-worker`; custom audience remains its canonical Cloud Run URL; max 2 instances, concurrency 1, 600-second timeout, pool max 5; IAM-private, with direct task/scheduler invokers and inherited operator access unchanged |
-| Neon | Project `example-project`, AWS `ap-southeast-1`, database `lore`; migration 0042 is applied, for 42 migrations |
+| Neon | Project `example-project`, AWS `ap-southeast-1`, database `lore`; migration 0043 is applied, for 43 migrations |
 | Delivery | Cloud Tasks queue `lore-capture`, max 2 concurrent and 2 dispatches/second, 5 attempts, 3600-second retry window; `lore-worker-sweep` runs every minute with the worker audience |
 | Storage | `example-lore-ledger` for Forget records and `example-lore-artifacts` for encrypted exports; existing object-prefix custom roles and direct IAM contract remain unchanged |
 | Jobs | `lore-neon-migrate` for forward schema migration and `lore-ledger-reconcile` for readback/recovery; migration, worker and app database secrets remain separate |
 
 Use `deployment.json` for synthetic configuration shape and `iam-contract.json` for the intended direct IAM/secret boundary. The release record contains current readbacks; neither example values nor this table replace those observations.
 
-The app database has 42 applied migrations. Migration 0042 adds Gate identity bindings. Hosted apply and reapply checks passed; the prior migration checksums and RLS policies were preserved, and logical data hashes were unchanged except for the periodic `deletion_ledger_checkpoint.updated_at` field. Existing sequences and ledger checkpoint hashes/generations were preserved. See the release record for exact backup and reconciliation evidence.
+The app database has 43 applied migrations. Migration 0043 replaces client-specific admission with explicit issuer/subject admission while preserving effective active authority. Prior migration records and public RLS policies are unchanged. See the [release record](../eval/dcr-production-release-20261020.md) for the fenced rollout, preservation evidence and rollback restrictions.
 
 ## Gate configuration contract
 
@@ -61,7 +61,7 @@ The release record distinguishes completed readbacks from pending acceptance. Th
 
 Build future releases from the fixed source allowlist and deploy only an immutable image digest. Rendered manifests are local artifacts; inspect their Gate audiences, secret references and subject admission before release. Keep migration, ledger reconciliation, worker IAM checks and API deployment separately evidenced. Follow the [IAM contract](../../infra/cloud/iam-contract.json) without replacing whole policies; changes to public API IAM require explicit authorization and must not widen worker access.
 
-Rollback API code only to a revision compatible with the applied schema. Migration 0042 is additive; do not delete bindings or rewrite existing identity, memory or ledger data as a rollback shortcut. Revoke or deactivate a specific binding through the reviewed mapping workflow if an admission is wrong. Restore protected data only through the established deletion-ledger reconciliation procedure. Cloud backup, point-in-time recovery and RPO/RTO remain separate operational gates.
+Rollback API code only to a revision compatible with the applied schema. Migration 0043 changes the binding lookup contract; image-only rollback to a client-specific version is incompatible. Do not delete bindings or rewrite existing identity, memory or ledger data as a rollback shortcut. Revoke or deactivate a specific binding through the reviewed mapping workflow if an admission is wrong. Restore protected data only through the established deletion-ledger reconciliation procedure. Cloud backup, point-in-time recovery and RPO/RTO remain separate operational gates.
 
 ## Verification boundaries
 
