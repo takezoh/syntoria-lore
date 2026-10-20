@@ -1,10 +1,10 @@
 # Thymesis — Development Plan
 
-> Historical plan: implementation and hosted status below are dated snapshots, not the current deployment state. Section 0.3 records the 2026-10-17 pre-Gate evidence. The Gate cutover, migration 0042, public API invocation and HTTPS are active; the API-only auth correction remains pending deployment. Current contracts and gates are in [deployment](technical/deployment.md), [identity cutover](technical/identity-cutover.md) and the [API-only correction record](eval/api-only-gate-auth-correction-20261019.md).
+> Historical plan: sections below are dated implementation and acceptance snapshots, not a current deployment report. Section 0.3 preserves the 2026-10-17 pre-Gate evidence. As of 2026-10-19, the API-only authentication correction is deployed: the API is reachable over public HTTPS, protected operations require a Gate bearer token, and the worker remains private. Positive hosted MCP memory retrieval with a real user remains unverified, and operational Release 1 acceptance is still open. Current contracts and gates are in [deployment](technical/deployment.md), [identity cutover](technical/identity-cutover.md) and the [API-only correction record](eval/api-only-gate-auth-correction-20261019.md).
 
 - Version: 1.0
 - Date: 2026-10-14
-- Status: **Historical local and hosted evidence is recorded below. The Gate cutover and public HTTPS are active; the API-only auth correction is pending deployment. See the current [deployment gates](technical/deployment.md) before making hosted claims.**
+- Status: **The sections below preserve dated local and hosted evidence. The API-only Gate authentication correction was deployed on 2026-10-19; positive hosted MCP memory retrieval with a real user and operational Release 1 acceptance remain unverified. See the current [deployment gates](technical/deployment.md) before making hosted claims.**
 - Infrastructure baseline: GCP Cloud Run / Cloud Tasks / Cloud Scheduler + Neon PostgreSQL
 - Architecture decision: [ADR-0001](adr/0001-gcp-cloud-run-neon.md)
 - Product requirements: [design/requirements.md](design/requirements.md)

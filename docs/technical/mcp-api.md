@@ -2,7 +2,7 @@
 
 ## Service boundary
 
-REST and Remote MCP expose the same application services. Gate credentials establish the principal through online issuer, client and exact-resource checks followed by an explicit local Gate identity binding. Business arguments and identity headers cannot select a user or widen a scope. MCP tools are thin adapters over the REST services and never reimplement core rules. Callers decide when to remember, recall or catch up and how to interpret results; Lore attributes, validates, versions and governs. See [infrastructure](infrastructure.md) for identity and transport and the [data model](data-model.md) for memory semantics.
+REST and Remote MCP expose the same application services. Gate credentials establish the principal through online issuer, client and exact-resource checks followed by an explicit local Gate identity binding. Business arguments and identity headers cannot select a user or widen a scope. MCP tools are thin adapters over the REST services and never reimplement core rules. Callers decide when to remember, recall or catch up and how to interpret results; Lore attributes, validates, versions and governs. See [memory system](memory-system.md) for the capture-to-recall flow, [infrastructure](infrastructure.md) for identity and transport, and the [data model](data-model.md) for persistence semantics.
 
 ## Entry points and authorization
 
@@ -12,7 +12,7 @@ REST and Remote MCP expose the same application services. Gate credentials estab
 | `POST /mcp/read` | MCP read resource | Recall, get, change feed and status tools only |
 | `POST /mcp/write` | MCP write resource | Remember, capture, change sets, review, governance and portability tools |
 
-Each opaque Gate bearer token is valid for exactly one configured resource: the API, `/mcp/read` or `/mcp/write`. Lore does not authenticate shared cookies or provide a login/session route. Gate introspection confirms active status, issuer, immutable subject, allowed client and audience on every request. An operator-maintained binding maps that identity/client pair to an existing principal, scope set and capability ceiling; those bounds intersect with live grants. `admin` includes read and write. Writes require `write`. Enabling sources, listing and deciding reviews, Forget, source rights, grants, retention, export, download and import require the user (`403 user_required` otherwise). Invalid or revoked credentials return 401, a valid but unadmitted identity returns 403, and a Gate outage returns 503. The protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the Gate issuer and exact resource. An unauthenticated MCP POST returns 401 and a GET returns 405.
+Each opaque Gate bearer token is valid for exactly one configured resource: the API, `/mcp/read` or `/mcp/write`. Lore does not authenticate shared cookies or provide a login/session route. Gate introspection confirms active status, issuer, immutable subject, allowed client and audience on every request. An operator-maintained binding maps that identity/client pair to an existing personal-account principal, scope set and capability ceiling; those bounds intersect with live grants. `admin` includes read and write but is an internal capability, not a separate service-administrator account. Writes require `write`. Enabling sources, listing and deciding reviews, Forget, source rights, grants, retention, export, download and import require the authenticated actor to be the user (`403 user_required` otherwise). Invalid or revoked credentials return 401, a valid but unadmitted identity returns 403, and a Gate outage returns 503. The protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the Gate issuer and exact resource. An unauthenticated MCP POST returns 401 and a GET returns 405.
 
 ## Tool and schema discovery
 
@@ -51,7 +51,7 @@ Review tools on the read endpoint still require the user.
 
 ## Remember and change sets
 
-`remember_memory` commits one memory—kind, statement, structured context, subjects, valid-time interval, epistemic status and 1–64 evidence items—synchronously and returns its revision. Authority comes from the authenticated principal: the user's explicit remember is an user assertion, a client's is a candidate. Use it only for what the user explicitly asked to remember or correct.
+`remember_memory` commits one memory—kind, statement, structured context, subjects, valid-time interval, epistemic status and 1–64 evidence items—synchronously and returns its revision. Authority and lifecycle derive from the authenticated actor, kind and epistemic status; a client cannot set authority in the request or impersonate the user's decision. A non-user caller's explicit write starts as a candidate. A separate internal capture path may activate a fact only when it passes the worker's automatic-capture policy. Use this tool for an explicit user request, and do not relabel model inference as the user's words.
 
 A change set holds 1–64 operations (CREATE, CORROBORATE, REFINE, SUPERSEDE, CONTEST, RELATE, RETRACT, NO_OP) for one scope, each with the target's `expected_revision`. Proposal and commit are separate; a commit is all-or-nothing and returns `409 revision_conflict` when any target moved. Replaying a committed proposal returns its stored response only to the proposing principal or the user.
 
@@ -59,7 +59,7 @@ A change set holds 1–64 operations (CREATE, CORROBORATE, REFINE, SUPERSEDE, CO
 
 The user first enables a source (`chat`, `document`, `tool_result` or `episode`) with consent. Capture then submits the source revision and 1–256 immutable observations (locator, content up to 32 KiB, speaker, event time) with an `operation_id` and an `Idempotency-Key`. Observations are deduplicated by source, revision, canonical locator and content hash, so replays under another operation ID do not multiply evidence. Capture returns `202` and a job ID.
 
-The worker checkpoints provider output before reconciliation; retries reuse the checkpoint, and a lease token fences every write. Revoking consent revokes the source and advances the scope authorization epoch, so a saved checkpoint cannot commit under the old authorization. Safe inferred facts may be committed automatically. Preferences, decisions, conflicts and proposals that require reconciliation are held for user review. Episode sources must yield one experience that cites the complete observation with matching condition, action and outcome; otherwise the proposal is held as invalid output.
+The worker checkpoints provider output before reconciliation; retries reuse the checkpoint, and a lease token fences every write. Revoking consent revokes the source and advances the scope authorization epoch, so a saved checkpoint cannot commit under the old authorization. Automatic capture is restricted to an uncontested `fact` with `observed` or `inferred` status, valid bounded evidence, read permission for reconciliation and no unresolved match; one sole exact active duplicate can receive corroborating evidence. Preferences, decisions, conflicts, uncertain status and ambiguous matches are held for user review. Episode sources must yield one experience that cites the complete observation with matching condition, action and outcome; otherwise the proposal is held as invalid output.
 
 Review decisions (`approve` or `reject`) require the current `expected_revision`. `accept_candidate` approves under curator attribution; `user_statement` records a separate user confirmation for the user's own policy or preference without rewriting the original speaker or verifying an external claim. A candidate that matches existing memories cannot be approved as a new CREATE: reject it and commit the intended operation, such as CORROBORATE, against the existing memory. Decisions are idempotent per key and principal; replay does not bypass a revoked source.
 
@@ -69,13 +69,15 @@ Review decisions (`approve` or `reject`) require the current `expected_revision`
 
 | Mode | Contract |
 | --- | --- |
-| `precise` (default) | Exact decisions, names and IDs; exact lexical matching first |
-| `contextual` | Currently valid policy, background and applicability |
-| `historical` | Revision valid at `valid_at`, as known at `known_at` |
-| `exploratory` | Related experiences and hypotheses, separated from confirmed memories |
-| `changes` | Differences since a point; never substituted by full-text search |
+| `precise` (default) | Exact statement, subject and alias matches only; no lexical, semantic or relation candidates |
+| `contextual` | Bounded exact, lexical, semantic and related candidates for current background and applicability |
+| `historical` | Exact candidates first, then ranked candidates from the revision known at `known_at` and valid at `valid_at` |
+| `exploratory` | Related memories, including candidates, through bounded exact, lexical, semantic and relation search |
+| `changes` | Changed records matching the query; it uses a change-oriented candidate path rather than semantic search. Use `get_changes` for the ordered change feed |
 
-Candidates are filtered by scope access, current source rights and Forget suppression before ranking, then by valid time, lifecycle and evidence. The response contains `matches`, a `context_pack`, `coverage`, `insufficiencies`, `unknown` and `estimated_tokens`. The complete pack, including coverage and uncertainty metadata, fits `token_budget`; truncation never drops evidence references or uncertainty flags. When evidence is insufficient, `unknown` is true instead of an invented answer. Recall reads the source of truth, so an explicit remember is visible before indexing completes and recall continues when the embedding provider is unavailable.
+Candidates are filtered by scope access, current source rights and Forget suppression before ranking, then by valid time, lifecycle and evidence. The response contains `matches`, a `context_pack`, `coverage`, `insufficiencies`, `unknown` and `estimated_tokens`. Search is bounded: by default each candidate source is limited to `min(200, limit * 8)`, and relation expansion starts from at most 50 supported roots for at most two hops. Contextual, historical and exploratory ranking uses weighted reciprocal-rank fusion; exact, lexical, semantic and related candidates have weights 4, 1.5, 1.5 and 0.45. The precise mode omits lexical, semantic and relation candidates. These limits mean recall is not an exhaustive scan.
+
+The complete serialized Context Pack, including evidence and uncertainty metadata, must fit the budget. `estimated_tokens` is the UTF-8 byte length of its JSON serialization, not an exact tokenizer count. The `conflicts` field lists returned memories already marked contested; it does not discover every contradictory pair. `coverage.complete` reflects embedding provider/index coverage, not exhaustive search or complete knowledge. `unknown` means no supported candidate was returned under this query and its bounds. Exact and lexical searches can surface an unindexed committed record; a semantically related query may miss that record until indexing catches up. If semantic search is unavailable, the response reports that insufficiency and uses the available signals. See [retrieval and Context Packs](memory-system.md#retrieval-and-context-packs) for the implemented details.
 
 ## Changes and cursors
 

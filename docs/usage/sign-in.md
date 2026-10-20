@@ -1,9 +1,9 @@
-# Sign-in and client access
+# Connect an AI client to Lore
 
-Lore is an API-only resource server. It does not provide a sign-in page, callback page, browser session endpoint, or device logout UI. Gate owns sign-in, approvals, sessions, and logout. An MCP client starts OAuth and handles the callback in its own application, then sends the Gate-issued bearer token to the matching Lore resource.
+Lore does not have a sign-in page, browser session or memory-browsing app. Gate handles sign-in, approval, sessions and logout. An MCP client begins OAuth and handles its own callback, then sends the resulting Gate bearer token to Lore.
 
-The REST API, MCP read endpoint, and MCP write endpoint each require a token for their exact resource audience. A browser cookie alone does not authorize a Lore request. Gate approval also does not grant access to Lore data: the exact Gate issuer, subject, and client must already be linked to an existing Lore user and principal, and current Lore grants further limit scopes and capabilities.
+The token must be for the exact resource the client uses: the REST API, MCP read or MCP write. A Gate sign-in or approval alone does not give the client access to memories. The service operator must already have a Lore identity binding for the existing user, principal and client, and that principal must have a current grant for the requested scopes and capabilities. A browser cookie cannot replace the bearer token.
 
-To withdraw a client, revoke its connection in Gate. Gate introspection is checked online for each request, so a revoked token is rejected on the next call. Keep bearer tokens private and send them only to their matching HTTPS resource.
+To connect, use a compatible MCP or REST client configured by the service operator for its exact Lore resource. Keep each token private and send it only to its matching HTTPS address. Gate checks a token on every request, so revoking the client connection prevents later calls. Read-only and write-capable MCP connections have separate resources and permissions.
 
-The API-only production correction is deployed, and production probes confirm that Lore's old login/session routes are absent and cookie-only or invalid bearer requests are rejected. Gate accepted MCP read and write login initiation and redirected each request to its identity provider. These checks do not establish that a real user can retrieve Lore data through hosted MCP; that remains unverified. See the [deployment record](../eval/api-only-gate-auth-correction-20261019.md).
+The repository does not provide a public sign-up flow or create the identity binding and grant for you. Ask the service operator which client and Lore resource are configured for your account before connecting. Builders who are developing locally should follow [local operations](../technical/local-operations.md) and [agent workflows](agent-workflows.md).

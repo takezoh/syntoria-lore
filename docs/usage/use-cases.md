@@ -1,81 +1,71 @@
-# Use cases: ask your AI
+# Ask your AI to use Lore
 
-Tell your AI what to remember, what to look up and what to correct. These examples are starting points for your own prompts. Syntoria Lore keeps long-term memory with evidence for the AIs you authorize. Your AI decides when to remember or recall and how to use the answer; Lore keeps each memory with its source, its time and its corrections.
+These prompts are examples for an AI client that already has the right Lore tools and access. Your AI must choose and call those tools; a prompt by itself does not grant permission or make a memory change. Ask it to show the source and uncertainty when the answer matters.
 
-## Remember a decision once
+## Remember a decision
 
-> Remember this as my decision: we choose the technology only after the requirements for the finished product are settled.
+> Remember my decision: we will choose the technology only after the requirements for the finished product are settled.
 
-Lore saves it at once as your decision, with this conversation as its evidence. The next time any of your AIs asks about the project's direction, the decision comes back with who made it and when. You do not have to repeat it in each new conversation.
+The AI should save the decision with the conversation evidence, then confirm whether Lore accepted it. A client cannot assign itself the user's authority. If it submits its own proposal, Lore may keep it as a candidate for user review.
 
-## Keep a suggestion a suggestion
+## Keep a suggestion separate
 
-> You suggested PostgreSQL earlier. Keep that as your suggestion, not my decision, until I've looked at the requirements.
+> You suggested PostgreSQL earlier. Show it as your suggestion, and keep it separate from anything I decided.
 
-An AI's recommendation stays attributed to the AI. It does not turn into your decision unless you make it one, and later recall shows the difference.
+Lore preserves who made a claim and what evidence supports it. That attribution does not prove the claim is true.
 
-## Pick up a topic from months ago
+## Recall a past decision
 
-> We talked about the Kyoto trip budget back in spring. What did we decide, and what was still open?
+> What did we decide about the Kyoto trip budget in spring? Show me what was still open and where the answer came from.
 
-Your AI recalls the decisions with their evidence and lists what was never settled. If the evidence is thin or two notes disagree, it tells you instead of filling the gap.
+The AI can request historical recall and return supporting memories and evidence. Search is bounded; an empty result means the query returned no supported match, not that the conversation never happened.
 
-## Ask about the past, not just the present
+## Correct a changed policy
 
-> What was our deployment policy in September, before we changed it?
+> The review now happens on Tuesday. Replace the old Monday schedule and tell me when the new one starts.
 
-Lore keeps replaced decisions with the period in which they held. Recall can answer for a specific time, and can also tell you what was known at that time.
+For a change, the client reads the current revision and submits a correction against that revision. If another writer changed it first, Lore reports a conflict and the AI should recall again before proposing the update.
 
-## Correct a mistake
-
-> That's wrong: the weekly review moved to Tuesday, not Monday. Correct it.
-
-The corrected memory replaces the old one, and the old version stays in history as superseded. If something was simply wrong rather than changed, say so:
+## Retract a wrong claim
 
 > Retract the note that I'm allergic to peanuts. That was never true.
 
-A retracted memory is marked as wrong instead of being kept as past truth.
+Retraction marks a memory as wrong. It does not delete it as if it had never been stored; use Forget when the content should no longer be retained or returned.
 
-## Reuse a lesson
+## Reuse an experience
 
 > Last time the deploy failed with a migration lock timeout. What fixed it, and under what conditions?
 
-Lore keeps an experience as one unit: the situation, what was done and how it turned out. Your AI can reuse the fix and see when the conditions differ.
+Lore can keep a work episode as one experience with its condition, action and outcome. Your AI should compare those conditions with the current situation before reusing the lesson.
 
-## See where a memory came from
+## Check a source
 
-> Why do you think I prefer morning meetings? Show me the source.
+> Why do you think I prefer morning meetings? Show me who said it and which conversation supports it.
 
-Each memory points back to the conversation, document or tool result it came from, with the speaker and time. If a preference was inferred rather than stated, the evidence shows that too.
+A returned memory can include its source location, speaker, event time and epistemic status. Inferred preferences may be held for review; source attribution is not an independent verification of an outside-world fact.
 
-## Review what is waiting for you
+## Review a proposal
 
-> Show me the memories waiting for my review and explain each one.
+> Show me the memories waiting for my review. Explain the evidence and what you would change if I reject one.
 
-Some candidates—your preferences, decisions, and anything that conflicts with what Lore already knows—wait for your confirmation instead of being saved automatically. You can accept a candidate, confirm it in your own words, or reject it.
+Capture can produce candidates when the source is enabled and sends observations to Lore. Non-facts, conflicts, uncertain proposals and ambiguous matches may wait for the user instead of being committed automatically.
 
-## Catch up after working elsewhere
+## Catch up after another conversation
 
-> I corrected the release date in another conversation yesterday. Check what changed in my memories since then before you plan the next step.
+> Check what changed in my memories since I last reviewed the project, then summarize the current policy with its source.
 
-Each AI can follow the changes since it last looked, including corrections made through another AI. A removed memory appears only as a notice that it was removed, never with its content.
+Each client follows its own change cursor. The AI must save and advance that cursor only after it applies the returned page, or recall afresh if the cursor expires or access changes. A deleted item appears as a content-free notice; the client should remove any cached copy it controls.
 
-## Forget something
+## Forget information
 
-> Forget everything about my old address.
+> Forget the memories about my old address.
 
-The memory disappears from every recall, export and change feed at once, and its content is then deleted. Lore keeps only a content-free record that a deletion happened, so the content cannot come back from a restored backup either.
+Only a user-authorized request can perform Forget. The selected content is suppressed immediately and purged asynchronously; the AI should follow the request status and discard any cached copy. A backup can retain bytes until its retention period ends, and a restored service must reconcile deletions before serving protected reads.
 
-## Let several AIs share one memory
+## Give clients different access
 
-> You're my research assistant: you may read my memories but not change them. My coding assistant can save what we decide about the project.
+> Let my research assistant read my memories. Let my coding assistant save project decisions.
 
-Each AI gets its own permission. A read-only connection can recall and follow changes; a write connection can also remember, correct and forget. Lore records which AI wrote what.
+The service operator must configure the existing client bindings and grants. A client with read access can recall and follow changes; write access permits memory writes within its grant. `admin` is an internal capability on a personal account, not a separate Lore administrator account.
 
-## Take your memory with you
-
-> Export my memories for the project scope so I can move them to a new environment.
-
-An export is encrypted and keeps memories, evidence and history. When it is imported elsewhere, the original attribution is preserved as history rather than turned into fresh decisions.
-
-For tool discovery, connections and building your own agents, see the [workflow guide](agent-workflows.md). For the meaning of kinds, evidence and lifecycle, see [Product and usage](../../PRODUCT.md).
+For client setup and tool recovery, see the [agent workflow guide](agent-workflows.md). For the memory kinds, attribution and lifecycle, see [Product and usage](../../PRODUCT.md).

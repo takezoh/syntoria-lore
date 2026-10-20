@@ -1,77 +1,66 @@
 # Syntoria Lore architecture
 
-## Service and runtime
+## Developer model
 
-Lore is Syntoria's independent long-term memory service for authorized AI clients. TypeScript on Node.js 24 runs as two GCP Cloud Run services built from one immutable image: an API service for REST, Remote MCP over Streamable HTTP and OpenAPI, and a private worker for capture, curation, indexing, outbox dispatch and governance maintenance. Neon PostgreSQL with pgvector and pg_trgm is the single source of truth for memories, history, relations, search indexes, jobs and the change feed. Cloud Tasks delivers job IDs to the worker and Cloud Scheduler triggers its sweep. Cloud Storage holds the deletion ledger and encrypted export artifacts. Gate owns sign-in, approvals, sessions and logout; Lore is an API-only bearer resource server, and MCP clients own their OAuth callback. The API-only source correction is pending deployment; the worker remains private. Vertex AI supplies extraction and embeddings through a provider adapter.
-
-The Personal AI interprets intent, decides when to remember or recall and what to do with the result. Lore validates input, derives authority, curates under policy, enforces scope and source rights, preserves evidence and history, and governs Forget, retention and portability. Syntoria Weave is a separately deployed service with its own database, API, credentials, history and cursors; there are no shared tables, mutually required APIs or distributed transactions. Lore does not replicate Weave's actions; a memory that needs a Weave event as evidence references its URI or ID.
+Lore turns authorized input into versioned, evidence-linked memories and returns a bounded selection to an authorized client. REST and Remote MCP are adapters over the same services. PostgreSQL is the source of truth; embeddings, lexical search support and relations help find candidates but do not replace committed records.
 
 ```mermaid
 flowchart LR
-  AI[Authorized AI clients] -->|OAuth bearer| Entry[REST /v1, MCP /mcp/read and /mcp/write]
-  Entry --> Auth[Gate online introspection and local admission]
-  Auth --> Services[Core, recall, capture, review and governance services]
-  Services --> DB[(Neon PostgreSQL + pgvector + pg_trgm)]
-  Services --> GCS[(Cloud Storage: deletion ledger, exports)]
-  Sched[Cloud Scheduler] -->|OIDC| Worker[Private worker]
-  Worker -->|job ID| Tasks[Cloud Tasks]
-  Tasks -->|OIDC| Worker
-  Worker --> DB
-  Worker --> GCS
-  Worker --> LLM[Vertex AI]
+  Client[Authorized AI client] --> API[REST / MCP adapters]
+  API --> Auth[Gate token verification and Lore grants]
+  Auth --> Core[Core, capture, recall and governance]
+  Core --> DB[(PostgreSQL source of truth)]
+  Core --> Index[Lexical and embedding indexes]
+  Input[Explicit remember or consented observations] --> Core
+  Core --> Feed[Per-scope change feed]
+  Worker[Private worker] --> Core
+  Worker --> Models[Curator and embedding provider]
+  Governance[Deletion ledger and encrypted exports] <--> Core
 ```
 
-Runtime topology, identity, resources and objectives are defined in [infrastructure](docs/technical/infrastructure.md); release and recovery procedures in [deployment](docs/technical/deployment.md).
+The [memory-system reference](docs/technical/memory-system.md) follows explicit writes and source capture through curation, indexing, retrieval, correction and Forget. The [data model](docs/technical/data-model.md) defines persistence and transaction rules; the [MCP/API contract](docs/technical/mcp-api.md) defines client operations.
 
-## Responsibility boundaries
+## Component ownership
 
-| Location | Responsibility |
+| Area | Responsibility |
 | --- | --- |
-| apps/api/ | Node HTTP entry, REST routing, MCP read and write tool registration, OpenAPI, health and readiness |
-| apps/worker/ | Private entry for task-delivered jobs and the scheduled sweep |
-| packages/contracts/ | Request schemas, error codes and shared validation types |
-| packages/auth/ | Gate online bearer-token verification, explicit identity binding and live grants |
-| packages/domain/ | Authorized transactions, change set validation and commit, revisions, bitemporal reads, signed cursors |
-| packages/connectors/ | Source registration, consent and rights, locator canonicalization and content hashing |
-| packages/curator/ | Curator and embedding ports; Vertex AI, OpenAI-compatible and deterministic local adapters; proposal and evidence-anchor validation |
-| packages/jobs/ | Capture job processing with checkpoints and leases, user review, outbox dispatch |
-| packages/recall/ | Hybrid retrieval, relation expansion, time and rights filtering, Context Pack assembly |
-| packages/governance/ | Forget and purge, deletion ledger, retention, encrypted export and import |
-| packages/runtime/ | Composition helpers: storage selection, health server and product display name |
-| packages/db/ | Pool, transactions, migrations and role provisioning; migrations/ holds schema, constraints, RLS and grants |
-| infra/ | Cloud deployment and IAM contracts, Cloud Build and local configuration |
-| scripts/, tests/ | Local stack, evaluation, load and cloud smoke tooling; unit and real-PostgreSQL suites |
+| `apps/api/` | REST routing, MCP tool adapters, OpenAPI and API health |
+| `apps/worker/` | Task-delivered capture and governance work, indexing repair and scheduled recovery |
+| `packages/contracts/` | Request schemas and public error vocabulary |
+| `packages/auth/` | Gate bearer verification, identity binding and grant checks |
+| `packages/domain/` | Authorized transactions, ChangeSet validation and commit, revisions and historical reads |
+| `packages/connectors/` | Consent, source rights, observation acceptance and source lineage |
+| `packages/curator/` | Extraction and embedding provider interfaces, structured proposal validation |
+| `packages/jobs/` | Capture jobs, evidence-anchor checks, review routing and outbox work |
+| `packages/recall/` | Candidate search, ranking, relation expansion and Context Pack assembly |
+| `packages/governance/` | Forget, deletion ledger, retention and encrypted portability |
+| `packages/db/` | PostgreSQL pools, migrations, roles and database setup |
 
-API and worker share the domain packages as a modular monolith; the worker is a separately deployed entry point, not a separate business service. REST and MCP call the same services, so MCP never reimplements core rules. Model output is a proposal: it reaches the database only through change set validation, policy and revision checks. Packages, database roles and OAuth scopes use generic `memory` identifiers; the product name comes from `PRODUCT_DISPLAY_NAME`. Caller and source text is data, never policy or authorization.
+REST and MCP call these same packages; adapters do not implement separate memory policy. The worker is another entry point to the same domain and database contracts, not a second memory store.
 
-## Memory contract
+## Main data flow
 
-- M1: an observation records that something was asserted, not that it is true; an user decision is not an externally verified fact.
-- M2: authority is derived from the authenticated principal, the speaker and trusted source metadata, never from model output. AI, client and connector proposals stay candidates until the user confirms them; a client cannot rewrite an user-attributed memory.
-- M3: valid time and recorded time are separate. Superseding closes the earlier interval instead of deleting it; historical reads choose the revision known at `known_at`, then apply `valid_at`.
-- M4: supersede, retract and forget are distinct. Contested is an epistemic flag, not a lifecycle state.
-- M5: memory versions are append-only and each revision keeps its own evidence set; derived summaries and duplicates never count as independent evidence.
-- M6: an episode keeps its condition, action and outcome as one experience.
-- M7: reprocessing old input never reverses an explicit user decision.
+An explicit remember uses the synchronous core path. A source capture is different: Lore accepts observations only after that source has been enabled with consent, then stores the capture job and work notification with the source data. A worker claims the job, calls the curator outside the commit transaction, validates the returned proposal and its exact evidence anchors, reconciles it with existing memories, and either commits an allowed fact or creates a user review. Lore accepts observations from clients; it does not itself synchronize arbitrary AI histories or fetch documents from other services.
 
-The schema, relations and time model are defined in the [data model](docs/technical/data-model.md); operation semantics in the [API contract](docs/technical/mcp-api.md).
+A committed memory version, its evidence links, relations, change-feed event, outbox record and idempotency response are written atomically after authorization, source-rights and expected-revision checks. Recorded time is separate from valid time. The change feed has its own per-scope ordering so clients can catch up independently of search indexes.
 
-## Persistence and recovery
+Recall first checks the actor and requested scopes, then selects eligible records under current source rights, Forget suppressions, lifecycle and time. Precise mode uses exact text and subject/alias matches. Contextual, historical and exploratory modes combine bounded exact, lexical and semantic candidate lists, then can expand relations from supported roots. Changes mode follows a separate change-oriented candidate path; `get_changes` supplies the ordered feed. Ranking and Context Pack limits are implementation bounds; they do not promise complete recall. See [retrieval behavior and limits](docs/technical/memory-system.md#retrieval-and-context-packs).
 
-A commit rechecks access, source rights and expected revisions, then writes memory versions, evidence, relations, the scope offset, change log, outbox, idempotency response and audit record in one PostgreSQL transaction. Stale revisions return `revision_conflict`; identical retries replay the stored response and a changed body under the same key returns `idempotency_conflict`. Change feed sequences come from a locked per-scope offset row, so each scope's feed is gap-free in commit order; cursors are signed and bound to principal, scopes and authorization epochs. Explicit remembers are visible immediately because recall reads the source of truth, not only the search index.
+## Correctness boundaries
 
-Capture writes observations, a job and an outbox row atomically. The scheduled sweep dispatches job IDs to Cloud Tasks; the worker checkpoints provider output, fences writes with a lease and responds only after a durable committed, held or retry state. Delivery is at least once and idempotent; no dead-letter queue is assumed.
+- **Provenance and authority are separate.** Evidence identifies the source, speaker and lineage. Authority comes from the authenticated actor, memory kind and controlled user-confirmation path. Model output cannot assign authority, and stored authority does not prove an external claim.
+- **Time and knowledge are separate.** A revision records when it was learned; valid-time intervals record when it applies. Historical reads choose the latest revision known at the requested time before applying its valid interval.
+- **Changes are explicit.** ChangeSets compare expected revisions. A stale update fails instead of overwriting concurrent work. Supersede, retract and Forget have different semantics; contested is an epistemic flag, not a lifecycle state.
+- **Search is derived data.** Indexing can lag a committed revision. Recall reads committed records as well as the available indexes and reports index or provider insufficiency; an index result is never the authority for what was committed.
+- **Rights apply at read time.** Scope grants, source consent and source rights are checked for candidates and again before returning them. PostgreSQL row-level security enforces the tenant boundary inside transactions.
+- **Forget denies first, purges later.** Suppression and a content-free deletion event are committed before asynchronous purge. A restore cannot serve protected data until the independent deletion ledger and database checkpoint agree.
 
-## Authentication and authorization
+## Identity and runtime boundary
 
-Gate issues opaque OAuth tokens for three separate resources: the REST API, `/mcp/read` and `/mcp/write`. Each resource uses its own introspection client credentials. Lore accepts bearer tokens only; it does not serve a login callback, browser session endpoint or shared-cookie authorization. The issuer, immutable Gate subject and client ID must match an operator-approved local identity binding to an existing user and principal; that binding limits scopes and capabilities, which are intersected with live grants on every operation. API and MCP operations revalidate Gate online immediately before commit. Forced row-level security with transaction-local context enforces user and scope in PostgreSQL. Runtime roles are non-superuser and `NOBYPASSRLS`. The worker accepts only IAM-authenticated OIDC calls from the dedicated task and scheduler identities. Logs carry identifiers, statuses and durations, never memory content, evidence or credentials. Trust boundaries and remaining limits are in [security](docs/technical/security.md).
+Gate owns sign-in, approval and sessions. Lore accepts bearer tokens for the exact REST, MCP read or MCP write resource and has no browser login or session route. The API has a public HTTPS entry point but protected data operations require Gate verification, an existing Lore identity binding and live grants. The worker remains private and accepts only its task and scheduler identities. Runtime topology, IAM and operator procedures belong in [infrastructure](docs/technical/infrastructure.md), [security](docs/technical/security.md) and [deployment](docs/technical/deployment.md).
 
-The original Gate production rollout is preserved in the [2026-10-18 release record](docs/eval/gate-production-release-20261018.md). The current API-only source candidate and its operational checklist are in the [2026-10-19 correction record](docs/eval/api-only-gate-auth-correction-20261019.md); positive hosted MCP data acceptance remains unverified.
+Syntoria Weave is a separate service for current shared state. Lore has no shared tables or required API dependency on Weave; a caller that needs both composes their results.
 
-## Forget and restore
+## Verification boundary
 
-Forget commits suppression and content-free tombstones in one transaction, appends the deletion instruction to an independent ledger in Cloud Storage, and purges content asynchronously. Readiness compares the database checkpoint with the ledger head: protected reads fail closed until a restored database has replayed every newer deletion. Source-rights revocation is separate from Forget and invalidates earlier exports in the scope.
-
-## Verification
-
-Pure and adapter-level unit tests, a required real-PostgreSQL integration suite, restore and portability scripts, a local Compose acceptance run with a deterministic 231-case evaluation, and cloud smoke harnesses each establish a different boundary; a lower-fidelity pass never closes a higher one. See [testing](docs/technical/testing.md). Current evidence is in [local acceptance](docs/eval/local-acceptance.md) and the [cloud verification register](docs/eval/cloud-verification.md). Architectural decisions do not establish deployed behavior.
+Unit tests, real-PostgreSQL contract tests, local acceptance, and hosted checks answer different questions. Passing a local deterministic provider does not measure extraction quality or semantic recall quality. The [development guide](docs/development.md) lists the verification commands, and dated results live in [evaluation records](docs/eval/).
