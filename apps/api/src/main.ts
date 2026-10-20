@@ -18,7 +18,6 @@ const pool = createDatabase(process.env['DATABASE_URL'], 5);
 await assertNobypassRls(pool);
 const issuer = canonicalIssuer(requiredEnvironment('AUTH_ISSUER'));
 const audience = requiredEnvironment('AUTH_AUDIENCE');
-const allowedClientIds = parseClientIds(requiredEnvironment('AUTH_ALLOWED_CLIENT_IDS'));
 const allowLoopbackHttp = process.env['AUTH_GATE_ALLOW_LOOPBACK_HTTP'] === '1';
 const mcpBaseUrl = requiredEnvironment('MCP_BASE_URL');
 const mcpReadAudience = canonicalMcpResource(mcpBaseUrl, 'read');
@@ -36,7 +35,6 @@ const mcpAllowedOrigins = (process.env['MCP_ALLOWED_ORIGINS'] ?? '')
 const apiAllowedOrigins = parseOrigins(process.env['API_ALLOWED_ORIGINS'] ?? '');
 const commonIdentityProviderConfig = {
   issuer,
-  allowedClientIds,
   ...(allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
 };
 const auth = new Authenticator({
@@ -151,17 +149,6 @@ function assertConfiguredAudience(name: string, canonical: string): void {
   if (configured !== canonical) {
     throw new Error(`${name} must equal the protected resource URL ${canonical}`);
   }
-}
-
-function parseClientIds(value: string): string[] {
-  const clients = value.split(',').map((entry) => entry.trim());
-  if (clients.some((entry) => entry.length === 0)) {
-    throw new Error('AUTH_ALLOWED_CLIENT_IDS must be a non-empty comma-separated list');
-  }
-  if (new Set(clients).size !== clients.length) {
-    throw new Error('AUTH_ALLOWED_CLIENT_IDS must not contain duplicates');
-  }
-  return clients;
 }
 
 function parseOrigins(value: string): string[] {

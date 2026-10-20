@@ -20,7 +20,7 @@
     "format:write": "prettier --write \"package.json\" \"tsconfig*.json\" \"apps/**/*.json\" \"apps/**/*.ts\" \"packages/**/*.json\" \"packages/**/*.ts\" \"scripts/**/*.mjs\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"docs/api/**/*.json\" \"eslint.config.mjs\" \"vitest.config.ts\" \".prettierrc.json\" \"!packages/auth/src/connection-verifier.ts\"",
     "test": "vitest run",
     "test:unit": "vitest run --exclude tests/core.postgres.test.ts",
-    "test:integration": "node scripts/require-postgres-test-env.mjs && vitest run tests/core.postgres.test.ts && node --import tsx scripts/test-governance-restore-clone.ts && node --import tsx scripts/test-portability-fresh-db.ts && node --import tsx scripts/test-user-identity-migration.ts",
+    "test:integration": "node scripts/require-postgres-test-env.mjs && vitest run tests/core.postgres.test.ts && node --import tsx scripts/test-governance-restore-clone.ts && node --import tsx scripts/test-portability-fresh-db.ts && node --import tsx scripts/test-user-identity-migration.ts && node --import tsx scripts/test-subject-admission-migration.ts",
     "dev:api": "npm run dev --workspace @memory/api",
     "dev:worker": "npm run dev --workspace @memory/worker",
     "start:api": "npm run start --workspace @memory/api",

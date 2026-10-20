@@ -73,7 +73,7 @@ const issuer = `https://gate.example.test:${gatePort}`;
 const apiOrigin = 'https://memory.example.test';
 const callbackPort = await reservePort();
 const callback = `http://127.0.0.1:${callbackPort}/callback`;
-const mcpClientId = 'memory-mcp-client';
+let mcpClientId;
 const resourceIds = {
   api: 'memory-api-resource',
   read: 'memory-mcp-read-resource',
@@ -89,7 +89,6 @@ const audiences = {
   read: `${apiOrigin}/mcp/read`,
   write: `${apiOrigin}/mcp/write`,
 };
-const allowedClientIds = Object.freeze([mcpClientId]);
 const subject = 'github:12345';
 const legacyIssuer = 'https://legacy-issuer.example.test';
 const legacySubject = `gate-integration-${subject}`;
@@ -118,9 +117,6 @@ const gateConfig = {
   browserSessionTtlSeconds: 3600,
   browserApps: [],
   browserOrigins: [],
-  clients: [
-    { client_id: mcpClientId, client_name: 'Memory MCP client', redirect_uris: [callback] },
-  ],
   resources: Object.entries(resourceIds).map(([name, client_id]) => ({
     audience: audiences[name],
     client_id,
@@ -169,11 +165,11 @@ try {
     "INSERT INTO grants(user_id,scope_id,principal_id,capabilities) VALUES ($1,$2,$3,ARRAY['read','write','admin'])",
     [created.user, created.scope, created.principal],
   );
-  for (const clientId of allowedClientIds) {
+  {
     await admin.query(
-      `INSERT INTO external_identity_bindings(external_issuer,external_subject,external_client_id,user_id,principal_id,scope_ids,capability_ceiling)
-       VALUES ($1,$2,$3,$4,$5,$6::uuid[],ARRAY['read','write','admin'])`,
-      [issuer, subject, clientId, created.user, created.principal, [created.scope]],
+      `INSERT INTO external_identity_bindings(external_issuer,external_subject,user_id,principal_id,scope_ids,capability_ceiling)
+       VALUES ($1,$2,$3,$4,$5::uuid[],ARRAY['read','write','admin'])`,
+      [issuer, subject, created.user, created.principal, [created.scope]],
     );
   }
 
@@ -210,7 +206,6 @@ try {
       audience: audiences[kind],
       clientId: resourceIds[kind],
       clientSecret: resourceSecrets[kind],
-      allowedClientIds,
       fetch: trustedFetch,
     });
   const apiAuth = authFor('api');
@@ -241,6 +236,20 @@ try {
   });
   const apiPort = apiServer.address().port;
 
+  const registration = await trustedFetch(`${issuer}/reg`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      client_name: 'Memory MCP client',
+      redirect_uris: [callback],
+      token_endpoint_auth_method: 'none',
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+    }),
+  });
+  assert.equal(registration.status, 201);
+  mcpClientId = (await registration.json()).client_id;
+  assert.equal(typeof mcpClientId, 'string');
   const callbackResponse = await apiRequest(apiPort, '/auth-return.html?code=must-not-be-served');
   assert.equal(callbackResponse.status, 404, callbackResponse.text);
   const session = await apiRequest(apiPort, '/v1/session');
@@ -376,7 +385,7 @@ try {
   const connections = await gateRequest(`${issuer}/connections`, {}, true);
   assert.equal(connections.status, 200, connections.text);
   const oauthGrant =
-    /<p>Memory MCP client — [^<]+<\/p><form method="post" action="\/connections\/revoke"><input type="hidden" name="csrf" value="([^"]+)"><input type="hidden" name="id" value="([^"]+)">/.exec(
+    /<p>Unverified OAuth client: Memory MCP client — [^<]+<\/p><form method="post" action="\/connections\/revoke"><input type="hidden" name="csrf" value="([^"]+)"><input type="hidden" name="id" value="([^"]+)">/.exec(
       connections.text,
     );
   assert.ok(oauthGrant, 'Gate connection management must expose the approved MCP OAuth grant');

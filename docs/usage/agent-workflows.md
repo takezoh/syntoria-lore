@@ -4,11 +4,11 @@ Lore gives an authorized AI access to the same versioned, evidence-linked memori
 
 ## Connect with the right authority
 
-Gate owns sign-in and OAuth approval. A client needs a bearer token for the exact resource it calls: REST, `/mcp/read` or `/mcp/write`. An operator must also map the existing Gate identity and client to an existing Lore user and principal; current grants further limit scopes and capabilities. Lore has no login page or public self-service registration flow. Its current access path depends on operator-configured resources and identity bindings.
+Gate owns sign-in and OAuth approval. A client needs a bearer token for the exact resource it calls: REST, `/mcp/read` or `/mcp/write`. An operator must also map the Gate issuer and immutable subject to an existing Lore user and principal; current grants further limit scopes and capabilities. Lore has no login page or public self-service registration flow. Its current access path depends on operator-configured resources and identity bindings.
 
 `admin` is an internal capability attached to a personal-account grant. It is not a separate service administrator account. Some operations also require the authenticated actor to be the user, even when a client has broad `admin` capability. See [client access](sign-in.md) for the user-facing prerequisites and [API authorization](../technical/mcp-api.md#entry-points-and-authorization) for the exact rules.
 
-For hosted use, ask the service operator to configure the exact resource, client binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [deployment record](../eval/api-only-gate-auth-correction-20261019.md).
+For hosted use, ask the service operator to configure the exact resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [deployment record](../eval/api-only-gate-auth-correction-20261019.md).
 
 ## Discover the available tools
 
@@ -41,7 +41,7 @@ Present a memory with its attribution and evidence, distinguish assertions from 
 
 ## Correct, give feedback and forget
 
-To revise a known memory, read its current revision and use `propose_changeset` followed by `commit_changeset` with that `expected_revision`. Use `SUPERSEDE` when it changed over time, `RETRACT` when it was wrong, `CORROBORATE` to add evidence, `REFINE` to produce a revision, and `CONTEST` or `RELATE` to record an evidenced dispute or link. A stale revision returns `revision_conflict`; recall again and reconcile before proposing. Only the user may supersede or retract, and non-user clients cannot refine an user-attributed memory.
+To revise a known memory, read its current revision and use `propose_changeset` followed by `commit_changeset` with that `expected_revision`. Use `SUPERSEDE` when it changed over time, `RETRACT` when it was wrong, `CORROBORATE` to add evidence, `REFINE` to produce a revision, and `CONTEST` or `RELATE` to record an evidenced dispute or link. A stale revision returns `revision_conflict`; recall again and reconcile before proposing. Only the user may supersede or retract, and non-user clients cannot refine a user-attributed memory.
 
 `submit_feedback` accepts `useful`, `incorrect`, `stale` or `not_relevant` and queues reassessment. It does not change the memory by itself and should not be treated as a truth vote. Forget is a user operation: call `forget_memory`, keep its request ID and follow `forget_status` until purge completes. Suppression takes effect immediately; the worker handles physical deletion. Never retain forgotten content in an agent cache.
 

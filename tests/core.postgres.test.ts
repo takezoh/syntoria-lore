@@ -263,13 +263,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       [userId, scopeA, principalId, scopeB, clientPrincipalId],
     );
 
-    const clients = ['integration-app-client'];
     const authConfig = {
       pool: app,
       issuer: gateIssuer,
       clientId: 'integration-api-resource',
       clientSecret: 'synthetic-api-resource-secret',
-      allowedClientIds: clients,
       fetch: gateFetch,
     } as const;
     authenticator = new Authenticator({
@@ -397,7 +395,6 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const target = {
       subject: `operator-mapping-${randomUUID()}`,
       issuer: 'https://gate.mapping.integration.test',
-      client_id: `mapping-client-${randomUUID()}`,
     };
     const mapping = {
       expected_source: { issuer, subject },
@@ -418,7 +415,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
           env: { ...process.env, IDENTITY_MAPPING_DATABASE_URL: adminUrl },
         },
       );
-    const bindingKey = [target.issuer, target.subject, target.client_id];
+    const bindingKey = [target.issuer, target.subject];
 
     try {
       await writeFile(mappingPath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
@@ -437,7 +434,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       );
       const malformed = runMapping();
       expect(malformed.status).toBe(1);
-      expect(malformed.stderr).toContain('target must contain issuer, subject, and client_id only');
+      expect(malformed.stderr).toContain('target must contain issuer and subject only');
 
       await writeFile(mappingPath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
       const applied = runMapping('--apply', '--expected-baseline', baseline.baseline_sha256);
@@ -460,7 +457,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
           `SELECT user_id::text, principal_id::text, scope_ids::text[], capability_ceiling,
                   active, updated_at::text
            FROM public.external_identity_bindings
-           WHERE external_issuer = $1 AND external_subject = $2 AND external_client_id = $3`,
+           WHERE external_issuer = $1 AND external_subject = $2`,
           bindingKey,
         );
       const firstReadback = await readBinding();
@@ -503,7 +500,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     } finally {
       await admin.query(
         `DELETE FROM public.external_identity_bindings
-         WHERE external_issuer = $1 AND external_subject = $2 AND external_client_id = $3`,
+         WHERE external_issuer = $1 AND external_subject = $2`,
         bindingKey,
       );
       await rm(directory, { recursive: true, force: true });
@@ -3162,6 +3159,46 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(duplicateCookie.status).toBe(400);
   });
 
+  it('admits dynamic clients by subject and locks revoked admission without widening capabilities', async () => {
+    const bearer = await token([scopeB], 'memory:read');
+    const claims = gateTokens.get(bearer)!;
+    claims.client_id = `dynamic-${randomUUID()}`;
+    const actor = await authenticator.authenticate(`Bearer ${bearer}`);
+    expect(actor.capabilities).toEqual(['read']);
+    const locked = await app.connect();
+    const operator = await admin.connect();
+    try {
+      await locked.query('BEGIN');
+      await locked.query('SELECT * FROM app.lock_external_identity_binding($1,$2)', [
+        gateIssuer,
+        claims.sub,
+      ]);
+      await operator.query('BEGIN');
+      await operator.query("SET LOCAL lock_timeout='50ms'");
+      await expect(
+        operator.query(
+          'UPDATE external_identity_bindings SET active=false WHERE external_issuer=$1 AND external_subject=$2',
+          [gateIssuer, claims.sub],
+        ),
+      ).rejects.toMatchObject({ code: '55P03' });
+      await operator.query('ROLLBACK');
+      await locked.query('COMMIT');
+      await admin.query(
+        'UPDATE external_identity_bindings SET active=false WHERE external_issuer=$1 AND external_subject=$2',
+        [gateIssuer, claims.sub],
+      );
+      await expect(authenticator.assertCurrent(actor)).rejects.toMatchObject({ status: 403 });
+      await expect(authenticator.authenticate(`Bearer ${bearer}`)).rejects.toMatchObject({
+        status: 403,
+      });
+    } finally {
+      await locked.query('ROLLBACK');
+      await operator.query('ROLLBACK');
+      locked.release();
+      operator.release();
+    }
+  });
+
   it('rolls back writes when Gate revokes or becomes unavailable at the final commit check', async () => {
     for (const finalFailure of ['revoke_on_call', 'fail_on_call'] as const) {
       const bearer = await token([scopeB], 'memory:read memory:write');
@@ -4104,12 +4141,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       throw new Error(`Unknown local capability fixture ${scope}`);
     await admin.query(
       `INSERT INTO external_identity_bindings
-         (external_issuer, external_subject, external_client_id, user_id, principal_id, scope_ids, capability_ceiling)
-       VALUES ($1, $2, $3, $4, $5, $6::uuid[], $7::text[])`,
+         (external_issuer, external_subject, user_id, principal_id, scope_ids, capability_ceiling)
+       VALUES ($1, $2, $3, $4, $5::uuid[], $6::text[])`,
       [
         gateIssuer,
         gateSubject,
-        clientId,
         principal.rows[0].user_id,
         principal.rows[0].id,
         scopeIds,

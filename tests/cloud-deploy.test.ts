@@ -101,7 +101,6 @@ describe('cloud deployment manifests', () => {
     expect(deploymentConfig.services.api.url).toMatch(/^https:\/\/[^/]+\.run\.app$/);
     expect(deploymentConfig.services.api.publicUrl).toBe(deploymentConfig.gate.resourceOrigin);
     expect(deploymentConfig.gate.resourceOrigin).toBe('https://memory.example.com');
-    expect(deploymentConfig.gate.allowedClientIds).toEqual(['memory-mcp-client']);
     expect(deploymentConfig.gate).not.toHaveProperty('browserAppId');
     expect(deploymentConfig.gate).not.toHaveProperty('browserClientId');
     expect(deploymentConfig.gate).not.toHaveProperty('browserRedirectUri');
@@ -147,9 +146,7 @@ describe('cloud deployment manifests', () => {
       });
       expect(envValue(api, 'AUTH_ISSUER')).toBe(deploymentConfig.gate.issuer);
       expect(envValue(api, 'AUTH_AUDIENCE')).toBe(deploymentConfig.gate.resourceOrigin);
-      expect(envValue(api, 'AUTH_ALLOWED_CLIENT_IDS')).toBe(
-        deploymentConfig.gate.allowedClientIds.join(','),
-      );
+      expect(envValue(api, 'AUTH_ALLOWED_CLIENT_IDS')).toBeUndefined();
       expect(envValue(api, 'GATE_BROWSER_APP_ID')).toBeUndefined();
       expect(envValue(api, 'AUTH_BROWSER_CLIENT_ID')).toBeUndefined();
       expect(envValue(api, 'GATE_BROWSER_REDIRECT_URI')).toBeUndefined();
