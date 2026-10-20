@@ -54,7 +54,6 @@ export class Authenticator {
       audience: options.audience,
       clientId: options.clientId,
       clientSecret: options.clientSecret,
-      allowedClientIds: options.allowedClientIds,
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
       ...(options.allowLoopbackHttp === undefined
         ? {}
@@ -106,7 +105,7 @@ export class Authenticator {
       );
     }
     if (binding === undefined) {
-      throw new CoreError(403, 'forbidden', 'The Gate identity and client are not admitted');
+      throw new CoreError(403, 'forbidden', 'The Gate identity is not admitted');
     }
     const actorKind = actorKindSchema.safeParse(binding.actor_kind);
     if (!actorKind.success) {
@@ -171,8 +170,8 @@ export class Authenticator {
   ): Promise<BindingRow | undefined> {
     const result = await client.query<BindingRow>(
       `SELECT user_id, principal_id, actor_kind, scope_ids, capability_ceiling
-       FROM app.lock_external_identity_binding($1, $2, $3)`,
-      [principal.issuer, principal.subject, principal.clientId],
+       FROM app.lock_external_identity_binding($1, $2)`,
+      [principal.issuer, principal.subject],
     );
     return result.rows[0];
   }

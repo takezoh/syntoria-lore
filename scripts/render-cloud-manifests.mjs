@@ -46,7 +46,6 @@ const sharedRuntimeEnv = [
   env('CURSOR_HMAC_ACTIVE_KEY', config.cursorKeyId),
   env('AUTH_ISSUER', issuer),
   env('AUTH_AUDIENCE', apiUrl),
-  env('AUTH_ALLOWED_CLIENT_IDS', config.gate.allowedClientIds.join(',')),
   env('AUTH_GATE_ALLOW_LOOPBACK_HTTP', '0'),
   secretEnv('FORGET_HMAC_KEY', config.secrets.forgetHmac),
   secretEnv('PORTABILITY_MASTER_KEY', config.secrets.portabilityMaster),

@@ -57,7 +57,7 @@ Recall first checks the actor and requested scopes, then selects eligible record
 
 ## Identity and runtime boundary
 
-Gate owns sign-in, approval and sessions. Lore accepts bearer tokens for the exact REST, MCP read or MCP write resource and has no browser login or session route. The API has a public HTTPS entry point but protected data operations require Gate verification, an existing Lore identity binding and live grants. The worker remains private and accepts only its task and scheduler identities. Runtime topology, IAM and operator procedures belong in [infrastructure](docs/technical/infrastructure.md), [security](docs/technical/security.md) and [deployment](docs/technical/deployment.md).
+Gate owns sign-in, approval and sessions. Lore accepts bearer tokens for the exact REST, MCP read or MCP write resource and has no browser login or session route. The API has a public HTTPS entry point but protected data operations require Gate verification, an existing Lore identity binding for the Gate issuer and immutable subject, and live grants. The worker remains private and accepts only its task and scheduler identities. Runtime topology, IAM and operator procedures belong in [infrastructure](docs/technical/infrastructure.md), [security](docs/technical/security.md) and [deployment](docs/technical/deployment.md).
 
 Syntoria Weave is a separate service for current shared state. Lore has no shared tables or required API dependency on Weave; a caller that needs both composes their results.
 

@@ -14,7 +14,7 @@ When a connected source sends material with consent, Lore can process it in the 
 
 ## Current access
 
-Lore is an API and Remote MCP service; it has no Lore login page or browser app. Signing in and approving a client belong to Gate. To use the hosted service, a compatible client must be configured for its exact resource and the service operator must have an existing Lore identity binding and grant for that client. The repository does not provide public self-service sign-up. See [client access](docs/usage/sign-in.md) for the prerequisites.
+Lore is an API and Remote MCP service; it has no Lore login page or browser app. Signing in and approving a client belong to Gate. To use the hosted service, a compatible client must be configured for its exact resource and the service operator must have an existing Lore identity binding and grant for the Gate user. The repository does not provide public self-service sign-up. See [client access](docs/usage/sign-in.md) for the prerequisites.
 
 ## Try a workflow
 

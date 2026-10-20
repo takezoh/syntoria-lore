@@ -14,7 +14,6 @@ export interface IdentityProviderConfig {
   audience: string;
   clientId: string;
   clientSecret: string;
-  allowedClientIds: readonly string[];
   timeoutMs?: number;
   /** For isolated local tests only; forbidden when NODE_ENV is production. */
   allowLoopbackHttp?: boolean;
@@ -106,13 +105,10 @@ export function createIdentityProviderVerifier(
   const allowHttp = config.allowLoopbackHttp === true;
   const issuer = config.issuer;
   const issuerUrl = safeUrl(issuer, allowHttp);
-  if (![config.audience, config.clientId, config.clientSecret].every(nonempty) ||
-      !Array.isArray(config.allowedClientIds) || config.allowedClientIds.length === 0 ||
-      !config.allowedClientIds.every(nonempty)) throw new TypeError('Invalid identity provider verifier configuration');
+  if (![config.audience, config.clientId, config.clientSecret].every(nonempty)) throw new TypeError('Invalid identity provider verifier configuration');
   const timeoutMs = config.timeoutMs ?? 3000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) throw new TypeError('Invalid Gate timeout');
   const audience = config.audience;
-  const allowedClients = new Set(config.allowedClientIds);
   const authorization = `Basic ${Buffer.from(`${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`, 'utf8').toString('base64')}`;
   const fetcher = dependencies.fetch ?? globalThis.fetch;
   const now = dependencies.now ?? Date.now;
@@ -157,18 +153,18 @@ export function createIdentityProviderVerifier(
       }, controller.signal);
       if (typeof data.active !== 'boolean') throw new IdentityProviderError(503);
       if (!data.active) throw new IdentityProviderError(401);
-      const clients = [data.azp, data.client_id].filter(value => value !== undefined);
+      const clientId = data.client_id;
+      const authorizedParty = data.azp;
       if (data.token_type !== 'Bearer' || data.gate_approved !== true || data.iss !== issuer || !nonempty(data.sub) || !nonempty(data.connection_id) ||
           !Number.isSafeInteger(data.exp) || (data.exp as number) <= now() / 1000 ||
-          clients.length === 0 || !clients.every(nonempty) || new Set(clients).size !== 1 ||
-          !allowedClients.has(clients[0] as string)) throw new IdentityProviderError(401);
+          !nonempty(clientId) || (authorizedParty !== undefined && (!nonempty(authorizedParty) || clientId !== authorizedParty))) throw new IdentityProviderError(401);
       const exactAudience =
         data.aud === audience ||
         (Array.isArray(data.aud) && data.aud.length === 1 && data.aud[0] === audience);
       if (!exactAudience) {
         throw new IdentityProviderError(401);
       }
-      return Object.freeze({ issuer, subject: data.sub, connectionId: data.connection_id, clientId: clients[0] as string });
+      return Object.freeze({ issuer, subject: data.sub, connectionId: data.connection_id, clientId });
     }
     try { return await Promise.race([authorize(), timeout]); }
     catch (error) { throw error instanceof IdentityProviderError ? error : new IdentityProviderError(503); }

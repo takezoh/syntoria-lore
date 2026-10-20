@@ -66,6 +66,6 @@ Only a user-authorized request can perform Forget. The selected content is suppr
 
 > Let my research assistant read my memories. Let my coding assistant save project decisions.
 
-The service operator must configure the existing client bindings and grants. A client with read access can recall and follow changes; write access permits memory writes within its grant. `admin` is an internal capability on a personal account, not a separate Lore administrator account.
+The service operator must configure the existing Gate subject binding and grants. A client with read access can recall and follow changes; write access permits memory writes within its grant. `admin` is an internal capability on a personal account, not a separate Lore administrator account.
 
 For client setup and tool recovery, see the [agent workflow guide](agent-workflows.md). For the memory kinds, attribution and lifecycle, see [Product and usage](../../PRODUCT.md).
