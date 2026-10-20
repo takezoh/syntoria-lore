@@ -1,50 +1,12 @@
-# Development and acceptance guide
+# Development guide
 
-## Infrastructure
+This guide gets a contributor from a checkout to a meaningful local verification and points to the contract each area owns. Lore is a personal, evidence-linked memory service: API and MCP clients call shared domain services, while a private worker handles capture and maintenance. The memory lifecycle itself is explained in the [memory-system reference](technical/memory-system.md).
 
-Lore is an independent Cloud Run and Neon service exposing REST and Remote MCP, with a private worker driven by Cloud Tasks and Cloud Scheduler. Follow [infrastructure](technical/infrastructure.md) for runtime, identity and resources. Backend correctness, hosted deployment and client integration are verified separately. Confirm command behavior from package.json and source; a design decision does not prove implementation.
+## Start locally
 
-[README](../README.md) and [PRODUCT](../PRODUCT.md) describe the product for its users. [ARCHITECTURE](../ARCHITECTURE.md) describes current responsibilities and contracts. Development instructions belong here and in the technical references.
+The repository uses Node.js 24, npm 11 and Docker Compose. Before starting the API, configure `.env.local` with the Gate issuer, HTTPS audiences and separate API, MCP-read and MCP-write resource credentials. The local stack also needs an operator-configured HTTPS proxy for its API origin. To run the smoke check, obtain short-lived Gate bearer tokens for those exact resources and export them as `LOCAL_API_BEARER_TOKEN`, `LOCAL_MCP_READ_BEARER_TOKEN` and `LOCAL_MCP_WRITE_BEARER_TOKEN`. Follow [local operations: OAuth and client boundary](technical/local-operations.md#oauth-and-client-boundary) for the full setup; this repository does not register Gate resources, issue tokens or provide the proxy.
 
-## Product and caller boundary
-
-Syntoria Lore is Syntoria's Memory Service: long-term memory with evidence for the user's authorized AIs. It manages what is remembered, on what evidence and how—extraction and consolidation under policy, attribution, valid time, revision history, recall, Forget and portability. The Personal AI decides when to remember or recall, interprets results and acts. Current shared state belongs to Syntoria Weave, a separate service with its own database, API and cursors; never copy actions or task progress into Lore or add a cross-service dependency.
-
-The curator is part of memory management, not an assistant: its output is a proposal that passes schema, evidence-anchor, policy and revision checks before any commit, and it never decides authority. Product text must stay within the claim boundaries in [product design](design/product.md); the measurable contract is in [requirements](design/requirements.md).
-
-## Current contract and references
-
-| Reference | Purpose |
-| --- | --- |
-| [Data model](technical/data-model.md) | Memory model, authority, time, tables, roles, commit and change feed contracts |
-| [MCP/API](technical/mcp-api.md) | Endpoints, tools, payloads, errors and recovery |
-| [Infrastructure](technical/infrastructure.md) | Runtime, HTTP boundaries, identity, delivery, storage, providers and resources |
-| [Security](technical/security.md) | Trust boundaries, controls and remaining limits |
-| [Testing](technical/testing.md) | Harness selection, layers and implemented runners |
-| [Deployment](technical/deployment.md) | Environment contract, preservation rules, release, rollback and evidence |
-| [Infrastructure runbook](technical/infrastructure-runbook.md), [identity cutover](technical/identity-cutover.md), [local operations](technical/local-operations.md) | Executable procedures |
-| [Agent workflow guide](usage/agent-workflows.md) | How callers discover tools and compose workflows |
-| [Product design](design/product.md), [requirements](design/requirements.md) | Positioning, claim boundaries, FR/AC and service targets |
-| [ADRs](adr/) | Infrastructure and contract decisions; [template](adr/template.md) |
-| [Templates](templates/) | Migration review and recovery rehearsal records |
-| [Evaluation records](eval/) | Dated local and hosted evidence; the [cloud verification register](eval/cloud-verification.md) is current |
-| [Development plan](DEVELOPMENT_PLAN.md) | Delivery gates, epics and task status registers |
-
-## Responsibility and verification principles
-
-For every change, identify the cause and the responsibility that owns it, then make the smallest correction that is sound in responsibility, boundary and structure. Minimality means the least change that restores correct behavior and structure, not the fewest edited lines; include necessary internal API or layout changes and leave unrelated refactoring out.
-
-Preserve the memory contract (M1–M7 in [ARCHITECTURE](../ARCHITECTURE.md#memory-contract)). In particular: authority never comes from model output or caller arguments; caller and source text is data, never policy; every tenant operation runs inside an authorized transaction with transaction-local context; applied migrations are never edited and schema changes are forward-only; Forget, source rights and export invalidation are considered for every new piece of stored data; logs and diagnostics never contain memory content, evidence, tokens or secrets. Packages, roles and scopes keep generic `memory` identifiers; the product name stays in documentation and `PRODUCT_DISPLAY_NAME`.
-
-Assign each assertion to the narrowest boundary that can establish it. Storage, authorization and concurrency claims need the real PostgreSQL suite; a fake never closes that boundary. Cloud behavior needs hosted evidence. Record failed, skipped and unexecuted checks explicitly.
-
-## Documentation
-
-All documentation is in English. Each document has one reader and one role: README and PRODUCT for users, `docs/usage/` for users and agent builders, `docs/design/` for product positioning and the requirements contract, ARCHITECTURE and `docs/technical/` for developers and operators. README, PRODUCT, ARCHITECTURE, `docs/design/`, `docs/technical/` and `docs/usage/` describe only the current state. Dated evidence, rationale and history belong in `docs/eval/` and `docs/adr/`. When behavior changes, update the document whose reader needs it rather than appending notes elsewhere.
-
-## Local development
-
-Use Node.js 24 and npm 11 (`packageManager` in package.json). Install with `npm ci`; do not update dependencies or the lockfile without a relevant requirement. The local stack requires Docker Compose.
+After those prerequisites are ready, install dependencies and start the local PostgreSQL, API and worker stack. The smoke command requires the bearer-token environment variables above:
 
 ```sh
 npm ci
@@ -52,18 +14,28 @@ sh scripts/local.sh start
 sh scripts/local.sh smoke
 ```
 
-The first start generates only database and local worker/storage secrets in `.env.local`, starts pinned PostgreSQL with pgvector, applies migrations, configures least-privilege roles, and starts the API and private worker with task and scheduler fixtures. Configure the external Gate issuer, three resource clients, exact resource audiences and allowed OAuth clients in `.env.local` before starting the API; there is no Lore browser app or callback setting. Ports bind to localhost only: the API at `http://localhost:18080` (OpenAPI at `/openapi.json`) and PostgreSQL at `127.0.0.1:55433`. The repository does not issue local bearer tokens; provide short-lived Gate tokens for the API, MCP read and MCP write resources through the `LOCAL_*_BEARER_TOKEN` variables used by smoke tools. `stop` keeps the database, keys, deletion ledger and artifacts; `reset` deletes this project's volumes and `.env.local` after confirmation. Failure injection, restore reconciliation and other operations are in [local operations](technical/local-operations.md).
+Lore does not issue those tokens or provide a local login page. The start script creates local-only storage credentials, applies migrations and configures the database roles. The API listens on localhost at port 18080; PostgreSQL listens on 127.0.0.1:55433. The stack and recovery commands are documented in [local operations](technical/local-operations.md).
 
-## Acceptance and release
+## Verify a code change
 
-For code changes run `npm run verify:local`: build, migrations twice, typecheck, lint, format check, unit tests, the required PostgreSQL integration suite, OpenAPI synchronization, secret scan and dependency audit. It fails when the integration database is missing.
+For code changes, `npm run verify:local` runs build, migrations, typecheck, lint, formatting, unit tests, the required real-PostgreSQL integration suite, OpenAPI synchronization, secret scanning and dependency audit. It fails if the integration database is unavailable. `sh scripts/local.sh acceptance` adds MCP client smoke checks, forced-failure recovery, a deterministic 231-case evaluation, mixed-load smoke and restart persistence. Local deterministic providers exercise code paths; they do not measure hosted extraction quality or broad semantic recall quality.
 
-```sh
-npm ci
-npm run build
-npm run verify:local
-```
+Cloud verification needs separate hosted evidence. The API-only authentication correction was deployed on 2026-10-19; the API is reached over public HTTPS and requires a Gate bearer token for protected data, while the worker remains private. Positive hosted MCP memory retrieval with a real user remains unverified, so local checks do not establish hosted client acceptance, production SLOs, managed database recovery or scale. See [deployment](technical/deployment.md), the [correction record](eval/api-only-gate-auth-correction-20261019.md) and the [cloud verification register](eval/cloud-verification.md).
 
-`sh scripts/local.sh acceptance` reruns all of that on the Compose stack and adds MCP client smokes, recovery with forced failures, the deterministic 231-case evaluation, a mixed-load smoke and restart persistence. `LOAD_COUNT`, `LOAD_CONCURRENCY`, `LOAD_EVIDENCE_PER_MEMORY`, `LOAD_RECALL_PERCENT` and `LOAD_CHANGES_PERCENT` tune the load. Reports go to `var/`, which git ignores. CI runs the PostgreSQL contract job in [local-contract.yml](../.github/workflows/local-contract.yml).
+For documentation-only changes, check the changed pages' relative file and heading links, run `npm run secret:scan`, and run `git diff --check`. A documentation check does not establish runtime behavior.
 
-Documentation-only changes need content and link checks, not claims of runtime acceptance. Cloud releases follow [deployment](technical/deployment.md): immutable digests, additive migration 0042, preserved existing identity and ledger state, the unchanged private API/worker IAM boundary, verified Gate resource and TLS configuration, and a release record that binds source, artifact, revision and actual results. Local results never establish hosted behavior or production SLOs.
+## Where to change a contract
+
+| Concern | Primary document or source |
+| --- | --- |
+| User value, examples and access prerequisites | [README](../README.md), [Product](../PRODUCT.md), [use cases](usage/use-cases.md), [client access](usage/sign-in.md) |
+| Product positioning and claims | [Product design](design/product.md) |
+| Required behavior and measurable service targets | [Product requirements](design/requirements.md) |
+| Service responsibilities and data flow | [Architecture](../ARCHITECTURE.md), [memory system](technical/memory-system.md) |
+| Memory schema, authority, time, transactions and RLS | [Data model](technical/data-model.md), `packages/domain/`, `packages/db/` |
+| Recall and Context Pack behavior | [Memory system](technical/memory-system.md), `packages/recall/` |
+| REST/MCP operations and errors | [MCP/API contract](technical/mcp-api.md), [OpenAPI](api/openapi.json) |
+| Runtime, identity and operator procedures | [Infrastructure](technical/infrastructure.md), [security](technical/security.md), [deployment](technical/deployment.md), [infrastructure runbook](technical/infrastructure-runbook.md), [identity cutover](technical/identity-cutover.md), [local operations](technical/local-operations.md) |
+| Delivery status and evidence | [Development plan](DEVELOPMENT_PLAN.md), [dated evaluation records](eval/), [ADRs](adr/) |
+
+Keep user pages focused on what someone can do and expect. Keep implementation behavior in architecture and technical references. Keep dated observations in evaluation records and the reasoning for a decision in an ADR; do not turn an old test result into a current product guarantee.

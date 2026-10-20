@@ -1,6 +1,6 @@
 # Syntoria Lore product requirements
 
-This document is the product contract for Release 1: the functional requirements, the end-to-end acceptance contracts and the service targets that implementation and verification are measured against. Positioning and claim boundaries are in [product design](product.md); current implementation and evidence status is in [PRODUCT](../../PRODUCT.md#scope-and-evidence) and the [cloud verification register](../eval/cloud-verification.md). Requirement IDs are stable and are referenced by the [local acceptance record](../eval/local-acceptance.md) and the [development plan](../DEVELOPMENT_PLAN.md).
+This document is the product contract for Release 1: the functional requirements, end-to-end acceptance contracts and service targets that implementation and verification are measured against. Positioning and claim boundaries are in [product design](product.md); the user-facing product explanation is in [PRODUCT](../../PRODUCT.md). These requirements are targets, not evidence that the targets have been met. Dated local and hosted results are in the [evaluation records](../eval/), and delivery status is summarized in the [development plan](../DEVELOPMENT_PLAN.md). Requirement IDs are stable and are referenced by the [local acceptance record](../eval/local-acceptance.md).
 
 ## Product principles
 

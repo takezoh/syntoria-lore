@@ -1,56 +1,59 @@
-# Build an agent or workflow on Syntoria Lore
+# Build an agent or workflow with Lore
 
-Lore is long-term memory with evidence for the user's authorized AIs. An agent remembers and recalls through REST or Remote MCP; Lore attributes, versions and governs what it stores. Your agent decides when to remember or recall, how to interpret a Context Pack and what to do next. Start with the existing tools and a clear permission boundary; Lore does not need an agent-specific integration.
+Lore gives an authorized AI access to the same versioned, evidence-linked memories through REST and Remote MCP. The client chooses when to remember or recall, interprets the result and decides what to do. Lore checks authority and source rights, preserves revisions and provides the evidence needed to assess a returned memory.
 
-## Find tools and schemas
+## Connect with the right authority
 
-| You need | Start here |
+Gate owns sign-in and OAuth approval. A client needs a bearer token for the exact resource it calls: REST, `/mcp/read` or `/mcp/write`. An operator must also map the existing Gate identity and client to an existing Lore user and principal; current grants further limit scopes and capabilities. Lore has no login page or public self-service registration flow. Its current access path depends on operator-configured resources and identity bindings.
+
+`admin` is an internal capability attached to a personal-account grant. It is not a separate service administrator account. Some operations also require the authenticated actor to be the user, even when a client has broad `admin` capability. See [client access](sign-in.md) for the user-facing prerequisites and [API authorization](../technical/mcp-api.md#entry-points-and-authorization) for the exact rules.
+
+For hosted use, ask the service operator to configure the exact resource, client binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [deployment record](../eval/api-only-gate-auth-correction-20261019.md).
+
+## Discover the available tools
+
+For MCP, send `initialize` and then `tools/list` to the configured endpoint. Use each advertised tool's `inputSchema`; the deployment can expose a different version from this checkout. REST request and response shapes are in the served `/openapi.json` and the checked-in [OpenAPI document](../api/openapi.json).
+
+| Need | Start with |
 | --- | --- |
-| Tools available to a connection | MCP `initialize` followed by `tools/list` on `/mcp/read` or `/mcp/write` |
-| Input JSON Schema | Each discovered tool's `inputSchema` |
-| REST request and response shapes | The served `/openapi.json`, or the checked-in [OpenAPI document](../api/openapi.json) |
-| Operation semantics, errors and recovery | [MCP and HTTP API contract](../technical/mcp-api.md) |
-| Memory kinds, authority, time and lifecycle | [Data model](../technical/data-model.md) |
+| Read-only workflow | `/mcp/read`: `recall_memories`, `get_memory`, `get_changes` and status tools |
+| Write-capable workflow | `/mcp/write`: `remember_memory`, `capture`, ChangeSets, reviews, Forget, feedback and portability tools |
+| Operation meanings and errors | [MCP and HTTP API contract](../technical/mcp-api.md) |
+| Memory evidence, authority and retrieval bounds | [Memory system](../technical/memory-system.md) |
 
-The checked-in documents describe this source version. Before execution, inspect the connected deployment's tool list and reconcile any difference. Documentation is not evidence of a connection, a grant or a successful operation.
+REST and MCP use the same domain services. Do not assume that a connected client has permissions merely because its tool list contains an operation; authorization is checked on each request.
 
-## Connect and authorize access
+## Remember and capture
 
-Connecting AI clients to the hosted service is not open yet. Gate-only API and worker revisions are deployed, and authorization initiation reaches GitHub, but the TLS certificate and explicit public API invocation approval are pending. A real user login, consent and authenticated hosted API/MCP access have not been accepted. Develop and test against the [local stack](../technical/local-operations.md) with operator-supplied Gate tokens or the actual local Gate integration harness; the repository does not issue local bearer tokens. See the [production release record](../eval/gate-production-release-20261018.md).
+For a direct user request, send `remember_memory` with the requested kind, statement, evidence and an idempotency key. An explicit write is synchronous and its response says whether the record committed. The authority and lifecycle are derived from the authenticated actor and request policy. A non-user client cannot label its own output as the user's decision; its write can remain a candidate. Do not convert an inference into the user's words.
 
-When enabled, a client obtains an opaque Gate OAuth access token for exactly one resource—the REST API, `/mcp/read` or `/mcp/write`—through authorization code with PKCE S256, using an explicitly registered client and exact redirect URI. Dynamic client registration and password grants are not offered. An operator separately maps the exact Gate issuer, immutable subject and client ID to an existing user/principal, scope list and capability ceiling. Current local grants further limit access on every request. A read-only connection has no write tools; a token for one resource is rejected by the others. Never pass a user or scope you were not granted, and never put tokens in URLs or logs.
+For a source workflow, the user must first enable a source with consent. The client sends observations through `capture` with the source revision, stable `operation_id` and `Idempotency-Key`, then reads `capture_status` for the returned job. Lore processes submitted observations; it does not fetch complete chat histories or crawl external documents itself.
 
-| Capability | Typical use |
-| --- | --- |
-| read | Recall, get a memory, follow the change feed, read job, Forget and export status |
-| write | Remember, capture, propose and commit change sets, submit feedback |
-| admin (user) | Enable sources, list and decide reviews, Forget, change source rights and grants, set retention, export and import |
+The worker validates each proposal against exact source evidence and checks existing memories. It can commit only a narrow class of uncontested observed or inferred facts that have no unresolved match. Duplicate facts can add evidence to one existing memory. Decisions, preferences, conflicts, uncertain outputs and ambiguous matches can be held for user review. An episode must remain one complete condition/action/outcome experience. These are current server rules, not decisions an agent may bypass by changing its prompt.
 
-## Compose a workflow
+When a review is available, read the review and its expected revision first. A user decision can accept the curator proposal with its attribution or record a separate user statement. The second choice does not independently verify a technical or third-party claim.
 
-Decide what triggers the workflow, which scopes it may read, which writes are authorized and what the user receives. Execution timing, external-source access and notifications belong to your agent's environment.
+## Recall before answering
 
-**Remember what the user states.** When the user explicitly asks to remember or correct something, call `remember_memory` (or a change set for a correction) with the user's words as evidence. It commits synchronously, and the next recall sees it. Do not label your own inference as the user's decision; Lore derives authority from the authenticated principal and evidence, not from your arguments.
+Call `recall_memories` with the question, authorized scopes, a mode, a result limit and a budget that fits the caller's context. Use `precise` for exact statements, subject names and aliases; `contextual` for relevant current background; `historical` with `valid_at` or `known_at` for a past view; `exploratory` for related memories including candidates; and `changes` for changed records. `changes` is a separate change-oriented search mode; use `get_changes` with a saved cursor when the workflow needs the ordered feed.
 
-**Capture conversations and work.** For ongoing material, the user first enables the source with consent. Then send observations with `capture`, a stable `operation_id` and an `Idempotency-Key`. Capture returns a job ID; poll `capture_status`. Safe facts may be committed automatically; preferences, decisions, conflicts and anything requiring reconciliation are held for the user's review. Keep an episode's condition, action and outcome together in one observation.
+Present a memory with its attribution and evidence, distinguish assertions from observations, and report insufficiencies or contested items. `unknown` means the bounded query found no supported result; it does not prove the information was never stored. Search limits, score fusion, index lag and Context Pack size are detailed in [retrieval and Context Packs](../technical/memory-system.md#retrieval-and-context-packs).
 
-**Recall before you answer.** Call `recall_memories` with the user's question, a mode and a `token_budget` that fits your context. Use `precise` for names, decisions and IDs, `contextual` for current policy and background, `historical` with `valid_at` or `known_at` for questions about the past, `exploratory` for related experience and hypotheses, and `changes` for what changed. Present memories with their attribution; report contradictions and unknowns instead of filling them in.
+## Correct, give feedback and forget
 
-**Correct with a change set.** Use `propose_changeset` and `commit_changeset` with the memory's `expected_revision`: SUPERSEDE when something changed, RETRACT when it was wrong, CORROBORATE or REFINE when new evidence supports or sharpens it, CONTEST or RELATE to record conflicts and links. A client cannot rewrite an user-attributed memory; propose instead and let the user decide.
+To revise a known memory, read its current revision and use `propose_changeset` followed by `commit_changeset` with that `expected_revision`. Use `SUPERSEDE` when it changed over time, `RETRACT` when it was wrong, `CORROBORATE` to add evidence, `REFINE` to produce a revision, and `CONTEST` or `RELATE` to record an evidenced dispute or link. A stale revision returns `revision_conflict`; recall again and reconcile before proposing. Only the user may supersede or retract, and non-user clients cannot refine an user-attributed memory.
 
-**Forget on request.** Forget is an user operation. Call `forget_memory` with a selector and reason, then follow `forget_status` until purge completes. Do not keep your own copy of forgotten content.
+`submit_feedback` accepts `useful`, `incorrect`, `stale` or `not_relevant` and queues reassessment. It does not change the memory by itself and should not be treated as a truth vote. Forget is a user operation: call `forget_memory`, keep its request ID and follow `forget_status` until purge completes. Suppression takes effect immediately; the worker handles physical deletion. Never retain forgotten content in an agent cache.
 
-## Continue from memory
+## Keep clients in sync and recover safely
 
-Each conversation or workflow may hold an older view of the memory. Before relying on retained context, recall again or follow the change feed. To follow changes, keep the cursor from `get_changes` with your agent's own state and advance it only after you have applied a page. The cursor is opaque and bound to your principal, scopes and their authorization epochs; when your grant changes or the cursor expires (`cursor_expired`), recall afresh and restart from a new cursor. Deleted memories appear as content-free tombstones: drop any cached copy you hold.
+Each workflow should keep its own `get_changes` cursor. Advance it only after applying the complete page. If the cursor expires or authorization changes, discard that position, recall current state and start a new feed. Deletion events have no content, so remove any corresponding local copy.
 
-Reading a memory does not confirm it, mark it as read by the user or make it true. Usage feedback (`submit_feedback`: useful, incorrect, stale, not relevant) queues the memory for reassessment; it never promotes a memory to truth.
+- Keep the exact tool name, idempotency key and full arguments for each write until its outcome is known. After a lost response, resend the same request or read the job status; do not invent a new key.
+- `revision_conflict` means re-read and reconcile before writing again.
+- `idempotency_conflict` means a key was reused with a different request body; fix the caller.
+- `401` means the token is absent, expired or for another resource. Obtain the matching Gate token.
+- `403` means the identity or operation is outside its current binding, grant or source rights. Do not retry with broader user arguments.
+- Retry a retryable `503` after a delay. `restore_not_ready` means protected reads remain closed while deletion reconciliation is incomplete.
 
-## Recover safely
-
-- Keep the exact tool name, `operation_id`, idempotency key and full arguments of every write until you have its result. On a lost response, resend the identical request or look up the job; never retry with a fresh ID.
-- A `revision_conflict` means someone changed the memory: recall it again, reconcile, and propose against the new revision.
-- `idempotency_conflict` means the same key was used with a different body; it is a bug in the caller, not a transient error.
-- `restore_not_ready` and `503` responses are retryable after a delay; protected reads stay closed while a restored database reconciles deletions.
-
-These patterns describe workflow designs, not installed schedules or evidence that a particular host is connected.
+These patterns describe how a client can use the service. They do not install a schedule, create a client registration, issue a grant or prove that a particular hosted client is connected.

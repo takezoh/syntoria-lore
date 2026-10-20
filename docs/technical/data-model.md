@@ -1,6 +1,6 @@
 # Data model and consistency
 
-Neon PostgreSQL is the durable store. This document defines the logical model and the persistence contract. Migration SQL in [packages/db/migrations](../../packages/db/migrations) is authoritative for exact columns, constraints, grants and policies; [packages/contracts](../../packages/contracts/src/index.ts) defines request shapes.
+PostgreSQL is the durable store. This document defines the logical model and persistence contract. The [memory-system reference](memory-system.md) explains the flow from observation through recall; migration SQL in [packages/db/migrations](../../packages/db/migrations) is authoritative for exact columns, constraints, grants and policies, and [packages/contracts](../../packages/contracts/src/index.ts) defines request shapes.
 
 ## Memory model
 
@@ -19,7 +19,7 @@ A **memory** is a reusable unit of meaning interpreted from observations. Its ki
 
 ### Authority and attribution
 
-Authority is derived from the authenticated principal, the speaker recorded in the input and trusted source metadata. An `authority` value in model output is ignored. The user may assert, refine, supersede and retract. Memories authored by a client, connector or the curator remain candidates with their own attribution until the user confirms them; a client cannot rewrite an user-attributed memory. An user confirmation is a separate record: confirming a third party's technical claim does not turn it into a verified fact or change the original speaker. Imported memories are attributed to the importing principal with `third_party_claim` authority; the original user, actor and authority survive only as provenance.
+Speaker metadata and trusted source metadata are preserved as evidence and attribution; they do not determine authority by themselves. Core derives authority from the authenticated actor kind, memory kind and epistemic status. A user-authored decision or preference receives `user_decision` or `user_preference`; other user-authored kinds receive `user_assertion`. A non-user actor, or any proposal with `proposed` status, receives `ai_proposal`. Authority from model output is ignored. Public non-user writes remain candidates; the worker's narrow, validated auto-capture path can activate an eligible fact through a separate internal policy. A client cannot rewrite a user-attributed memory. A controlled user-review operation can record a separate user statement: confirming a third party's technical claim does not turn it into a verified fact or change who originally said it. Imported memories are attributed to the importing principal with `third_party_claim` authority; the original user, actor and authority survive only as provenance.
 
 ### Time
 
@@ -32,7 +32,7 @@ A change set contains 1–64 operations on one scope. Each operation that target
 | Operation | Effect |
 | --- | --- |
 | CREATE | New memory with at least one evidence item |
-| CORROBORATE | Adds supporting evidence to the current revision |
+| CORROBORATE | Adds supporting evidence to the same memory identity by committing a new revision with its own evidence set |
 | REFINE | New revision with a sharper statement, context, interval or status, plus evidence |
 | SUPERSEDE | Closes the current interval and creates the replacement |
 | CONTEST | Marks a contradiction with a reason and evidence |
@@ -86,7 +86,7 @@ Per-scope serialization costs write throughput; its effect at the planned worklo
 
 ## Search indexes
 
-Search indexes are derived data. `pg_trgm` supports lexical and Japanese short-term matching; pgvector stores embeddings per model, version and dimension, and vectors from different models are never compared. A model change uses a new model identifier and index generation. Index updates verify the memory version before applying, so an old embedding never overwrites a newer one. The committed revision and the indexed revision are tracked separately, and recall consults the source of truth so that index lag never hides a committed memory.
+Search indexes are derived data. `pg_trgm` supports lexical matching; pgvector stores embeddings per model, version and dimension, and vectors from different models are never compared. A model change uses a new model identifier and index generation. Index updates verify the memory version before applying, so an old embedding never overwrites a newer one. The committed revision and the indexed revision are tracked separately. Exact and lexical searches can surface an unindexed committed record, while a semantically related query may miss it until indexing catches up. Candidate bounds, rank fusion and the Context Pack coverage field are described in [retrieval and Context Packs](memory-system.md#retrieval-and-context-packs).
 
 ## Deletion, retention and restore
 
