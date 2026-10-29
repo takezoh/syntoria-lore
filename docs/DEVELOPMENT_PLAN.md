@@ -1,6 +1,6 @@
-# Thymesis — Development Plan
+# Syntoria Lore development plan (historical)
 
-> Historical plan: sections below are dated implementation and acceptance snapshots, not a current deployment report. Section 0.3 preserves the 2026-10-17 pre-Gate evidence. As of 2026-10-19, the API-only authentication correction is deployed: the API is reachable over public HTTPS, protected operations require a Gate bearer token, and the worker remains private. Positive hosted MCP memory retrieval with a real user remains unverified, and operational Release 1 acceptance is still open. Current contracts and gates are in [deployment](technical/deployment.md), [identity cutover](technical/identity-cutover.md) and the [API-only correction record](eval/api-only-gate-auth-correction-20261019.md).
+> Historical plan, written when the service was named Thymesis: sections below are dated implementation and acceptance snapshots, not a current deployment report. Section 0.3 preserves the 2026-10-17 pre-Gate evidence. As of 2026-10-19, the API-only authentication correction is deployed: the API is reachable over public HTTPS, protected operations require a Gate bearer token, and the worker remains private. Gate dynamic client registration and Lore subject admission were released on 2026-10-20. Positive hosted MCP memory retrieval with a real user remains unverified, and operational Release 1 acceptance is still open. Current contracts and gates are in [deployment](technical/deployment.md), [identity cutover](technical/identity-cutover.md), the [API-only correction record](eval/api-only-gate-auth-correction-20261019.md) and the [DCR production release record](eval/dcr-production-release-20261020.md).
 
 - Version: 1.0
 - Date: 2026-10-14
@@ -12,11 +12,11 @@
 
 ## 0. Delivery outcome and rule
 
-**Goal:** 独立した長期記憶サービスThymesisを、Personal AIの実利用に供する。会話・資料・経験の取り込み、自動整理、根拠付き想起、訂正、差分取得、忘却、復旧までを一貫して実装する。
+**Goal:** Put the independent long-term memory service (then named Thymesis, now Syntoria Lore) into real use by Personal AI. Implement the whole path consistently: capture of conversations, documents and experience, automatic organization, evidence-backed recall, correction, change retrieval, Forget and recovery.
 
-**Not a technology evaluation project.** **GCP Cloud Run + Cloud Tasks + Cloud Scheduler + Neon PostgreSQL（pgvector/pg_trgm）**を採用ベースラインとし、各段階で利用価値のある縦断経路を完成させる。未実装の部分を「完了」に見せない。インフラの選定理由は[ADR-0001](adr/0001-gcp-cloud-run-neon.md)を正とし、比較PoCを無期限に繰り返さない。
+**Not a technology evaluation project.** Adopt **GCP Cloud Run + Cloud Tasks + Cloud Scheduler + Neon PostgreSQL (pgvector/pg_trgm)** as the baseline and complete an end-to-end path that delivers usable value at each stage. Do not present unimplemented parts as "done". [ADR-0001](adr/0001-gcp-cloud-run-neon.md) is the authority for the infrastructure choice; do not repeat comparison PoCs indefinitely.
 
-Release 1のDoneは **[design/requirements.md](design/requirements.md) のFR群とAC-01～13の達成**。Phase 1完成を製品完成と呼ばない。設計段階では決めた契約をOpenAPI/DDL/テストへ落とし込み、変更には根拠付きADRを要求する。
+Release 1 is done when **every FR and AC-01–13 in [design/requirements.md](design/requirements.md) is achieved**. Do not call Phase 1 completion product completion. During design, turn decided contracts into OpenAPI, DDL and tests, and require an evidence-backed ADR for changes.
 
 ## 0.1 Current local implementation snapshot (2026-10-14)
 
@@ -66,15 +66,15 @@ At the time of this 2026-10-17 record, the former identity service had an approv
 
 ### Milestone gates (delivery order)
 
-| Gate                         | Outcome                                                 | Blocking acceptance                       |
-| ---------------------------- | ------------------------------------------------------- | ----------------------------------------- |
-| **G0 Contract & skeleton**   | 再現可能な開発環境、OpenAPI、DDL、認証境界のテスト雛形  | lint/typecheck/test/migration/CIが通る    |
-| **G1 Reliable memory core**  | Sync Remember/Recall、Evidence、Version、認可、変更差分 | 時間・出典・Scope・競合・Cursorの回帰試験 |
-| **G2 Automatic operation**   | Capture→Curator→ChangeSet→Commit、Queue、Hybrid Recall  | 自動取得・重複・矛盾・障害復旧のE2E       |
-| **G3 Governance complete**   | Forget、Source ACL、Export/Import、MCP、定期再評価      | 不正アクセス/忘却再出現ゼロ、他AIから利用 |
-| **G4 Production acceptance** | 品質/性能/コスト/運用監視/バックアップ/リリース         | design/requirements.mdの品質目標とRunbook検証 |
+| Gate                         | Outcome                                                                     | Blocking acceptance                                                 |
+| ---------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **G0 Contract & skeleton**   | Reproducible development environment, OpenAPI, DDL and authentication-boundary test scaffolds | lint/typecheck/test/migration/CI pass                               |
+| **G1 Reliable memory core**  | Sync Remember/Recall, Evidence, Version, authorization, change feed         | Regression tests for time, provenance, Scope, conflicts and Cursor  |
+| **G2 Automatic operation**   | Capture→Curator→ChangeSet→Commit, Queue, Hybrid Recall                      | E2E for automatic capture, duplicates, contradictions and failure recovery |
+| **G3 Governance complete**   | Forget, Source ACL, Export/Import, MCP, periodic reassessment                | Zero unauthorized access and zero forgotten-content resurrection; use from other AIs |
+| **G4 Production acceptance** | Quality, performance, cost, operational monitoring, backup and release      | Quality targets in design/requirements.md and runbook verification  |
 
-マイルストーンは**機能を切り捨てるためのMVP区分ではなく、依存順序に沿った検収ゲート**とする。
+Milestones are **acceptance gates in dependency order, not MVP cuts for dropping functionality**.
 
 ### Epic dependency diagram
 
@@ -140,17 +140,17 @@ thymesis/
 
 Technology guidelines:
 
-- TypeScript strict mode、monorepo package workspaces、Vitest、ESLint/formatter、OpenAPI型生成、JSON Schema/Zod等の厳密バリデーション。
-- Drizzle等の型付きクエリ/マイグレーションを基準とし、pgvector・pg_trgm・RLSなどはレビュー可能な明示SQLを併用。すべての動的値をパラメータ化。
-- Local PostgreSQL (Docker) + Node.js Cloud Run同等のHTTPサーバー + Cloud Tasks/Scheduler stub + fake LLM。CIで実際のPostgreSQLに対してmigration/RLS/transactionを試す。SQLite代替では認可・並列制御を評価しない。Google IAM/OIDCはstagingで実結合試験する。
-- CIから本番データを読ませない。テスト用の架空データと匿名化された実例だけを用いる。
-- Dev/Staging/Prodは環境単位で分離し、Cloud Runの公開APIと非公開Worker/Dispatcherを独立デプロイする。Tasks/Schedulerの呼出しはService Account OIDC+IAM、Neon資格情報はSecret Managerで管理する。
-- Cloud Tasks HTTPリクエストの最大期限は30分。長い処理はcheckpoint分割またはCloud Run Jobsに委任し、状態をDBに保存する。
-- **Cloud TasksにネイティブDLQがあると仮定しない**。失敗ジョブ、次回リトライ時刻、attempt数をPostgreSQLで追跡し、Schedulerで回収する。
+- TypeScript strict mode, monorepo package workspaces, Vitest, ESLint and a formatter, OpenAPI type generation, and strict validation such as JSON Schema or Zod.
+- Use typed queries and migrations such as Drizzle as the baseline, alongside reviewable explicit SQL for pgvector, pg_trgm and RLS. Parameterize every dynamic value.
+- Local PostgreSQL (Docker), a Node.js HTTP server equivalent to Cloud Run, Cloud Tasks/Scheduler stubs and a fake LLM. CI exercises migrations, RLS and transactions against real PostgreSQL. Do not evaluate authorization or concurrency control on a SQLite substitute. Run real integration tests of Google IAM/OIDC in staging.
+- CI never reads production data. Use only fictional test data and anonymized real examples.
+- Separate Dev, Staging and Prod by environment, and deploy the public Cloud Run API and the private Worker/Dispatcher independently. Tasks and Scheduler calls use Service Account OIDC and IAM; Neon credentials live in Secret Manager.
+- A Cloud Tasks HTTP request has a maximum deadline of 30 minutes. Split long work with checkpoints or delegate it to Cloud Run Jobs, and store its state in the database.
+- **Do not assume Cloud Tasks has a native DLQ.** Track failed jobs, next retry times and attempt counts in PostgreSQL, and recover them with Scheduler.
 
 ## 3. Epic breakdown (issue-ready)
 
-各Taskは独立Issueにしてもよい粒度とし、受け入れ条件を併記する。
+Each task is sized so it can become its own issue, and lists its acceptance conditions.
 
 ### EP-00 — Foundation, CI/CD and contracts [G0]
 
@@ -158,17 +158,17 @@ Dependencies: none.
 
 | Task                                  | Deliverable / acceptance                                                                                                                                                     |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **T-001 Repository bootstrap**        | packages/appsとWorkspace、TypeScript strict、lint/typecheck/test。開発手順（[development](development.md)）と環境変数テンプレート。実装・検証済み（独立レビュー中、[evidence](eval/t001-bootstrap.md)） |
-| **T-002 Local infrastructure**        | PostgreSQL with pgvector/pg_trgm、Cloud Tasks/Scheduler stub、fake LLM、API/WorkerのローカルHTTP実行。ワンコマンド起動・停止                                                 |
-| **T-003 CI quality pipeline**         | push/PRで静的検査、ユニット・integration・migration検証、secret scan、依存監査                                                                                               |
-| **T-004 Environment/deployment**      | dev/staging/prod分離、Cloud Run API/Worker、Cloud Tasks、Cloud Scheduler、Neon、Secret Manager、IAM、LoggingのIaCと手順                                                      |
-| **T-005 API contract**                | OpenAPI v1、エラー型、request_id、idempotency、cursor、scopeの型定義                                                                                                         |
-| **T-006 ADR and release discipline**  | 技術/権限/データ変更を記録するADRテンプレ、migration review、rollback手順                                                                                                    |
-| **T-007 Test fixtures**               | 改名/古い方針/相反する主張/経験/PII/攻撃文例を含むfixtureセット                                                                                                              |
-| **T-008 Container build and release** | 再現可能なNode.jsコンテナ、Artifact Registry、CIからGCPへの短期認証（Workload Identity Federation）、Cloud Run canary/rollback                                               |
-| **T-009 Internal identity contract**  | Cloud Tasks/Schedulerの専用Service Account、OIDC audience、Cloud Run Invoker限定、内部API用負荷と失敗経路の検証                                                              |
+| **T-001 Repository bootstrap**        | packages/apps workspaces, TypeScript strict, lint/typecheck/test. Development instructions ([development](development.md)) and an environment-variable template. Implemented and verified (under independent review, [evidence](eval/t001-bootstrap.md)) |
+| **T-002 Local infrastructure**        | PostgreSQL with pgvector/pg_trgm, Cloud Tasks/Scheduler stubs, fake LLM and local HTTP execution of the API and Worker. One-command start and stop                          |
+| **T-003 CI quality pipeline**         | Static checks, unit, integration and migration verification, secret scan and dependency audit on push/PR                                                                    |
+| **T-004 Environment/deployment**      | IaC and procedures for dev/staging/prod separation, Cloud Run API/Worker, Cloud Tasks, Cloud Scheduler, Neon, Secret Manager, IAM and Logging                               |
+| **T-005 API contract**                | OpenAPI v1 and type definitions for errors, request_id, idempotency, cursor and scope                                                                                       |
+| **T-006 ADR and release discipline**  | ADR template for technical, permission and data changes; migration review; rollback procedure                                                                               |
+| **T-007 Test fixtures**               | Fixture set including renames, outdated policies, conflicting claims, experiences, PII and attack text                                                                     |
+| **T-008 Container build and release** | Reproducible Node.js container, Artifact Registry, short-lived CI authentication to GCP (Workload Identity Federation), Cloud Run canary/rollback                           |
+| **T-009 Internal identity contract**  | Dedicated Cloud Tasks/Scheduler service accounts, OIDC audience, restricted Cloud Run Invoker, and verification of internal API load and failure paths                     |
 
-**Gate G0:** 本番権限なしでCI green。空DB→最新版schema migration→rollback/restore rehearsalが再現可能。OpenAPIサンプルがschema validationを通る。
+**Gate G0:** CI is green without production permissions. Empty database → latest schema migration → rollback/restore rehearsal is reproducible. OpenAPI samples pass schema validation.
 
 ### EP-01 — Identity, scope and authority [G0→G1]
 
@@ -176,14 +176,14 @@ Dependencies: EP-00.
 
 | Task                               | Deliverable / acceptance                                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **T-010 OAuth integration**        | 準拠したAuthorization Serverを選び、JWT/OAuth introspection・issuer/audience/expiry/scope検証                           |
-| **T-011 Principals and scopes**    | User/Principal/Scope/Grantとtoken capabilityを設計、read/write/adminを分離                                             |
-| **T-012 App authorization**        | すべてのエンドポイントでOwner×Scope×Operation×Source rightsの検査                                                       |
-| **T-013 PostgreSQL RLS**           | RLS enable、最小権限ロール、SET LOCAL transaction context、pool leak回帰試験                                            |
-| **T-014 Audit and abuse controls** | 秘密を残さない監査、rate limit、request size limit、認証エラー監視。GCP service-to-service IAMはOwner権限の代替ではない |
-| **T-015 Threat model**             | prompt injection、権限昇格、token forwarding、データ残存、service impersonationを列挙/対策                              |
+| **T-010 OAuth integration**        | Choose a compliant Authorization Server; verify JWT/OAuth introspection, issuer, audience, expiry and scope             |
+| **T-011 Principals and scopes**    | Design User/Principal/Scope/Grant and token capabilities, separating read, write and admin                              |
+| **T-012 App authorization**        | Check Owner × Scope × Operation × Source rights on every endpoint                                                       |
+| **T-013 PostgreSQL RLS**           | Enable RLS, least-privilege roles, SET LOCAL transaction context, connection-pool leak regression tests                 |
+| **T-014 Audit and abuse controls** | Audit without secrets, rate limits, request size limits, authentication-error monitoring. GCP service-to-service IAM does not replace Owner authority |
+| **T-015 Threat model**             | Enumerate and mitigate prompt injection, privilege escalation, token forwarding, data remanence and service impersonation |
 
-**Acceptance:** 非許可ユーザー/クライアントでの全経路403/404。コネクション再利用後にも前requestのScopeが見えない。Client A/Bの委任範囲が交差しない。
+**Acceptance:** Every path returns 403/404 for unauthorized users and clients. A reused connection never exposes the previous request's Scope. The delegated ranges of Client A and B do not overlap.
 
 ### EP-02 — Data schema and migrations [G0→G1]
 
@@ -191,16 +191,16 @@ Dependencies: EP-00, EP-01 for final RLS.
 
 | Task                                        | Deliverable / acceptance                                                                                                 |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **T-020 Schema migration v1**               | users/scopes/subjects/sources/observations/evidence/episodes/memories/versions/relations/changesets/change_log/outbox等 |
-| **T-021 Constraints**                       | FK、UNIQUE、scope invariant、valid-time検査、不可変Version、別名の重複と多値制約                                         |
-| **T-022 Search columns and indexes**        | scope/date/status/subject/relations/pg_trgm、Embedding model/dimension別管理                                             |
-| **T-023 Temporal semantics**                | valid_from/toとrecorded_at/superseded_atを実装。未知・遡及訂正のfixture                                                  |
-| **T-024 Provenance model**                  | Evidence locator、snippet rights、independent source lineage。derived summaryの再証拠化を防止                            |
-| **T-025 Data dictionary**                   | 各カラム、機密性、更新権限、保持期間、Migration strategyを文書化                                                         |
-| **T-026 Migration safety**                  | Schema変更のforward/backfill/rollback、既存件数100万負荷を想定したロック時間試験                                         |
-| **T-027 Neon regional and operational fit** | 使用Neonリージョン/ホストとCloud Run配置地域を記録し、RTT・外部転送料金・TLS・pool limit・PITR/backupを測定/確認         |
+| **T-020 Schema migration v1**               | users/scopes/subjects/sources/observations/evidence/episodes/memories/versions/relations/changesets/change_log/outbox and related tables |
+| **T-021 Constraints**                       | FK, UNIQUE, scope invariants, valid-time checks, immutable Versions, alias duplicate and multi-value constraints         |
+| **T-022 Search columns and indexes**        | scope/date/status/subject/relations/pg_trgm; embeddings managed per model and dimension                                 |
+| **T-023 Temporal semantics**                | Implement valid_from/to and recorded_at/superseded_at, with fixtures for unknown and retroactive corrections            |
+| **T-024 Provenance model**                  | Evidence locator, snippet rights, independent source lineage; prevent derived summaries from becoming new evidence      |
+| **T-025 Data dictionary**                   | Document each column's sensitivity, update authority, retention period and migration strategy                           |
+| **T-026 Migration safety**                  | Forward/backfill/rollback for schema changes; lock-duration tests assuming a load of one million existing rows          |
+| **T-027 Neon regional and operational fit** | Record the Neon region/host and the Cloud Run region, and measure or confirm RTT, egress cost, TLS, pool limits and PITR/backup |
 
-**Acceptance:** 欠損・cross-scope Relation・不正時刻・削除済み参照などの破壊的変更を制約で拒否。migrationを再適用しても安全。
+**Acceptance:** Constraints reject destructive changes such as missing data, cross-scope relations, invalid times and references to deleted records. Reapplying migrations is safe.
 
 ### EP-03 — Memory Core / explicit Remember / ChangeSet [G1]
 
@@ -208,15 +208,15 @@ Dependencies: EP-01, EP-02.
 
 | Task                        | Deliverable / acceptance                                                       |
 | --------------------------- | ------------------------------------------------------------------------------ |
-| **T-030 Sync Remember**     | 明示的記憶・訂正を認証された入力と根拠に結び付け、同期確定                     |
-| **T-031 Revision and CAS**  | expected_revisionで楽観的排他。古い更新は409。silent lost updateゼロ           |
-| **T-032 ChangeSet engine**  | CREATE/CORROBORATE/REFINE/SUPERSEDE/CONTEST/RELATE/RETRACT/NO_OPのschemaと検証 |
-| **T-033 Atomic commit**     | MemoryVersion/Evidence/Relation/ChangeLog/Outboxの原子的更新。失敗時全rollback |
-| **T-034 Idempotency**       | actor+scope+key+payload hashによる重複防止、結果の再取得                       |
-| **T-035 Lifecycle & time**  | candidate/active/superseded/retracted/contested、過去時点照会の整合            |
-| **T-036 Memory detail API** | 根拠、時系列、Version、Subject aliasを認可後に取得                             |
+| **T-030 Sync Remember**     | Bind explicit memories and corrections to authenticated input and evidence, and commit them synchronously |
+| **T-031 Revision and CAS**  | Optimistic concurrency with expected_revision. Stale updates return 409. Zero silent lost updates |
+| **T-032 ChangeSet engine**  | Schemas and validation for CREATE/CORROBORATE/REFINE/SUPERSEDE/CONTEST/RELATE/RETRACT/NO_OP |
+| **T-033 Atomic commit**     | Atomic update of MemoryVersion/Evidence/Relation/ChangeLog/Outbox; full rollback on failure |
+| **T-034 Idempotency**       | Duplicate prevention by actor + scope + key + payload hash, with result retrieval |
+| **T-035 Lifecycle & time**  | candidate/active/superseded/retracted/contested, consistent past-time queries  |
+| **T-036 Memory detail API** | Retrieve evidence, timeline, Versions and Subject aliases after authorization  |
 
-**Acceptance:** 明示Remember→直後Get/Recallで一致、二重送信時1件、並列更新時にいずれか409、AI提案をOwner確定扱いにできない。
+**Acceptance:** An explicit Remember matches an immediate Get/Recall; a double submission yields one record; concurrent updates produce a 409 for one side; an AI proposal cannot be treated as an Owner decision.
 
 ### EP-04 — Change Feed / consistency / outbox [G1]
 
@@ -224,15 +224,15 @@ Dependencies: EP-03.
 
 | Task                                      | Deliverable / acceptance                                                                                                              |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **T-040 Scope offset locking**            | Scope別のrow lock付き連番をcommit transactionで発行。rollbackと並列書込試験                                                           |
-| **T-041 Opaque cursor**                   | tokenにscope集合/offset/auth_epoch/format versionを安全に内包。改竄拒否                                                               |
-| **T-042 Change API**                      | order/limit/page/next_cursor、削除Tombstone、再試行、Cursor期限切れ処理                                                               |
-| **T-043 Multi-scope sync**                | Scopeごとのcursor vector、権限変更時の無効化と再同期                                                                                  |
-| **T-044 Outbox dispatcher**               | PostgreSQL outbox→Cloud Tasks HTTP task（job_idのみ）へ重複安全に配送。Cloud Schedulerが未配送を回収、Cloud Run専用ハンドラはOIDC認証 |
-| **T-045 Index visibility**                | committed vs indexed revision、lag中の読み取りフォールバック                                                                          |
-| **T-046 Dispatcher leasing and recovery** | 複数Dispatcher間のclaim/lease、task送信後のDB更新失敗、cloud task重複作成、rollbackを検証                                             |
+| **T-040 Scope offset locking**            | Issue per-Scope sequence numbers under a row lock in the commit transaction; rollback and concurrent-write tests                      |
+| **T-041 Opaque cursor**                   | Safely encode the scope set, offset, auth_epoch and format version in the token; reject tampering                                     |
+| **T-042 Change API**                      | order/limit/page/next_cursor, deletion tombstones, retries, cursor expiry handling                                                     |
+| **T-043 Multi-scope sync**                | Per-Scope cursor vectors; invalidation and resynchronization on permission changes                                                     |
+| **T-044 Outbox dispatcher**               | Duplicate-safe delivery from the PostgreSQL outbox to Cloud Tasks HTTP tasks (job_id only). Cloud Scheduler recovers undelivered work; the dedicated Cloud Run handler authenticates with OIDC |
+| **T-045 Index visibility**                | Committed vs indexed revision, read fallback during lag                                                                                |
+| **T-046 Dispatcher leasing and recovery** | Verify claim/lease across multiple dispatchers, DB update failure after task submission, duplicate cloud task creation and rollback     |
 
-**Acceptance:** 2 writer×大量並列書込/rollback/pagination/reconnectでイベントの欠落・順序逆転がない。削除本文をイベントに載せない。
+**Acceptance:** Two writers with heavy concurrent writes, rollback, pagination and reconnection lose no events and never reorder them. Events never carry deleted content.
 
 ### EP-05 — Capture and source ingestion [G1→G2]
 
@@ -240,15 +240,15 @@ Dependencies: EP-02, EP-03, EP-04.
 
 | Task                               | Deliverable / acceptance                                                                                                                  |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **T-050 Capture API**              | Source metadata、speaker、event time、content locator、consent/scope、job_idを受理                                                        |
-| **T-051 Source adapters contract** | chat/document/tool-result/episodeの共通入力Schema。原本連携は疎結合                                                                       |
-| **T-052 Duplicate detection**      | source revision+location+content hash+operation IDで重複を吸収                                                                            |
-| **T-053 Cloud Tasks consumer**     | Private Cloud Run WorkerへOIDC認証付きHTTP taskを配送。accepted/processing/held/committed/failed、DB永続retry/backoff、Task重複時の冪等性 |
-| **T-054 Source access lifecycle**  | source revision、ACL失効通知、原本不存在、再取り込み方針                                                                                  |
-| **T-055 Backfill import**          | 旧会話/資料を過去時点として取り込み、現在の方針を上書きしない                                                                             |
-| **T-056 Provenance/audit**         | 原本確認できない場合の扱い、取り込み範囲の明示と追跡                                                                                      |
+| **T-050 Capture API**              | Accept source metadata, speaker, event time, content locator, consent/scope and job_id                                                     |
+| **T-051 Source adapters contract** | Common input schema for chat/document/tool-result/episode; loose coupling to original systems                                              |
+| **T-052 Duplicate detection**      | Absorb duplicates by source revision + location + content hash + operation ID                                                              |
+| **T-053 Cloud Tasks consumer**     | Deliver OIDC-authenticated HTTP tasks to the private Cloud Run Worker. accepted/processing/held/committed/failed, DB-persisted retry/backoff, idempotency under duplicate tasks |
+| **T-054 Source access lifecycle**  | Source revisions, ACL revocation notices, missing originals, re-ingestion policy                                                            |
+| **T-055 Backfill import**          | Ingest old conversations and documents as past observations without overwriting the current policy                                        |
+| **T-056 Provenance/audit**         | Handling when the original cannot be confirmed; explicit and traceable ingestion range                                                     |
 
-**Acceptance:** 3回以上のCloud Tasks重複配送でもSource/Observation/Job重複なし。OIDC不正・無権限Invokerを拒否。権限なしSourceをインデックス・Recallしない。BackfillでもTemporal correctness維持。
+**Acceptance:** Three or more duplicate Cloud Tasks deliveries create no duplicate Sources, Observations or Jobs. Invalid OIDC and unauthorized invokers are rejected. Sources without rights are neither indexed nor recalled. Backfill preserves temporal correctness.
 
 ### EP-06 — Curator and memory consolidation [G2]
 
@@ -256,17 +256,17 @@ Dependencies: EP-03, EP-05, EP-07 retrieval candidate API.
 
 | Task                           | Deliverable / acceptance                                                                                    |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| **T-060 Provider adapter**     | LLM interface + structured output + model/prompt version + timeout/token metering。OpenAI adapterを参照実装 |
-| **T-061 Candidate extraction** | Fact/Decision/Preference/Hypothesis/Experience/Procedureの候補と根拠Span                                    |
-| **T-062 Subject resolution**   | 人名/プロジェクト名の同一性、別名、有効期間。曖昧なら保留                                                   |
-| **T-063 Candidate matching**   | Lexical/semantic/subject/timeに基づく既存記憶候補取得                                                       |
-| **T-064 Reconcile policy**     | create/corroborate/refine/supersede/contest/relate/retract/no-op。evidence independence                     |
-| **T-065 Safe auto-commit**     | authenticated Owner指示のみOwner authority。LLMの自己申告で権限昇格しない                                   |
-| **T-066 Human review queue**   | high-impact conflict/candidateの保留・説明・承認・拒否API                                                   |
-| **T-067 Feedback/evolution**   | AI作業結果（retrieved/used/validated）と再評価trigger                                                       |
-| **T-068 Reprocess**            | prompt/model更新後の再抽出を冪等に行い、明示決定は保護                                                      |
+| **T-060 Provider adapter**     | LLM interface + structured output + model/prompt version + timeout/token metering. OpenAI adapter as the reference implementation |
+| **T-061 Candidate extraction** | Fact/Decision/Preference/Hypothesis/Experience/Procedure candidates with evidence spans                     |
+| **T-062 Subject resolution**   | Identity, aliases and validity periods of people and project names; hold when ambiguous                    |
+| **T-063 Candidate matching**   | Retrieve existing memory candidates by lexical, semantic, subject and time signals                         |
+| **T-064 Reconcile policy**     | create/corroborate/refine/supersede/contest/relate/retract/no-op; evidence independence                    |
+| **T-065 Safe auto-commit**     | Owner authority only for authenticated Owner instructions; no privilege escalation from LLM self-reports   |
+| **T-066 Human review queue**   | API to hold, explain, approve and reject high-impact conflicts and candidates                              |
+| **T-067 Feedback/evolution**   | AI work results (retrieved/used/validated) and reassessment triggers                                       |
+| **T-068 Reprocess**            | Idempotent re-extraction after prompt or model updates, protecting explicit decisions                      |
 
-**Acceptance:** AI提案→Owner決定誤認0件、古い資料の最新方針上書き0件、同じサマリーの根拠水増し0件（固定回帰セット）。複数LLM失敗時はhold/failして正本を破壊しない。
+**Acceptance:** Zero AI proposals mistaken for Owner decisions, zero cases of an old document overwriting the latest policy, and zero evidence inflation from the same summary (fixed regression set). Multiple LLM failures hold or fail without damaging the source of truth.
 
 ### EP-07 — Recall Engine and indexing [G1→G2]
 
@@ -274,16 +274,16 @@ Dependencies: EP-02, EP-03; Curator candidate matching requires this epic's inte
 
 | Task                              | Deliverable / acceptance                                               |
 | --------------------------------- | ---------------------------------------------------------------------- |
-| **T-070 Structured/exact recall** | ID/subject/current decisions/time/lifecycleで索引に頼らず取得          |
-| **T-071 Lexical search**          | pg_trgm、名前/表記揺れ/日本語短語の評価と部分一致                      |
-| **T-072 Embedding pipeline**      | Version別Embeddingを非同期作成。モデルDimension/versionを記録          |
-| **T-073 Hybrid retrieval**        | lexical+semantic+structured、重複削除、関連展開、適用時点/根拠の制約   |
-| **T-074 Ranking and budgets**     | token budget、重要な根拠とuncertaintyを残すContext Pack                |
-| **T-075 Recall modes**            | precise/contextual/historical/exploratory/changesの契約とcoverage      |
-| **T-076 Fallback/rebuild**        | Embed遅延、Provider障害、reindex中でもNeon primary正本基準で安全に回答 |
-| **T-077 Retrieval evaluation**    | Recall@5、誤採用率、根拠欠落、日本語検索、権限境界の測定               |
+| **T-070 Structured/exact recall** | Retrieve by ID, subject, current decisions, time and lifecycle without relying on indexes |
+| **T-071 Lexical search**          | pg_trgm; evaluation of names, spelling variants, short Japanese terms and partial matches |
+| **T-072 Embedding pipeline**      | Create per-Version embeddings asynchronously; record model dimension and version |
+| **T-073 Hybrid retrieval**        | lexical + semantic + structured, deduplication, relation expansion, applicability-time and evidence constraints |
+| **T-074 Ranking and budgets**     | Token budget; a Context Pack that keeps important evidence and uncertainty |
+| **T-075 Recall modes**            | Contracts and coverage for precise/contextual/historical/exploratory/changes |
+| **T-076 Fallback/rebuild**        | Answer safely from the Neon primary source of truth during embedding delay, provider outage or reindexing |
+| **T-077 Retrieval evaluation**    | Measure Recall@5, false adoption rate, missing evidence, Japanese search and permission boundaries |
 
-**Acceptance:** sync Rememberのindex lag中のRecallが成功、仮説/Contestedを確定情報と混ぜない、権限外候補が検索に入らない。token超過でも根拠を欠落させない。
+**Acceptance:** Recall succeeds during the index lag of a sync Remember; hypotheses and contested memories are not mixed with settled information; out-of-scope candidates never enter search; evidence is not dropped when the token budget is exceeded.
 
 ### EP-08 — Forget, retention and source rights [G3]
 
@@ -291,15 +291,15 @@ Dependencies: EP-01, EP-03, EP-04, EP-05, EP-07.
 
 | Task                                   | Deliverable / acceptance                                                              |
 | -------------------------------------- | ------------------------------------------------------------------------------------- |
-| **T-080 Forget API**                   | scope/selector/authorization、対象展開、状態取得、request ID                          |
-| **T-081 Immediate suppression**        | 正本トランザクションでdenyを確定し全Recall/Export/Change経路から遮断                  |
-| **T-082 Physical purge**               | MemoryVersions、Evidence snippets、Embedding、Views/Cache、不要なOutbox payloadを消去 |
-| **T-083 Tombstone & non-resurrection** | content-free tombstoneとsource suppression、再取り込み防止                            |
-| **T-084 Source ACL revocation**        | 権利喪失による即時遮断と関連派生Memoryの再評価                                        |
-| **T-085 Backup reconciliation**        | Restore→最新忘却台帳適用→Read可視性ゼロを検証                                         |
-| **T-086 Retention policy**             | 期限切れ/自動失効・保存期間・バックアップ保持期間を文書化し実装                       |
+| **T-080 Forget API**                   | Scope/selector/authorization, target expansion, status retrieval, request ID          |
+| **T-081 Immediate suppression**        | Commit the deny in the source-of-truth transaction and block every Recall, Export and Change path |
+| **T-082 Physical purge**               | Erase MemoryVersions, evidence snippets, embeddings, views/caches and unneeded outbox payloads |
+| **T-083 Tombstone & non-resurrection** | Content-free tombstones and source suppression; prevention of re-ingestion            |
+| **T-084 Source ACL revocation**        | Immediate blocking on loss of rights and reassessment of related derived memories     |
+| **T-085 Backup reconciliation**        | Verify restore → apply latest deletion ledger → zero read visibility                  |
+| **T-086 Retention policy**             | Document and implement expiry/automatic invalidation, retention periods and backup retention periods |
 
-**Acceptance:** Forgot content is unavailable immediately; purge status eventually reaches purged; rebuild/replay/restore後にも該当本文が復活しない。削除を監査本文に漏らさない。
+**Acceptance:** Forgotten content is unavailable immediately; purge status eventually reaches purged; the content does not reappear after rebuild, replay or restore. Deletions do not leak content into audit records.
 
 ### EP-09 — Export / Import and portability [G3]
 
@@ -307,13 +307,13 @@ Dependencies: EP-02, EP-03, EP-08.
 
 | Task                          | Deliverable / acceptance                                                  |
 | ----------------------------- | ------------------------------------------------------------------------- |
-| **T-090 Export schema**       | Memory/Version/Subject/Evidence/Relation/Time/Source linkを含む版付き形式 |
-| **T-091 Encrypted export**    | 所有者認可、短期URL、期限切れ削除、機密レベル反映                         |
-| **T-092 Import validation**   | schema version/user/scope/rights/id mapping/idempotency                  |
-| **T-093 Round trip**          | Export→fresh DB Import→根拠/履歴/想起の一致比較                           |
-| **T-094 Deleted-data policy** | 忘却対象をExportに含めない。進行中Exportも抑止                            |
+| **T-090 Export schema**       | Versioned format including Memory/Version/Subject/Evidence/Relation/Time/Source links |
+| **T-091 Encrypted export**    | Owner authorization, short-lived URLs, deletion on expiry, sensitivity levels applied |
+| **T-092 Import validation**   | schema version/user/scope/rights/id mapping/idempotency                   |
+| **T-093 Round trip**          | Export → fresh DB Import → compare evidence, history and recall           |
+| **T-094 Deleted-data policy** | Exclude forgotten targets from exports and stop in-progress exports       |
 
-**Acceptance:** 出典と変更履歴を失わず移行可能。輸入内容が新しい現在時刻の決定として誤認されない。
+**Acceptance:** Data can be migrated without losing provenance or change history. Imported content is not mistaken for a new decision made at the current time.
 
 ### EP-10 — Remote MCP adapters [G3]
 
@@ -321,13 +321,13 @@ Dependencies: EP-01, EP-03, EP-04, EP-07, EP-08.
 
 | Task                                  | Deliverable / acceptance                                            |
 | ------------------------------------- | ------------------------------------------------------------------- |
-| **T-100 MCP read-only endpoint**      | recall/get_changes/get_memoryのみに限定した独立入口・認可           |
-| **T-101 MCP write-capable endpoint**  | capture/remember/forget等を明示委任、二重の権限検証                 |
-| **T-102 OAuth resource metadata**     | 現行MCP Authorization仕様に従うissuer/audience/resource/scopeの実装 |
-| **T-103 Client E2E**                  | 少なくとも2種のAIクライアントからログイン・Recall・更新             |
-| **T-104 Tool description and limits** | AI向けの短く正確なTool description、入力制限、失敗とRetryの指示     |
+| **T-100 MCP read-only endpoint**      | Independent entry point and authorization limited to recall/get_changes/get_memory |
+| **T-101 MCP write-capable endpoint**  | Explicit delegation for capture/remember/forget and similar tools, with double permission checks |
+| **T-102 OAuth resource metadata**     | issuer/audience/resource/scope following the current MCP Authorization specification |
+| **T-103 Client E2E**                  | Sign-in, Recall and updates from at least two kinds of AI client    |
+| **T-104 Tool description and limits** | Short, accurate tool descriptions for AI, input limits, and failure and retry instructions |
 
-**Acceptance:** read-only tokenでは書込不可、audience混同不可、切断・再接続で整合。MCP AdapterとRESTで記憶が一致。
+**Acceptance:** A read-only token cannot write, audiences cannot be confused, and disconnection and reconnection stay consistent. The MCP adapter and REST return the same memories.
 
 ### EP-11 — Scheduled maintenance and self-healing [G2→G3]
 
@@ -335,45 +335,45 @@ Dependencies: EP-04, EP-05, EP-06, EP-07, EP-08.
 
 | Task                            | Deliverable / acceptance                                                                                         |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **T-110 Time/expiry triggers**  | 記憶の時効・Source revision変化で対象のみ再評価                                                                  |
-| **T-111 Periodic review**       | stale/contested/unindexed/orphanedの限定巡回、全件LLM再推論を避ける                                              |
-| **T-112 Index repair**          | 新旧Embedding generation比較、バックフィル、model migration                                                      |
-| **T-113 Cloud Tasks recovery**  | 未配送Outbox/Cloud Tasksリトライ限界/DB失敗Jobの再投入と冪等性。ネイティブDLQに依存しない                        |
-| **T-114 Feedback loop**         | 作業結果から知識の適用条件を改訂候補化。使用頻度≠真実性                                                          |
-| **T-115 Bulk execution policy** | Cloud Tasksの30分期限内で処理を分割・checkpointし、超過するバックフィル/再索引はCloud Run Jobsで実行、進捗DB記録 |
+| **T-110 Time/expiry triggers**  | Reassess only the affected memories on memory expiry or source revision changes                                  |
+| **T-111 Periodic review**       | Bounded sweeps of stale/contested/unindexed/orphaned memories, avoiding LLM re-inference over everything         |
+| **T-112 Index repair**          | Old/new embedding generation comparison, backfill, model migration                                               |
+| **T-113 Cloud Tasks recovery**  | Resubmission and idempotency for undelivered outbox entries, exhausted Cloud Tasks retries and failed DB jobs, without relying on a native DLQ |
+| **T-114 Feedback loop**         | Turn work results into candidate revisions of a lesson's applicability. Usage frequency is not truth             |
+| **T-115 Bulk execution policy** | Split and checkpoint work within the 30-minute Cloud Tasks deadline, run longer backfills and reindexing as Cloud Run Jobs, and record progress in the DB |
 
-**Acceptance:** Provider停止・Cloud Tasks失敗・Indexer遅延から正常復帰し、現行Memoryを毀損しない。Cloud Schedulerの再試行/重複呼出しでも二重変更なし。30分超の処理がHTTP taskのタイムアウトで消失しない。
+**Acceptance:** Recover normally from provider outages, Cloud Tasks failures and indexer delays without damaging current memories. Cloud Scheduler retries and duplicate calls cause no double changes. Work longer than 30 minutes is not lost to the HTTP task timeout.
 
 ### EP-12 — Quality harness and evaluation [G2→G4]
 
-Dependencies: Core, Curator, Recall, Governanceの縦断経路。
+Dependencies: end-to-end paths through Core, Curator, Recall and Governance.
 
 | Task                          | Deliverable / acceptance                                                                          |
 | ----------------------------- | ------------------------------------------------------------------------------------------------- |
-| **T-120 Golden datasets**     | temporal、claims/authority、conflict、abstention、experience、permissions、forgetを分類した評価集 |
-| **T-121 Baseline comparison** | No memory / conversation summary / Thymesisを同条件の代表タスクで比較                             |
-| **T-122 Retrieval quality**   | Recall@5、context precision/coverage、evidence trace、誤古情報率                                  |
-| **T-123 End-task quality**    | タスク成功率、訂正回数、投入token、想起経路別の原因分析                                           |
-| **T-124 Model regressions**   | Curator/Embedding/Rerankerのバージョン変更時に再計測                                              |
-| **T-125 Adversarial tests**   | Poisoning、injection、source spoofing、scope crossing、forget resurrection                        |
-| **T-126 Repeatable reports**  | 再現可能な評価コマンドとレポート、変化量、標本数、失敗例                                          |
+| **T-120 Golden datasets**     | Evaluation sets classified into temporal, claims/authority, conflict, abstention, experience, permissions and forget |
+| **T-121 Baseline comparison** | Compare no memory, a conversation summary and the memory service (then Thymesis) on representative tasks under the same conditions |
+| **T-122 Retrieval quality**   | Recall@5, context precision/coverage, evidence trace, outdated-information rate                   |
+| **T-123 End-task quality**    | Task success rate, correction count, input tokens, root-cause analysis by recall path             |
+| **T-124 Model regressions**   | Re-measure on Curator, embedding or reranker version changes                                      |
+| **T-125 Adversarial tests**   | Poisoning, injection, source spoofing, scope crossing, forget resurrection                        |
+| **T-126 Repeatable reports**  | Reproducible evaluation commands and reports with deltas, sample sizes and failure examples       |
 
-**Acceptance:** [design/requirements.md](design/requirements.md#service-targets)の品質目標を固定評価セットに対して満たす。公開ベンチマークは補助で、実ワークフローに対する評価を必須とする。
+**Acceptance:** Meet the quality targets in [design/requirements.md](design/requirements.md#service-targets) on the fixed evaluation set. Public benchmarks are supplementary; evaluation against real workflows is required.
 
 #### Evaluation fixtures (minimum)
 
 | Category              | Minimum cases | Representative tests                       |
 | --------------------- | ------------: | ------------------------------------------ |
-| Temporal/renaming     |            30 | Awhen→Ariadne、遡及訂正、当時の認識        |
-| Authority/provenance  |            30 | AI提案 vs Owner決定、第三者主張            |
-| Conflicts/duplicates  |            30 | 重複根拠、適用範囲差、矛盾                 |
-| Retrieval/unknown     |            30 | 無知の保留、token budget、日本語名称       |
-| Experience/procedures |            30 | 失敗→解決→条件差で不成立                   |
-| Security/forget/ACL   |            40 | Scope漏洩、撤回、復元、再取り込み          |
-| Async/concurrency     |            30 | retry、rollback、Cursor、race              |
-| **Total**             |       **220** | リリース前の最低限。標本を増やして統計評価 |
+| Temporal/renaming     |            30 | Awhen→Ariadne, retroactive correction, what was known at the time |
+| Authority/provenance  |            30 | AI proposal vs Owner decision, third-party claims |
+| Conflicts/duplicates  |            30 | Duplicate evidence, differing applicability, contradictions |
+| Retrieval/unknown     |            30 | Abstaining when unknown, token budget, Japanese names |
+| Experience/procedures |            30 | Failure → fix → does not hold under different conditions |
+| Security/forget/ACL   |            40 | Scope leaks, revocation, restore, re-ingestion |
+| Async/concurrency     |            30 | retry, rollback, Cursor, race              |
+| **Total**             |       **220** | Minimum before release; add samples for statistical evaluation |
 
-品質指標の分母と判定条件を明記する。例えばRecall@5は質問単位の正解記憶集合との照合、false-current-rateは時間依存質問における古い情報の現行事実化率。ゼロ件要件は全ケース合格とし、統計的な安全性保証とは称さない。
+State the denominator and pass condition for each quality metric. For example, Recall@5 compares each question with its expected memory set, and the false-current rate counts outdated information presented as current in time-dependent questions. Zero-count requirements mean every case passes; they are not called statistical safety guarantees.
 
 ### EP-13 — Observability, infrastructure and cost [G3→G4]
 
@@ -381,112 +381,112 @@ Dependencies: All service paths partially functional.
 
 | Task                            | Deliverable / acceptance                                                                                                                                    |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **T-130 Dashboards**            | Cloud Tasks queue、DB jobs/outbox lag、curation failures、recall latency、Neon/Index lag、purge、scope-denied、GCP + Neon + LLM cost                        |
-| **T-131 Tracing/log redaction** | Cloud Logging/Monitoringでtrace_idをCloud Run API→Cloud Tasks→Worker→Neonへ連携、PII/秘密/Memory原文をログに出さない                                        |
-| **T-132 Neon backup/PITR**      | Neonのplan別保持/復元能力を確認。バックアップ取得・復元、RPO/RTO試験、忘却再適用                                                                            |
-| **T-133 Operational runbooks**  | Neon接続障害/計画停止、Cloud Tasks backlog・リトライ切れ、Cloud Scheduler停止、LLM outage、認証失効、Source revocation、Forget失敗                          |
-| **T-134 Cost reporting**        | provider別LLM token/Embedding、Neon compute/storage/backups、Cloud Run CPU/memory/request、Cloud Tasks/Scheduler、network egress、Cloud Logging、月額総費用 |
-| **T-135 Alerts**                | error budget、DB failed jobs/Cloud Tasks backlog、Outbox lag、Purge未完了、index divergence、Neon connection pressure、Cloud Run errorに通知                |
-| **T-136 Load and soak tests**   | 100k/500kおよび1m/5m workload（design/requirements.md）でCloud Run cold start、Neon RTT/connection pooling、Cloud Tasks rate limiting、p95・コスト計測                  |
-| **T-137 Security review**       | Secret Manager、GCP IAM/OIDC、Neon資格情報/pooling/RLS、API scope/audit/forgetをチェックし所見を閉じる                                                      |
+| **T-130 Dashboards**            | Cloud Tasks queue, DB jobs/outbox lag, curation failures, recall latency, Neon/index lag, purge, scope-denied, GCP + Neon + LLM cost                        |
+| **T-131 Tracing/log redaction** | Propagate trace_id from Cloud Run API → Cloud Tasks → Worker → Neon in Cloud Logging/Monitoring; keep PII, secrets and memory text out of logs              |
+| **T-132 Neon backup/PITR**      | Confirm Neon's per-plan retention and restore capabilities. Backup and restore, RPO/RTO tests, Forget reapplication                                         |
+| **T-133 Operational runbooks**  | Neon connection failures and planned maintenance, Cloud Tasks backlog and exhausted retries, Cloud Scheduler outage, LLM outage, authentication expiry, source revocation, Forget failure |
+| **T-134 Cost reporting**        | LLM tokens and embeddings by provider, Neon compute/storage/backups, Cloud Run CPU/memory/requests, Cloud Tasks/Scheduler, network egress, Cloud Logging, total monthly cost |
+| **T-135 Alerts**                | Notifications for error budget, failed DB jobs/Cloud Tasks backlog, outbox lag, incomplete purges, index divergence, Neon connection pressure and Cloud Run errors |
+| **T-136 Load and soak tests**   | Measure Cloud Run cold start, Neon RTT/connection pooling, Cloud Tasks rate limiting, p95 and cost at the 100k/500k and 1m/5m workloads (design/requirements.md) |
+| **T-137 Security review**       | Check Secret Manager, GCP IAM/OIDC, Neon credentials/pooling/RLS and API scope/audit/forget, and close findings                                            |
 
-**Acceptance:** 失敗したJob・欠落しそうなChange・削除未完了を検知でき、Runbookで復旧可能。月額総額が説明可能。
+**Acceptance:** Failed jobs, changes at risk of loss and incomplete deletions are detectable and recoverable through the runbooks. Total monthly cost is explainable.
 
 ### EP-14 — Release, interoperability and acceptance [G4]
 
-Dependencies: EP-00～13.
+Dependencies: EP-00–13.
 
 | Task                                | Deliverable / acceptance                                                                                                          |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **T-140 Staging soak**              | Realistic synthetic workloadで連続稼働、エラーと遅延を計測                                                                        |
-| **T-141 Multi-agent smoke**         | AI client A→Remember、B→Recall/changes、A→Forget、B→not found                                                                     |
-| **T-142 Product acceptance**        | design/requirements.md AC-01～13、FRへのtraceability、未達なし                                                                                |
-| **T-143 Security and privacy gate** | データ権利、Secrets、RLS、Source revoke、Forget、バックアップを検収                                                               |
-| **T-144 Release docs**              | API reference、運用手順、トラブルシュート、変更履歴                                                                               |
-| **T-145 Deployment and rollback**   | Artifact Registry→Cloud Run API/WorkerとCloud Tasks/Scheduler/Neon構成の本番デプロイ、監視、スモーク、rollback/recovery rehearsal |
-| **T-146 Evidence report**           | 受け入れの実測値、評価再現手順、既知の制約を署名/Commitで固定                                                                     |
+| **T-140 Staging soak**              | Continuous operation under a realistic synthetic workload, measuring errors and latency                                            |
+| **T-141 Multi-agent smoke**         | AI client A → Remember, B → Recall/changes, A → Forget, B → not found                                                             |
+| **T-142 Product acceptance**        | design/requirements.md AC-01–13 and traceability to FRs, with nothing unmet                                                        |
+| **T-143 Security and privacy gate** | Accept data rights, secrets, RLS, source revocation, Forget and backups                                                           |
+| **T-144 Release docs**              | API reference, operating procedures, troubleshooting, change history                                                              |
+| **T-145 Deployment and rollback**   | Production deployment of Artifact Registry → Cloud Run API/Worker with Cloud Tasks/Scheduler/Neon configuration, monitoring, smoke tests, rollback/recovery rehearsal |
+| **T-146 Evidence report**           | Fix measured acceptance values, evaluation reproduction steps and known constraints with a signature or commit                    |
 
-**Acceptance:** 全受入契約と運用ゲート達成。既知の失敗は隠さず、契約未達ならRelease不可。
+**Acceptance:** Every acceptance contract and operational gate is met. Known failures are not hidden; if a contract is unmet, the release does not proceed.
 
 ## 4. Execution order and parallelization
 
-小規模チーム（1～2人）を想定したクリティカルパス：
+Critical path assuming a small team (one or two people):
 
-1. **Foundation + Auth + Schema**（EP-00/01/02）：API境界、DB制約、再現可能なCIを先に確立。
-2. **Core + Cursor + minimal exact Recall**（EP-03/04/07部分）：明示記憶→即時取得→差分。まず一貫性のある縦断経路。
-3. **Capture + Curator + hybrid Recall**（EP-05/06/07残）：自動記憶獲得と価値提供を完成。
-4. **Governance + MCP + maintenance**（EP-08/09/10/11）：削除・認可・複数AIでの運用を完成。
-5. **Quality/cost/security + release**（EP-12/13/14）：完成形の検収。
+1. **Foundation + Auth + Schema** (EP-00/01/02): establish the API boundary, DB constraints and reproducible CI first.
+2. **Core + Cursor + minimal exact Recall** (EP-03/04, part of EP-07): explicit memory → immediate retrieval → changes. A consistent end-to-end path first.
+3. **Capture + Curator + hybrid Recall** (EP-05/06, rest of EP-07): complete automatic memory acquisition and delivered value.
+4. **Governance + MCP + maintenance** (EP-08/09/10/11): complete deletion, authorization and operation across multiple AIs.
+5. **Quality/cost/security + release** (EP-12/13/14): acceptance of the finished product.
 
-評価Fixtureと監視は各Epicの開始時から追加し、最後だけで一気に試験しない。
+Add evaluation fixtures and monitoring from the start of each epic instead of testing everything at the end.
 
-参考工数（見積もり、納期保証ではない）：**70～110 engineer-days**。内訳の目安：foundation/auth/schema 15～22、core/cursor 12～18、capture/curator/recall 22～35、governance/MCP 12～18、品質/運用/リリース 9～17。作業結果に応じて見積もりを更新する。外部OAuth連携と忘却・RLSの困難性が主な変動要因。
+Reference effort (an estimate, not a delivery commitment): **70–110 engineer-days**. Indicative breakdown: foundation/auth/schema 15–22, core/cursor 12–18, capture/curator/recall 22–35, governance/MCP 12–18, quality/operations/release 9–17. Update the estimate as work proceeds. External OAuth integration and the difficulty of Forget and RLS are the main sources of variance.
 
 ## 5. Definition of Done (every issue)
 
-- 設計意図・API契約・Data ownershipが明記されている。
-- 少なくともunit/integ/e2eの該当テストを追加。負荷・権限・失敗経路は関連するEpicで必ず追加。
-- Migration/rollbackとデータ消去の影響を確認（対象外なら理由を明記）。
-- CI（typecheck/lint/test/security）がgreen。
-- 暗黙のmodel selectionやCredentials、権限バイパス、秘密のログ出力なし。
-- 操作のidempotency、timeout、failure status、traceを実装。
-- Acceptance evidenceをIssue/PRに残す。計測値には実行条件・バージョン・サンプル数を添える。
-- design/requirements.md・ARCHITECTURE.md・docs/technical/ との差異があれば同じPRで更新する。
+- Design intent, API contract and data ownership are stated.
+- At least the relevant unit, integration and e2e tests are added. Load, permission and failure-path tests are always added in the related epic.
+- The impact on migration/rollback and data erasure is checked (state the reason if not applicable).
+- CI (typecheck/lint/test/security) is green.
+- No implicit model selection or credentials, permission bypasses or secrets in logs.
+- Operations implement idempotency, timeouts, failure status and tracing.
+- Acceptance evidence is left in the issue or PR. Measurements include execution conditions, versions and sample sizes.
+- Any difference from design/requirements.md, ARCHITECTURE.md or docs/technical/ is updated in the same PR.
 
 ## 6. Risk register and decisions
 
 | Risk                                    | Impact                              | Mitigation / stop condition                                                           |
 | --------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
-| Curatorの誤統合                         | 方針・経験の破損                    | 根拠とScope、期待Revision、hold、再評価                                               |
-| LLMのコスト増大                         | 運用費用の超過                      | event-driven処理、cache可能な非機密部分、モデル計測・バッチ                           |
-| Vector SearchのScopeフィルタ欠落        | 誤検索・漏洩                        | SQL/RLS優先、post-filterだけに依存しない                                              |
-| Cursorのcommit-order race               | 消費側で差分喪失                    | Scope行ロック、rollbackと並列のテスト                                                 |
-| Source rightsの失効遅延                 | プライバシー漏洩                    | 検出後即時deny、定期権利確認、fail closed                                             |
-| 忘却後の派生情報再出現                  | 信頼・プライバシー破壊              | non-content tombstones、purge graph、restore reconciliation                           |
-| Neon connection pool/RLS context漏洩    | Cross-scope漏洩                     | SET LOCAL transaction-only、Neon pooled endpoint、Cloud Run同時接続数上限、統合テスト |
-| Cloud Tasks deadline / retry exhaustion | 長いCurator処理が途中停止・失われる | 30分未満のcheckpoint処理、DBジョブ追跡、Scheduler回収、必要時Cloud Run Jobs           |
-| GCP↔Neonの距離・費用                    | Recall遅延と運用費超過              | 同じ地理地域に置く、RTT/egress/baseline cost計測                                      |
-| Cloud Run scale-to-zero cold start      | p95 Recall未達                      | 標準負荷測定、必要時のみmin instances>0で費用対効果検証                               |
-| LLM/provider API障害                    | Capture遅延・Recall品質低下         | outbox/retry/DBの失敗ジョブ追跡・回収、read path fallback                             |
-| 日本語の検索品質不足                    | Recall@5未達                        | 固定評価集、pg_trgm/lexical/vectorの重み調整                                          |
-| 単一Scopeのwrite lock競合               | 書き込み遅延                        | 実測。高負荷で必要時に範囲分割を検討                                                  |
-| ドキュメントと実装の乖離                | 誤利用・品質劣化                    | OpenAPI/DDL/evalをCIに組み込み、ADR記録                                               |
+| Curator merges memories incorrectly     | Damaged policies and experiences    | Evidence and Scope, expected revision, hold, reassessment                             |
+| LLM cost growth                         | Operating cost overrun              | Event-driven processing, caching of non-sensitive parts, model measurement and batching |
+| Missing Scope filter in vector search   | Wrong results and leaks             | SQL/RLS first; do not rely on post-filtering alone                                    |
+| Cursor commit-order race                | Consumers lose changes              | Scope row locks; rollback and concurrency tests                                       |
+| Delayed source-rights revocation        | Privacy leak                        | Deny immediately on detection, periodic rights checks, fail closed                    |
+| Derived information reappears after Forget | Loss of trust and privacy        | Non-content tombstones, purge graph, restore reconciliation                           |
+| Neon connection pool/RLS context leak   | Cross-scope leak                    | SET LOCAL transaction-only, Neon pooled endpoint, Cloud Run concurrency limits, integration tests |
+| Cloud Tasks deadline / retry exhaustion | Long Curator work stops or is lost  | Checkpointed work under 30 minutes, DB job tracking, Scheduler recovery, Cloud Run Jobs when needed |
+| GCP↔Neon distance and cost              | Recall latency and cost overrun     | Same geographic region; measure RTT, egress and baseline cost                         |
+| Cloud Run scale-to-zero cold start      | p95 Recall target missed            | Measure the standard workload; verify cost-effectiveness of min instances > 0 only when needed |
+| LLM/provider API outage                 | Capture delay, lower Recall quality | Outbox/retry, DB tracking and recovery of failed jobs, read-path fallback             |
+| Insufficient Japanese search quality    | Recall@5 target missed              | Fixed evaluation set; tune pg_trgm/lexical/vector weights                             |
+| Write-lock contention on a single Scope | Write latency                       | Measure; consider range splitting under high load if needed                           |
+| Documentation drifts from implementation | Misuse and quality loss            | OpenAPI/DDL/eval in CI, ADR records                                                   |
 
 ### Non-goals for this release
 
-- メモリの価値を示す前に追加の専用Graph DB/Vector DBを配置すること。
-- AriadneのActionをThymesisへ二重保存して別の正本を作ること。
-- 原本の永久コピーや、Ownerの同意なきコネクタ全件取り込み。
-- 人間が毎日レビューしなければ動かないCurator運用。
-- ベンチマークだけ高得点で実利用のタスク成果が測れないリリース。
+- Deploying an additional dedicated graph or vector database before the memory's value has been shown.
+- Storing Ariadne (now Syntoria Weave) Actions again in the memory service, creating a second source of truth.
+- Permanent copies of originals, or connector ingestion of everything without the Owner's consent.
+- Curator operation that only works if a person reviews it every day.
+- A release that scores well on benchmarks but cannot measure task outcomes in real use.
 
 ## 7. Production runbook checklist
 
-Release G4の納品には次のRunbookと実演記録を含める。
+Release G4 delivery includes the following runbooks and demonstration records.
 
-- [ ] OAuth署名鍵/Client credential失効・切替
-- [ ] OwnerのScope grant取り消し、source rights即時反映
-- [ ] DBバックアップ/復元と復元後Forget再適用
-- [ ] LLM停止時のCapture再試行とsafe fallback
-- [ ] Cloud Tasks backlog・retry exhausted DB jobs・Outboxの滞留復旧
-- [ ] Cloud Scheduler未実行/重複実行とCloud Run Jobsの中断・再実行
-- [ ] Index再生成中のRead-after-write確認
-- [ ] Forget failureの再試行と完了証跡
-- [ ] 異常なtoken/CPU/storage課金の原因特定と制限
-- [ ] Neon pooled connectionでのRLS/Scope/Versionのschema migration
-- [ ] Cloud Tasks/SchedulerのOIDC service account認証・Invoker制限
-- [ ] Cloud Run cold start、Neon接続遅延、DB pool上限、月額コストの測定
-- [ ] 外部AIクライアントのOAuth/MCP connectivityチェック
-- [ ] Data export/importの本人確認と一時成果物削除
+- [ ] OAuth signing key / client credential revocation and rotation
+- [ ] Owner Scope grant revocation and immediate application of source rights
+- [ ] DB backup/restore and Forget reapplication after restore
+- [ ] Capture retry and safe fallback when the LLM is unavailable
+- [ ] Recovery of Cloud Tasks backlog, retry-exhausted DB jobs and outbox buildup
+- [ ] Missed or duplicate Cloud Scheduler runs, and interruption and rerun of Cloud Run Jobs
+- [ ] Read-after-write confirmation during index regeneration
+- [ ] Forget failure retries and completion evidence
+- [ ] Identifying and limiting the cause of abnormal token, CPU or storage charges
+- [ ] Schema migration of RLS/Scope/Version over Neon pooled connections
+- [ ] OIDC service-account authentication and Invoker restriction for Cloud Tasks/Scheduler
+- [ ] Measurement of Cloud Run cold start, Neon connection latency, DB pool limits and monthly cost
+- [ ] OAuth/MCP connectivity checks for external AI clients
+- [ ] Identity verification and temporary artifact deletion for data export/import
 
 ## 8. Evidence to retain for acceptance
 
-`docs/eval/`以下に（本番秘密を含まない）再現可能な実行条件と結果を記録する：
+Record reproducible execution conditions and results (without production secrets) under `docs/eval/`:
 
-1. Golden dataset version、評価クエリ、expected memories、ground truth。
-2. LLM/provider/model/prompt/Embedding versions、検索パラメータ、テストSeed。
-3. Recall@5、task QA、未知保留率、false-current率、p95 latency、token数・月額推定/実費。
-4. RLS/forget/Cursor/並列/復元テストの結果と失敗時ログの匿名化版。
-5. Contract traceability：FR/AC→Issue/PR/自動試験/実測→結果。
+1. Golden dataset version, evaluation queries, expected memories and ground truth.
+2. LLM/provider/model/prompt/embedding versions, search parameters and test seeds.
+3. Recall@5, task QA, unknown-abstention rate, false-current rate, p95 latency, token counts and estimated or actual monthly cost.
+4. Results of RLS, Forget, Cursor, concurrency and restore tests, with anonymized failure logs.
+5. Contract traceability: FR/AC → issue/PR/automated test/measurement → result.
 
-完了時には次の文を実証できること：**「複数AIが、現在有効で根拠付きの長期記憶を安全に共有でき、変更・忘却・障害・復旧を含めて継続的に運用できる。」**
+At completion, the following statement must be demonstrable: **"Multiple AIs can safely share currently valid, evidence-backed long-term memory, and it can be operated continuously through changes, Forget, failures and recovery."**

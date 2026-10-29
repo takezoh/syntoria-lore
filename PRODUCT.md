@@ -1,16 +1,50 @@
 # Syntoria Lore — Product
 
-**Explain it once. Every AI you authorize can remember it, with the reason.** Lore is a personal, long-term memory service for decisions, preferences, knowledge and experience. It keeps each memory beside its evidence and history, so an AI can pick up useful context in a later conversation and show where that context came from.
+**Explain it once. Every AI you authorize can remember it, with the reason.** Your decisions, preferences and lessons stay with who said them, when they applied and what changed, so your next conversation can start from what you already explained—even in another AI you use.
 
-## Who Lore is for
+Syntoria Lore is Syntoria's Memory Service: long-term memory with evidence for the AIs you authorize. It turns what you and your AIs submit into reusable memories—facts, decisions, preferences, hypotheses, experiences and procedures—each linked to the observations behind it, who made the statement, when it applies and how it was corrected. AI clients that sign in with your account read and update the same memories through REST and Remote MCP, so context explained in one conversation can be recalled in another and checked against its source. The intended benefit is less re-explaining and fewer mistakes from outdated or misattributed context. Lore does not depend on a particular assistant.
 
-Lore is for people who use more than one AI assistant, make decisions in conversation and want to know later who said what and when, or build their own authorized AI workflows. A user's memories belong to that user's account. Each connected client receives only the access allowed for it.
+## Who it is for
 
-Lore is not a complete or authoritative document archive, task manager, reminder service or calendar. It can store text submitted as observations and evidence excerpts allowed by a source, but the source system remains the place to retrieve the complete original. An AI or person decides when to remember or recall something, how to interpret the result and what to do next.
+| Audience | Why Lore fits |
+| --- | --- |
+| People who use more than one AI assistant and keep re-explaining the same background | A memory saved through one AI can be recalled by another authorized AI in a later conversation |
+| People who make lasting decisions in conversation | A decision returns with its evidence, speaker and time, distinct from an AI's suggestion and from what has since changed |
+| People who build their own agents or workflows | REST and Remote MCP tools with idempotent writes, conflict detection and a change feed for each client |
+
+A user's memories stay within that user's account. Lore is not a complete or authoritative document archive, a task or current-state tracker (that is Syntoria Weave), a reminder service or a calendar. You and your AI decide when to remember or recall something, how to interpret the result and what to do next.
+
+## Value and approach
+
+| Desired benefit | Supporting behavior |
+| --- | --- |
+| Explain it once | An explicit remember commits synchronously; every AI client that signs in with your account can recall it later |
+| Pick up context in another AI | Recall returns matching memories within the caller's size budget; each client can follow its own change feed to catch up |
+| See why your AI knows it | Every memory revision links to at least one piece of evidence with its source, location, speaker and event time |
+| Tell your decision from an AI's suggestion | Authority is derived from the signed-in account, the memory kind and the status the write declares; a write marked as proposed keeps AI-proposal authority and waits as a candidate; a request cannot set authority directly |
+| Correct it without losing what was true | Supersede keeps the earlier period, retract records a mistake and contest flags a dispute; a write based on an outdated revision is rejected instead of overwriting newer work |
+| Ask what was true then | Historical recall can ask what applied at a past time and what Lore knew at a past time |
+| Reuse a lesson where it applies | An experience keeps the condition, action and outcome together |
+| Capture without retyping | Sources are enabled with consent; curator proposals are checked against the cited source text; only uncontested facts are saved automatically and the rest wait for review |
+| Forget | Forgotten content stops being returned immediately, a content-free deletion record is kept, and a background process purges the content and its dependent data |
+| Take your memories with you | Memories, evidence and history can be exported as an encrypted bundle and imported elsewhere, with the original attribution kept as provenance |
+
+## What Lore does not promise
+
+- Lore does not verify that a memory is true. Attribution records who made a statement.
+- Lore cannot tell whether a statement saved under your account came from you. It admits your Gate account rather than each AI client and records the status your AI declares, so an AI connected as you must save its own suggestions as proposals.
+- Recall is bounded and can miss relevant memories. An empty result does not prove that nothing was said.
+- AIs do not receive memory changes automatically; each one recalls again or follows its own change feed.
+- Lore is not a complete archive of source documents. It keeps submitted observations and the excerpts a source permits.
+- Lore does not fetch your conversations or documents on its own.
+- Feedback such as “incorrect” queues a reassessment; it does not change a memory by itself.
+- Backups may retain forgotten content until their retention period ends.
+- There is no self-service sign-up, and end-to-end use with a hosted AI client has not been verified.
+- Less repeated explanation is an intended benefit, not a measured result.
 
 ## A memory in practice
 
-Suppose an AI suggests a database, and you later decide to choose the technology only after the product requirements are settled. The suggestion and your decision are separate observations with different speakers. When another authorized AI asks about the project direction, Lore can return the decision with its evidence and any earlier version. If two sources disagree, Lore can keep both claims and mark the relevant memories as contested instead of silently choosing one.
+Suppose an AI suggests a database, and you later decide to choose the technology only after the product requirements are settled. The suggestion and your decision are separate observations with different speakers. When another authorized AI asks about the project direction, Lore can return the decision with its evidence and any earlier version. If two sources disagree, Lore can keep both claims and a contested flag can mark the dispute instead of silently choosing one; a captured proposal that conflicts with an existing memory waits for your review.
 
 The main building blocks are:
 
@@ -19,7 +53,7 @@ The main building blocks are:
 | Memory kind | A fact, decision, preference, hypothesis, experience or procedure |
 | Observation | What someone said, wrote or did in a source; it records an assertion or event, not proof that a claim is true |
 | Evidence | The link from a memory revision to its source observation, location and available lineage |
-| Attribution | Who made a statement, based on the authorized actor and source information |
+| Attribution | Who made a statement, based on the signed-in account, the declared status and source information |
 | Time | When a memory applies and when Lore recorded or changed it |
 | History | Earlier revisions, replacement and retraction reasons, and relations to other memories |
 
@@ -27,7 +61,7 @@ An experience keeps a condition, action and outcome together so a future AI can 
 
 ## Attribution is not verification
 
-Lore distinguishes a user's own preference or decision, an AI proposal and another person's claim. It derives authority from the authenticated actor, memory kind, epistemic status and controlled user-confirmation path; it does not take an authority label from model output. Source speaker and location help explain where a claim came from. Neither a confident summary nor the fact that a memory was useful makes an outside-world claim true.
+Lore distinguishes a user's own decision or preference, an AI proposal and a claim attributed to someone else. It derives authority from the signed-in account, the memory kind, the declared epistemic status and the controlled user-confirmation path; it never takes an authority label from a request or from model output. Because Lore admits a Gate account rather than an individual client, an AI connected as you writes as you: what it saves as asserted is recorded as your statement, and what it marks as proposed stays an AI proposal until you confirm it. Source speaker and location help explain where a claim came from. Neither a confident summary nor the fact that a memory was useful makes an outside-world claim true.
 
 When a user confirms a candidate, that records the user's confirmation or statement. It does not independently verify a technical or third-party claim. The [memory-system reference](docs/technical/memory-system.md) describes the current proposal and review rules.
 
@@ -39,14 +73,16 @@ When a user confirms a candidate, that records the user's confirmation or statem
 
 ## Capture and recall
 
-An explicit remember request creates a memory directly after authorization and consistency checks. For ongoing material, a connected source must first be enabled with consent and send observations to Lore; Lore does not silently fetch a user's conversations or documents. The background curator proposes memories from those observations, checks evidence anchors and existing memories, and commits only the cases allowed by policy. Proposals that require a user's judgment can be held for review.
+An explicit remember request creates a memory directly after authorization and consistency checks. For ongoing material, a connected source must first be enabled with consent and send observations to Lore; Lore does not silently fetch a user's conversations or documents. The background curator proposes memories from those observations, checks evidence anchors and existing memories, and commits only the cases allowed by policy. Proposals that require a user's judgment are held for review.
 
-Recall combines the question with permitted scope, source rights, memory lifecycle and time filters. It returns supported matches and their evidence, attribution and uncertainty in a Context Pack sized to the caller's requested budget. An empty result means no supported match was returned by that search; it does not prove that no relevant information exists. Search indexes and candidate limits can also affect what is found.
+Recall combines the question with permitted scope, source rights, memory lifecycle and time filters. It returns supported matches with their evidence, attribution and uncertainty in a bounded selection sized to the caller's budget. An empty result means no supported match was returned by that search; it does not prove that no relevant information exists. Search indexes and candidate limits can also affect what is found, so check the evidence before relying on a memory for an important decision.
 
-## Access and limits
+## Access
 
-Lore has REST and Remote MCP interfaces, but no user-facing Lore sign-in or memory browser. A hosted client needs a Gate-issued token for the exact resource, an existing identity binding and an appropriate grant; see [client access](docs/usage/sign-in.md). The repository does not provide public self-service sign-up. Lore may miss relevant information or return no supported match, so check its evidence before relying on a memory for an important decision.
+AI clients connect through REST and Remote MCP; Lore has no sign-in page or memory browser of its own. Gate handles sign-in and approval, and the service operator must admit your Gate account to Lore before a client can read or write memories. Every client you approve with that account acts as you; to keep one read-only, connect it only to the read endpoint. See [client access](docs/usage/sign-in.md).
 
-Reducing repeated context and helping AIs continue useful work are intended outcomes, not a guarantee that every workflow will improve. Product requirements and acceptance targets are in [product requirements](docs/design/requirements.md). The technical reference explains the limits of capture, retrieval and Forget; dated observations belong in [evaluation records](docs/eval/).
+## Scope and evidence
 
-[Use cases](docs/usage/use-cases.md) has example prompts. [Client access](docs/usage/sign-in.md) explains how a client connects. [Architecture](ARCHITECTURE.md) and the [technical memory-system reference](docs/technical/memory-system.md) cover the implementation.
+Product requirements and acceptance targets are in [product requirements](docs/design/requirements.md); positioning and claim boundaries are in [product design](docs/design/product.md). Local tests and implementation completion do not establish hosted acceptance or a reduction in repeated explanation. Dated observations and their limits belong in [evaluation records](docs/eval/).
+
+[Introduction](README.md) · [Use cases](docs/usage/use-cases.md) · [Client access](docs/usage/sign-in.md) · [Architecture](ARCHITECTURE.md) · [Memory system](docs/technical/memory-system.md)

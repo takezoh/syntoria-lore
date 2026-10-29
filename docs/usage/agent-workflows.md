@@ -6,9 +6,11 @@ Lore gives an authorized AI access to the same versioned, evidence-linked memori
 
 Gate owns sign-in and OAuth approval. A client needs a bearer token for the exact resource it calls: REST, `/mcp/read` or `/mcp/write`. An operator must also map the Gate issuer and immutable subject to an existing Lore user and principal; current grants further limit scopes and capabilities. Lore has no login page or public self-service registration flow. Its current access path depends on operator-configured resources and identity bindings.
 
+Lore admits a Gate identity, not an individual OAuth client. Every client that signs in with the same Gate account acts as the same principal, with the same actor kind, scopes and grants; the introspected client ID is required but does not select a different principal. Separate clients therefore differ only in the resource they connect to: give a client `/mcp/read` alone to keep it read-only. A workflow that must not act as the user needs its own Gate identity, admitted by the operator as a non-user principal.
+
 `admin` is an internal capability attached to a personal-account grant. It is not a separate service administrator account. Some operations also require the authenticated actor to be the user, even when a client has broad `admin` capability. See [client access](sign-in.md) for the user-facing prerequisites and [API authorization](../technical/mcp-api.md#entry-points-and-authorization) for the exact rules.
 
-For hosted use, ask the service operator to configure the exact resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [deployment record](../eval/api-only-gate-auth-correction-20261019.md).
+For hosted use, ask the service operator to configure the exact resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [DCR production release record](../eval/dcr-production-release-20261020.md).
 
 ## Discover the available tools
 
@@ -25,7 +27,9 @@ REST and MCP use the same domain services. Do not assume that a connected client
 
 ## Remember and capture
 
-For a direct user request, send `remember_memory` with the requested kind, statement, evidence and an idempotency key. An explicit write is synchronous and its response says whether the record committed. The authority and lifecycle are derived from the authenticated actor and request policy. A non-user client cannot label its own output as the user's decision; its write can remain a candidate. Do not convert an inference into the user's words.
+For a direct user request, send `remember_memory` with the requested kind, statement, evidence and an idempotency key. An explicit write is synchronous and its response says whether the record committed. Authority and lifecycle are derived from the principal's actor kind, the memory kind and the declared `epistemic_status`; a request cannot set authority directly.
+
+When your client signs in as the user, Lore attributes its writes to the user. A write with the default `asserted` status (or `observed` or `inferred`) becomes active with `user_decision`, `user_preference` or `user_assertion` authority, depending on the kind. Send `epistemic_status: "proposed"` for anything the AI suggested or inferred; it then receives `ai_proposal` authority and remains a candidate until the user confirms it. Keep the default only for what the user actually said, and do not convert an inference into the user's words. A non-user principal's writes always receive `ai_proposal` authority and start as candidates.
 
 For a source workflow, the user must first enable a source with consent. The client sends observations through `capture` with the source revision, stable `operation_id` and `Idempotency-Key`, then reads `capture_status` for the returned job. Lore processes submitted observations; it does not fetch complete chat histories or crawl external documents itself.
 
@@ -41,7 +45,7 @@ Present a memory with its attribution and evidence, distinguish assertions from 
 
 ## Correct, give feedback and forget
 
-To revise a known memory, read its current revision and use `propose_changeset` followed by `commit_changeset` with that `expected_revision`. Use `SUPERSEDE` when it changed over time, `RETRACT` when it was wrong, `CORROBORATE` to add evidence, `REFINE` to produce a revision, and `CONTEST` or `RELATE` to record an evidenced dispute or link. A stale revision returns `revision_conflict`; recall again and reconcile before proposing. Only the user may supersede or retract, and non-user clients cannot refine a user-attributed memory.
+To revise a known memory, read its current revision and use `propose_changeset` followed by `commit_changeset` with that `expected_revision`. Use `SUPERSEDE` when it changed over time, `RETRACT` when it was wrong, `CORROBORATE` to add evidence, `REFINE` to produce a revision, and `CONTEST` or `RELATE` to record an evidenced dispute or link. A stale revision returns `revision_conflict`; recall again and reconcile before proposing. Only a user principal may supersede or retract, and a non-user principal cannot refine a user-attributed memory.
 
 `submit_feedback` accepts `useful`, `incorrect`, `stale` or `not_relevant` and queues reassessment. It does not change the memory by itself and should not be treated as a truth vote. Forget is a user operation: call `forget_memory`, keep its request ID and follow `forget_status` until purge completes. Suppression takes effect immediately; the worker handles physical deletion. Never retain forgotten content in an agent cache.
 
