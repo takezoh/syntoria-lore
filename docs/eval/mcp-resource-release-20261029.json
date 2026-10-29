@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-29",
+  "change": "Single MCP resource production rollout",
+  "status": "deployed",
+  "source_commit": "8a0441feaea3a0e59e565a05b777389257f2d894",
+  "api_image_digest": "sha256:8dcfe857705d81959618cb9f0a4754de4c22855241003dde5d30312e22ecd4ad",
+  "gate_image_digest": "sha256:7fa131c1e1e3b8d356f4ffcf1dbfdb7a344584b434e925d6834503db23909862",
+  "deployment": {
+    "api_traffic_percent": 100,
+    "gate_traffic_percent": 100,
+    "gate_change": "Existing image, one added resource registration; prior five registrations preserved.",
+    "gate_resource_secret_version": "8",
+    "mcp_resource_secret_version": "1",
+    "migrations": "No new migration; existing 0048 retained.",
+    "worker": "Unchanged.",
+    "iam": "API service bindings unchanged; its existing runtime identity received read access only to the new dedicated MCP secret.",
+    "temporary_candidate_tags": "Removed after verification."
+  },
+  "hosted_checks": {
+    "api_readiness": 200,
+    "mcp_resource_metadata": {
+      "status": 200,
+      "resource_path": "/mcp",
+      "scopes_supported": ["openid"]
+    },
+    "unauthenticated_mcp_post": {
+      "status": 401,
+      "challenge_metadata_path": "/.well-known/oauth-protected-resource/mcp"
+    },
+    "invalid_bearer_mcp_post": 401,
+    "mcp_get": 405,
+    "old_split_mcp_posts": 404,
+    "hsts": "max-age=31536000",
+    "gate_discovery": "Canonical public issuer and DCR endpoint; PKCE S256 advertised.",
+    "gate_resource_credentials": "All six credentials accepted on the candidate with inactive synthetic token introspection; new credential rechecked on the public origin."
+  },
+  "verification": {
+    "local": "Build, migrations, typecheck, lint, formatting, 92 unit tests, 46 PostgreSQL tests, ancillary restore/identity tests, OpenAPI and secret checks passed. The final audit hit sandbox DNS failure, then passed separately with zero vulnerabilities.",
+    "followup": "13 cloud deployment tests passed after aligning the MCP secret and replacing remaining identifiers in the touched examples.",
+    "cloud_build": "Succeeded.",
+    "github_actions": "Run 40858425447 failed before any job started; the CLI reports a likely workflow file issue. It is not a passing CI result."
+  },
+  "limits": [
+    "Real-user GitHub login, ChatGPT connection approval and token exchange were not exercised.",
+    "No positive hosted memory read/write operation was performed.",
+    "Existing pending confirmations are bound to their old resource; they cannot be completed using the new credential."
+  ],
+  "rollback": "Route the API to its previous revision; the Gate configuration preserves the old resources. No identity, memory or deletion-ledger data was rewritten."
+}
