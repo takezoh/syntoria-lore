@@ -1,6 +1,6 @@
 # Change confirmation migration review
 
-This is the migration review record for `0045_change_confirmations.sql` and `0046_connection_principals.sql`, following the [migration review template](../templates/migration-review.md). Both migrations have run against disposable local databases. Neither has been deployed, and no hosted Gate or MCP host was used.
+This is the migration review record for `0045_change_confirmations.sql` and `0046_connection_principals.sql`, following the [migration review template](../templates/migration-review.md). Both migrations have run against disposable local databases. No hosted Gate or MCP host was used for this review. Both migrations were applied in production on 2026-10-29; see the [change confirmation release record](change-confirmation-release-20261029.md).
 
 - **Migration files / versions:** `packages/db/migrations/0045_change_confirmations.sql` and `packages/db/migrations/0046_connection_principals.sql`.
 - **Contract, requirement, or incident:** stages 2 and 3 of [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) and requirements L-2 to L-10 in the [change confirmation design](../design/change-confirmation.md).

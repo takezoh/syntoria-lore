@@ -14,7 +14,7 @@ summary: All AI connections of an admitted person share one non-user principal, 
 
 ## Decision
 
-Proposed on 2026-10-20; not yet accepted or implemented. The owner decided that authorization does not depend on which AI makes a request; it depends on whether the person approved. Approving a Gate connection lets an AI read and propose within the admitted scopes. A user decision or a governance operation needs the person's approval of that specific change.
+Proposed on 2026-10-20; not yet accepted. Stages 1 and 2 are in production since 2026-10-29; stage 3 is deployed but not enabled. The owner decided that authorization does not depend on which AI makes a request; it depends on whether the person approved. Approving a Gate connection lets an AI read and propose within the admitted scopes. A user decision or a governance operation needs the person's approval of that specific change.
 
 Lore would adopt three rules:
 
@@ -62,7 +62,7 @@ Proposed staging, each stage reversible:
 
 The contracts, requirements and implementation units are in the [change confirmation design](../design/change-confirmation.md).
 
-Checks to add: two clients of one subject act as the same non-user principal with different recorded `client_id`; a write over a connection is `ai_proposal` regardless of `epistemic_status`; a governance tool over a connection creates a confirmation instead of running; a confirmed change commits once as the user principal; a replayed, denied, expired or modified confirmation is rejected, as is one approved by another subject or created by another resource; revocation still denies at commit. As of 2026-10-29, stages 1 and 2 and the code for stage 3, including the identity-mapping tool that sets and clears the switch, are implemented locally and pass these checks against PostgreSQL and the Firestore Emulator. Nothing is deployed, and the switch is set nowhere. The production principal's actor kind has not been read and must be checked before stage 3, because confirmed commits must reach the person's user principal.
+Checks to add: two clients of one subject act as the same non-user principal with different recorded `client_id`; a write over a connection is `ai_proposal` regardless of `epistemic_status`; a governance tool over a connection creates a confirmation instead of running; a confirmed change commits once as the user principal; a replayed, denied, expired or modified confirmation is rejected, as is one approved by another subject or created by another resource; revocation still denies at commit. As of 2026-10-29, stages 1 and 2 and the code for stage 3, including the identity-mapping tool that sets and clears the switch, are implemented locally and pass these checks against PostgreSQL and the Firestore Emulator. On 2026-10-29 Gate and Lore were released with this code (see the [change confirmation release record](../eval/change-confirmation-release-20261029.md)); the switch is set nowhere. The production principal's actor kind has not been read and must be checked before stage 3, because confirmed commits must reach the person's user principal.
 
 ## Sources
 
