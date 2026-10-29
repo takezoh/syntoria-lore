@@ -12,7 +12,7 @@ REST and Remote MCP expose the same application services. Gate credentials estab
 | `POST /mcp/read` | MCP read resource | Recall, get, change feed and status tools only |
 | `POST /mcp/write` | MCP write resource | Remember, capture, change sets, review, governance and portability tools |
 
-Each opaque Gate bearer token is valid for exactly one configured resource: the API, `/mcp/read` or `/mcp/write`. Lore does not authenticate shared cookies or provide a login/session route. Gate introspection confirms active status, issuer, immutable subject, nonempty client ID and audience on every request. An operator-maintained binding maps that immutable issuer/subject to an existing personal-account principal, scope set and capability ceiling; those bounds intersect with live grants. `admin` includes read and write but is an internal capability, not a separate service-administrator account. Writes require `write`. Enabling sources, listing and deciding reviews, Forget, source rights, grants, retention, export, download and import require the authenticated actor to be the user (`403 user_required` otherwise). Invalid or revoked credentials return 401, a valid but unadmitted identity returns 403, and a Gate outage returns 503. The protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the Gate issuer and exact resource. An unauthenticated MCP POST returns 401 and a GET returns 405.
+Each opaque Gate bearer token is valid for exactly one configured resource: the API, `/mcp/read` or `/mcp/write`. Lore does not authenticate shared cookies or provide a login/session route. Gate introspection confirms active status, issuer, immutable subject, nonempty client ID and audience on every request. An operator-maintained binding maps that immutable issuer/subject to an existing personal-account principal, scope set and capability ceiling; those bounds intersect with live grants. Dynamically registered clients of one subject share that principal; the client ID is checked and recorded with each changeset, but it does not select a different principal or grant anything. A binding may instead name a connection principal: a non-user principal that every connection of the subject then acts as, with grants read from the user principal it acts for (see [change confirmations](#change-confirmations)). `admin` includes read and write but is an internal capability, not a separate service-administrator account. Writes require `write`. Enabling sources, listing reviews, export, download and import require the authenticated actor to be the user (`403 user_required` otherwise). Deciding reviews, Forget, source rights, grants, retention and committing a proposal with user authority run directly for the user and return a Gate confirmation to any other actor. Invalid or revoked credentials return 401, a valid but unadmitted identity returns 403, and a Gate outage returns 503. The protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the Gate issuer and exact resource. An unauthenticated MCP POST returns 401 and a GET returns 405.
 
 ## Tool and schema discovery
 
@@ -20,8 +20,8 @@ Use MCP `initialize` followed by `tools/list` on the relevant endpoint; each too
 
 | MCP endpoint | Tools |
 | --- | --- |
-| `/mcp/read` | `recall_memories`, `get_memory`, `get_changes`, `capture_status`, `forget_status`, `export_status`, `list_reviews`, `get_review` |
-| `/mcp/write` | `remember_memory`, `capture`, `propose_changeset`, `commit_changeset`, `decide_review`, `forget_memory`, `change_source_rights`, `change_scope_grant`, `set_retention_policy`, `submit_feedback`, `request_export`, `import_bundle` |
+| `/mcp/read` | `recall_memories`, `get_memory`, `get_changes`, `capture_status`, `forget_status`, `export_status`, `list_reviews`, `get_review`, `get_confirmation` |
+| `/mcp/write` | `remember_memory`, `capture`, `propose_changeset`, `commit_changeset`, `request_user_decision`, `complete_confirmation`, `decide_review`, `forget_memory`, `change_source_rights`, `change_scope_grant`, `set_retention_policy`, `submit_feedback`, `request_export`, `import_bundle` |
 
 Review tools on the read endpoint still require the user.
 
@@ -34,16 +34,18 @@ Review tools on the read endpoint still require the user.
 | Feedback | `POST /v1/memories/{id}:feedback` | `useful`, `incorrect`, `stale` or `not_relevant`; queued for reassessment |
 | Propose change set | `POST /v1/changesets` | Validated, persisted proposal |
 | Commit change set | `POST /v1/changesets/{id}:commit` | Rechecks access, rights and revisions; atomic |
+| Request user decision | `POST /v1/changesets/{id}:request-user-decision` | `Idempotency-Key`; commits with user authority for the user, 202 with a confirmation otherwise |
+| Confirmation | `GET /v1/confirmations/{id}`, `POST /v1/confirmations/{id}:complete` | State and Gate URL; complete applies an approved change once |
 | Recall | `POST /v1/recall` | Mode, budget and time selection; Context Pack |
 | Changes | `GET /v1/changes` | Opaque cursor, `limit` 1–200 (default 50) |
 | Enable source | `POST /v1/connectors` | User; enabling requires `consent: true` |
 | Capture | `POST /v1/captures` | `Idempotency-Key`; 202 with job ID |
 | Capture status | `GET /v1/captures/{id}` | `accepted`, `processing`, `committed`, `held`, `failed` |
-| Reviews | `GET /v1/review`, `GET /v1/review/{id}`, `POST /v1/review/{id}:decision` | User; decision requires `expected_revision` |
-| Forget | `POST /v1/forget`, `GET /v1/forget/{id}` | User; immediate suppression, purge progress |
-| Source rights | `PUT /v1/sources/{id}:rights` | User; `granted` or `revoked` |
-| Grants | `PUT /v1/scopes/{id}/grants` | User; capabilities, expiry or revocation for a principal |
-| Retention | `PUT /v1/scopes/{id}/retention` | User; bounded observation and memory ages |
+| Reviews | `GET /v1/review`, `GET /v1/review/{id}`, `POST /v1/review/{id}:decision` | User; decision requires `expected_revision`; 202 with a confirmation for other actors |
+| Forget | `POST /v1/forget`, `GET /v1/forget/{id}` | User; immediate suppression, purge progress; 202 with a confirmation for other actors |
+| Source rights | `PUT /v1/sources/{id}:rights` | User; `granted` or `revoked`; 202 with a confirmation for other actors |
+| Grants | `PUT /v1/scopes/{id}/grants` | User; capabilities, expiry or revocation for a principal; 202 with a confirmation for other actors |
+| Retention | `PUT /v1/scopes/{id}/retention` | User; bounded observation and memory ages; 202 with a confirmation for other actors |
 | Export | `POST /v1/exports`, `GET /v1/exports/{id}`, `GET /v1/exports/{id}:download` | User for create and download; asynchronous encrypted bundle |
 | Import | `POST /v1/imports` | User; `Idempotency-Key`; authenticated bundle |
 
@@ -51,7 +53,7 @@ Review tools on the read endpoint still require the user.
 
 ## Remember and change sets
 
-`remember_memory` commits one memory—kind, statement, structured context, subjects, valid-time interval, epistemic status and 1–64 evidence items—synchronously and returns its revision. Authority and lifecycle derive from the authenticated actor, kind and epistemic status; a client cannot set authority in the request or impersonate the user's decision. A non-user caller's explicit write starts as a candidate. A separate internal capture path may activate a fact only when it passes the worker's automatic-capture policy. Use this tool for an explicit user request, and do not relabel model inference as the user's words.
+`remember_memory` commits one memory—kind, statement, structured context, subjects, valid-time interval, epistemic status and 1–64 evidence items—synchronously and returns its revision. Authority and lifecycle derive from the authenticated actor, kind and epistemic status; the request cannot set authority. Every client admitted under one Gate subject shares that principal's actor kind, so a client acting as the user must send `epistemic_status: "proposed"` for its own suggestions; otherwise the write becomes active with `user_decision`, `user_preference` or `user_assertion` authority. A non-user principal's explicit write starts as a candidate. A separate internal capture path may activate a fact only when it passes the worker's automatic-capture policy. Use this tool for an explicit user request, and do not relabel model inference as the user's words.
 
 A change set holds 1–64 operations (CREATE, CORROBORATE, REFINE, SUPERSEDE, CONTEST, RELATE, RETRACT, NO_OP) for one scope, each with the target's `expected_revision`. Proposal and commit are separate; a commit is all-or-nothing and returns `409 revision_conflict` when any target moved. Replaying a committed proposal returns its stored response only to the proposing principal or the user.
 
@@ -89,6 +91,16 @@ The complete serialized Context Pack, including evidence and uncertainty metadat
 
 Source-rights revocation is separate from Forget. It blocks dependent reads under current rights checks, advances the scope's authorization epoch and invalidates every earlier ready export in that scope. A grant of rights is a current-scope decision and does not rewrite imported provenance or user attribution. Retention policies bound observation and memory ages; expiry goes through the same suppression, ledger and purge path as Forget.
 
+## Change confirmations
+
+A change only the user may make, requested by any other actor, waits for the person's approval at Gate. The [change confirmation design](../design/change-confirmation.md) defines the contract.
+
+1. The protected tool or route stores the exact change, renders a plain-text summary from stored data and creates a Gate confirmation. It returns `{ "status": "confirmation_required", "confirmation": { "confirmation_id", "url", "summary", … } }`, with HTTP 202 on REST. A summary over Gate's limits returns `413 summary_too_large`; split the change.
+2. Show the `url` to the person. They sign in at Gate and approve or deny. The AI cannot supply the summary or approve.
+3. Call `complete_confirmation` or `POST /v1/confirmations/{id}:complete` through the same endpoint that requested it. It returns `pending`, `denied`, `expired`, `cancelled`, `failed` or `committed` with the change's normal response, and applies the change at most once. A shown proposal or memory that changed meanwhile fails it with `confirmation_stale`.
+
+`request_user_decision` asks for a proposed change set to be committed with user authority. Use it for decisions, preferences and corrections the person actually stated; the person sees every operation before approving. Forgetting a memory cancels pending confirmations that show it.
+
 ## Export and import
 
 `request_export` creates an idempotent asynchronous job for a complete scope. Status and download require current authorization, matching deletion and authorization epochs, a ready artifact and an unexpired job. Expired artifacts receive durable cleanup tombstones and are removed; claim tokens fence stale workers.
@@ -104,9 +116,10 @@ Source-rights revocation is separate from Forget. It blocks dependent reads unde
 | `403 forbidden`, `user_required`, `source_not_authorized` | Outside the principal's grant or source rights |
 | `404 not_found` | Missing or not visible; existence of inaccessible records is not revealed |
 | `409 revision_conflict` | Re-read and reconcile, then propose against the new revision |
-| `409 idempotency_conflict` | Same key, different body; a caller bug |
+| `409 idempotency_conflict`, `idempotency_key_reused` | Same key, different body or change; a caller bug |
+| `409 confirmation_endpoint_mismatch` | Complete the confirmation through the endpoint that requested it |
 | `410 cursor_expired` | Recall afresh and restart the feed |
-| `413 payload_too_large` | Request body over 1 MiB |
+| `413 payload_too_large`, `summary_too_large` | Request body over 1 MiB, or a change too large to show in full for approval; split it |
 | `429 rate_limited` | Retry after the indicated delay |
 | `503 restore_not_ready`, `curator_timeout`, `database_error` | Retryable after a delay; protected reads stay closed during restore reconciliation |
 

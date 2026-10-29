@@ -7,6 +7,7 @@ import { createConfiguredCuratorProviders } from '@memory/curator';
 import { RecallService } from '@memory/recall';
 import { CurationReviewService } from '@memory/jobs';
 import { ForgetService, PortabilityService } from '@memory/governance';
+import { ChangeConfirmationService } from './confirmations.js';
 import { createApiServer } from './server.js';
 
 const host = process.env['API_HOST'] ?? '0.0.0.0';
@@ -71,6 +72,7 @@ const governance = new ForgetService(pool, governanceStorage.deletionLedger);
 const portability = new PortabilityService(pool, governanceStorage.portabilityStore, {
   hmacKey: requiredEnvironment('FORGET_HMAC_KEY'),
 });
+const confirmations = new ChangeConfirmationService({ pool, core, governance, reviews });
 const server = createApiServer({
   productDisplayName,
   auth,
@@ -87,6 +89,7 @@ const server = createApiServer({
   reviews,
   governance,
   portability,
+  confirmations,
   ready: async () => {
     await pingDatabase(pool);
     await governance.verifyLedgerReadiness();

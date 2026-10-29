@@ -290,6 +290,8 @@ export interface ActorContext {
   readonly tokenScopeIds: readonly string[];
   readonly capabilities: readonly Capability[];
   readonly authEpochs: Readonly<Record<string, number>>;
+  /** The verified Gate client registration, recorded as provenance only. */
+  readonly clientId?: string;
 }
 
 export interface CoreErrorBody {

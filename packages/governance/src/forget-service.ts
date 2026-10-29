@@ -1024,8 +1024,8 @@ async function recordForgottenMemories(
   const changeSetId = randomUUID();
   await client.query(
     `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-       response, status, committed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp())`,
+       response, status, committed_at, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp(), $8)`,
     [
       actor.userId,
       scopeId,
@@ -1034,6 +1034,7 @@ async function recordForgottenMemories(
       requestId,
       memories.rows.length,
       JSON.stringify({ change_set_id: changeSetId, source: 'forget' }),
+      actor.clientId ?? null,
     ],
   );
   const result = await client.query<{ last_seq: string }>(

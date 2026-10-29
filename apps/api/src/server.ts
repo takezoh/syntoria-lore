@@ -14,6 +14,7 @@ import type { RecallService } from '@memory/recall';
 import type { CurationReviewService } from '@memory/jobs';
 import type { ForgetService } from '@memory/governance';
 import type { PortabilityService } from '@memory/governance';
+import type { ChangeConfirmationService, ProtectedChange } from './confirmations.js';
 import { handleMcpRequest } from './mcp.js';
 import { createOpenApiDocument } from './openapi.js';
 
@@ -30,6 +31,7 @@ export interface ApiServerOptions {
   readonly reviews?: CurationReviewService;
   readonly governance?: ForgetService;
   readonly portability?: PortabilityService;
+  readonly confirmations?: ChangeConfirmationService;
   readonly mcpReadAuth?: Authenticator;
   readonly mcpWriteAuth?: Authenticator;
   readonly mcpAuthorizationServerUrl?: string;
@@ -271,6 +273,7 @@ async function handleRequest(
           ...(options.reviews === undefined ? {} : { reviews: options.reviews }),
           ...(options.governance === undefined ? {} : { governance: options.governance }),
           ...(options.portability === undefined ? {} : { portability: options.portability }),
+          ...(options.confirmations === undefined ? {} : { confirmations: options.confirmations }),
           maxBodyBytes: options.maxBodyBytes ?? maxBodyBytes,
         },
         webRequest,
@@ -334,6 +337,28 @@ async function handleRequest(
     const actor = await options.auth.authenticateBearer(request.headers.authorization);
     let result: unknown;
     let responseStatus = 200;
+    // A protected change runs directly for the User and becomes a Gate confirmation (202) otherwise.
+    const protectedChange = async (
+      change: ProtectedChange,
+      idempotencyKey: string | undefined,
+      direct: () => Promise<unknown>,
+      directStatus = 200,
+    ): Promise<void> => {
+      if (options.confirmations === undefined) {
+        result = await direct();
+        responseStatus = directStatus;
+        return;
+      }
+      const outcome = await options.confirmations.run(
+        options.auth,
+        actor,
+        change,
+        idempotencyKey,
+        requestId,
+      );
+      result = outcome.result;
+      responseStatus = outcome.confirmationRequired ? 202 : directStatus;
+    };
     if (request.method === 'POST' && url.pathname === '/v1/memories:remember') {
       const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
       const idempotencyKey = request.headers['idempotency-key'];
@@ -357,6 +382,40 @@ async function handleRequest(
         requestId,
         idempotencyKey,
       );
+    } else if (
+      request.method === 'POST' &&
+      /^\/v1\/changesets\/[^/]+:request-user-decision$/.test(url.pathname) &&
+      options.confirmations !== undefined
+    ) {
+      const changeSetId = url.pathname.slice(
+        '/v1/changesets/'.length,
+        -':request-user-decision'.length,
+      );
+      assertUuid(changeSetId, 'changeset_id');
+      const idempotencyKey = request.headers['idempotency-key'];
+      if (typeof idempotencyKey !== 'string')
+        throw new CoreError(400, 'invalid_request', 'Idempotency-Key header is required');
+      await protectedChange(
+        { operation: 'commit_changeset', changesetId: changeSetId },
+        idempotencyKey,
+        () => options.core.commitProposedChangeSet(actor, changeSetId, requestId, idempotencyKey),
+      );
+    } else if (
+      request.method === 'GET' &&
+      /^\/v1\/confirmations\/[^/:]+$/.test(url.pathname) &&
+      options.confirmations !== undefined
+    ) {
+      const confirmationId = url.pathname.split('/')[3] ?? '';
+      assertUuid(confirmationId, 'confirmation_id');
+      result = await options.confirmations.get(actor, confirmationId);
+    } else if (
+      request.method === 'POST' &&
+      /^\/v1\/confirmations\/[^/]+:complete$/.test(url.pathname) &&
+      options.confirmations !== undefined
+    ) {
+      const confirmationId = url.pathname.slice('/v1/confirmations/'.length, -':complete'.length);
+      assertUuid(confirmationId, 'confirmation_id');
+      result = await options.confirmations.complete(options.auth, actor, confirmationId, requestId);
     } else if (request.method === 'POST' && url.pathname === '/v1/recall') {
       const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
       result =
@@ -368,12 +427,14 @@ async function handleRequest(
       const idempotencyKey = request.headers['idempotency-key'];
       if (typeof idempotencyKey !== 'string')
         throw new CoreError(400, 'invalid_request', 'Idempotency-Key header is required');
-      result = await options.governance.forget(
-        actor,
-        await readJson(request, options.maxBodyBytes ?? maxBodyBytes),
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      const governance = options.governance;
+      await protectedChange(
+        { operation: 'forget', request: body },
         idempotencyKey,
+        () => governance.forget(actor, body, idempotencyKey),
+        202,
       );
-      responseStatus = 202;
     } else if (request.method === 'POST' && url.pathname === '/v1/exports') {
       if (options.portability === undefined) throw unavailableFeature('Portability export');
       const idempotencyKey = request.headers['idempotency-key'];
@@ -425,28 +486,35 @@ async function handleRequest(
       result = await options.governance.status(actor, scopeId, requestId);
     } else if (request.method === 'PUT' && /^\/v1\/sources\/[^/]+:rights$/.test(url.pathname)) {
       if (options.governance === undefined) throw unavailableFeature('Source rights');
-      result = await options.governance.updateSourceRights(
-        actor,
-        url.pathname.split('/')[3]?.replace(/:rights$/, '') ?? '',
-        await readJson(request, options.maxBodyBytes ?? maxBodyBytes),
+      const governance = options.governance;
+      const sourceId = url.pathname.split('/')[3]?.replace(/:rights$/, '') ?? '';
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      await protectedChange(
+        { operation: 'change_source_rights', sourceId, request: body },
+        undefined,
+        () => governance.updateSourceRights(actor, sourceId, body),
       );
     } else if (request.method === 'PUT' && /^\/v1\/scopes\/[^/]+\/grants$/.test(url.pathname)) {
       if (options.governance === undefined) throw unavailableFeature('Scope grants');
+      const governance = options.governance;
       const scopeId = url.pathname.split('/')[3] ?? '';
       assertUuid(scopeId, 'scope_id');
-      result = await options.governance.mutateGrant(
-        actor,
-        scopeId,
-        await readJson(request, options.maxBodyBytes ?? maxBodyBytes),
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      await protectedChange(
+        { operation: 'change_scope_grant', scopeId, request: body },
+        undefined,
+        () => governance.mutateGrant(actor, scopeId, body),
       );
     } else if (request.method === 'PUT' && /^\/v1\/scopes\/[^/]+\/retention$/.test(url.pathname)) {
       if (options.governance === undefined) throw unavailableFeature('Retention policy');
+      const governance = options.governance;
       const scopeId = url.pathname.split('/')[3] ?? '';
       assertUuid(scopeId, 'scope_id');
-      result = await options.governance.updateRetention(
-        actor,
-        scopeId,
-        await readJson(request, options.maxBodyBytes ?? maxBodyBytes),
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      await protectedChange(
+        { operation: 'set_retention_policy', scopeId, request: body },
+        undefined,
+        () => governance.updateRetention(actor, scopeId, body),
       );
     } else if (request.method === 'POST' && /^\/v1\/memories\/[^/]+:feedback$/.test(url.pathname)) {
       if (options.governance === undefined) throw unavailableFeature('Memory feedback');
@@ -500,16 +568,16 @@ async function handleRequest(
       result = await options.reviews.get(actor, url.pathname.split('/')[3] ?? '');
     } else if (request.method === 'POST' && /^\/v1\/reviews?\/[^/]+:decision$/.test(url.pathname)) {
       if (options.reviews === undefined) throw unavailableFeature('Curation review');
+      const reviews = options.reviews;
       const reviewId = url.pathname.split('/')[3]?.replace(/:decision$/, '') ?? '';
       const idempotencyKey = request.headers['idempotency-key'];
       if (typeof idempotencyKey !== 'string')
         throw new CoreError(400, 'invalid_request', 'Idempotency-Key header is required');
-      result = await options.reviews.decide(
-        actor,
-        reviewId,
-        await readJson(request, options.maxBodyBytes ?? maxBodyBytes),
-        requestId,
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      await protectedChange(
+        { operation: 'decide_review', reviewId, decision: body },
         idempotencyKey,
+        () => reviews.decide(actor, reviewId, body, requestId, idempotencyKey),
       );
     } else if (
       request.method === 'GET' &&

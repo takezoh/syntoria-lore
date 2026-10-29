@@ -2,10 +2,17 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 
+// Connection principals carry a synthetic issuer that no Gate token presents.
+const CONNECTION_ISSUER = 'urn:syntoria:lore:connection';
+
 const parsed = parseArguments(process.argv.slice(2));
 const spec = parseSpec(JSON.parse(await readFile(parsed.file, 'utf8')));
 const databaseUrl = required('IDENTITY_MAPPING_DATABASE_URL');
-const action = parsed.deactivate ? 'deactivate' : 'activate';
+const action = parsed.connectionPrincipal
+  ? `connection_principal_${parsed.connectionPrincipal}`
+  : parsed.deactivate
+    ? 'deactivate'
+    : 'activate';
 const pool = new Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 5000 });
 try {
   const client = await pool.connect();
@@ -14,6 +21,9 @@ try {
     const snapshot = await readLockedBaseline(client, spec);
     const current = await readTargetBinding(client, spec);
     validateExisting(current, spec, action);
+    const connection = parsed.connectionPrincipal
+      ? await readConnectionPrincipal(client, spec, snapshot, current, parsed.connectionPrincipal)
+      : undefined;
     const fingerprint = hashSnapshot({
       source: snapshot,
       target:
@@ -24,6 +34,7 @@ try {
               scope_ids: [...current.scope_ids].sort(),
               capability_ceiling: [...current.capability_ceiling].sort(),
             },
+      ...(connection === undefined ? {} : { connection_principal: connection }),
     });
 
     if (!parsed.apply) {
@@ -39,7 +50,14 @@ try {
           scope_ids: spec.scope_ids,
           capability_ceiling: spec.capability_ceiling,
           active_grants: snapshot.grants,
-          existing_binding: current === undefined ? null : { active: current.active },
+          existing_binding:
+            current === undefined
+              ? null
+              : {
+                  active: current.active,
+                  connection_principal_id: current.connection_principal_id,
+                },
+          ...(connection === undefined ? {} : { connection_principal: connection }),
           baseline_sha256: fingerprint,
           next: `rerun with --apply --expected-baseline ${fingerprint}`,
         })}\n`,
@@ -48,40 +66,30 @@ try {
       if (parsed.expectedBaseline !== fingerprint) {
         throw new Error(`Baseline changed; rerun dry-run. Current SHA-256 is ${fingerprint}`);
       }
-      if (action === 'activate' && current === undefined) {
-        await client.query(
-          `INSERT INTO public.external_identity_bindings
-             (external_issuer, external_subject, user_id, principal_id, scope_ids, capability_ceiling)
-           VALUES ($1, $2, $3, $4, $5::uuid[], $6::text[])`,
-          [
-            spec.target.issuer,
-            spec.target.subject,
-            spec.user_id,
-            spec.principal_id,
-            spec.scope_ids,
-            spec.capability_ceiling,
-          ],
+      if (connection !== undefined) {
+        const connectionPrincipalId = await applyConnectionPrincipal(
+          client,
+          spec,
+          current,
+          connection,
+          parsed.connectionPrincipal,
         );
-      } else if (action === 'activate' && current?.active === false) {
-        await client.query(
-          `UPDATE public.external_identity_bindings
-           SET active = true, updated_at = clock_timestamp()
-           WHERE external_issuer = $1 AND external_subject = $2`,
-          [spec.target.issuer, spec.target.subject],
+        await client.query('COMMIT');
+        process.stdout.write(
+          `${JSON.stringify({
+            status: `connection_principal_${parsed.connectionPrincipal}d`,
+            target: spec.target,
+            connection_principal_id: connectionPrincipalId,
+            baseline_sha256: fingerprint,
+          })}\n`,
         );
-      } else if (action === 'deactivate' && current?.active === true) {
-        await client.query(
-          `UPDATE public.external_identity_bindings
-           SET active = false, updated_at = clock_timestamp()
-           WHERE external_issuer = $1 AND external_subject = $2`,
-          [spec.target.issuer, spec.target.subject],
+      } else {
+        await applyBinding(client, spec, current, action);
+        await client.query('COMMIT');
+        process.stdout.write(
+          `${JSON.stringify({ status: action === 'activate' ? 'active' : 'inactive', target: spec.target, baseline_sha256: fingerprint })}\n`,
         );
       }
-
-      await client.query('COMMIT');
-      process.stdout.write(
-        `${JSON.stringify({ status: action === 'activate' ? 'active' : 'inactive', target: spec.target, baseline_sha256: fingerprint })}\n`,
-      );
     }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -91,6 +99,38 @@ try {
   }
 } finally {
   await pool.end();
+}
+
+async function applyBinding(client, mapping, current, action) {
+  if (action === 'activate' && current === undefined) {
+    await client.query(
+      `INSERT INTO public.external_identity_bindings
+             (external_issuer, external_subject, user_id, principal_id, scope_ids, capability_ceiling)
+           VALUES ($1, $2, $3, $4, $5::uuid[], $6::text[])`,
+      [
+        mapping.target.issuer,
+        mapping.target.subject,
+        mapping.user_id,
+        mapping.principal_id,
+        mapping.scope_ids,
+        mapping.capability_ceiling,
+      ],
+    );
+  } else if (action === 'activate' && current?.active === false) {
+    await client.query(
+      `UPDATE public.external_identity_bindings
+           SET active = true, updated_at = clock_timestamp()
+           WHERE external_issuer = $1 AND external_subject = $2`,
+      [mapping.target.issuer, mapping.target.subject],
+    );
+  } else if (action === 'deactivate' && current?.active === true) {
+    await client.query(
+      `UPDATE public.external_identity_bindings
+           SET active = false, updated_at = clock_timestamp()
+           WHERE external_issuer = $1 AND external_subject = $2`,
+      [mapping.target.issuer, mapping.target.subject],
+    );
+  }
 }
 
 async function readLockedBaseline(client, mapping) {
@@ -144,7 +184,8 @@ async function readLockedBaseline(client, mapping) {
 
 async function readTargetBinding(client, mapping) {
   const result = await client.query(
-    `SELECT user_id::text, principal_id::text, scope_ids::text[], capability_ceiling, active
+    `SELECT id::text, user_id::text, principal_id::text, scope_ids::text[], capability_ceiling,
+            active, connection_principal_id::text
      FROM public.external_identity_bindings
      WHERE external_issuer = $1 AND external_subject = $2
      FOR UPDATE`,
@@ -153,9 +194,80 @@ async function readTargetBinding(client, mapping) {
   return result.rows[0];
 }
 
+/**
+ * The binding's connection principal, or the one a previous disable left behind for reuse.
+ * Every connection of the subject acts as it, with grants read from the binding's user principal.
+ * Disable stays available on an inactive binding so the switch can always be cleared.
+ */
+async function readConnectionPrincipal(client, mapping, snapshot, binding, mode) {
+  if (mode === 'enable' && snapshot.principal.actor_kind !== 'user') {
+    throw new Error('A connection principal can act only for a user principal');
+  }
+  if (mode === 'enable' && binding.active !== true) {
+    throw new Error('The target binding is inactive');
+  }
+  const result = await client.query(
+    `SELECT id::text, user_id::text, issuer, subject, actor_kind, active,
+            acts_for_principal_id::text
+     FROM public.principals
+     WHERE user_id = $1
+       AND (id = $2::uuid OR ($2::uuid IS NULL AND issuer = $3 AND subject = $4))
+     FOR SHARE`,
+    [mapping.user_id, binding.connection_principal_id, CONNECTION_ISSUER, `binding:${binding.id}`],
+  );
+  const principal = result.rows[0];
+  if (
+    mode === 'enable' &&
+    principal !== undefined &&
+    (principal.actor_kind !== 'client' ||
+      principal.active !== true ||
+      principal.acts_for_principal_id !== mapping.principal_id)
+  ) {
+    throw new Error('The existing connection principal does not act for the bound user principal');
+  }
+  return {
+    bound: binding.connection_principal_id !== null,
+    principal:
+      principal === undefined
+        ? null
+        : { id: principal.id, issuer: principal.issuer, subject: principal.subject },
+  };
+}
+
+async function applyConnectionPrincipal(client, mapping, binding, connection, mode) {
+  if (mode === 'disable') {
+    if (connection.bound) {
+      await client.query(
+        `UPDATE public.external_identity_bindings
+         SET connection_principal_id = NULL, updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [binding.id],
+      );
+    }
+    return null;
+  }
+  if (connection.bound) return connection.principal.id;
+  const principalId =
+    connection.principal?.id ??
+    (
+      await client.query(
+        `INSERT INTO public.principals (user_id, issuer, subject, actor_kind, acts_for_principal_id)
+         VALUES ($1, $2, $3, 'client', $4) RETURNING id::text`,
+        [mapping.user_id, CONNECTION_ISSUER, `binding:${binding.id}`, mapping.principal_id],
+      )
+    ).rows[0].id;
+  await client.query(
+    `UPDATE public.external_identity_bindings
+     SET connection_principal_id = $2, updated_at = clock_timestamp()
+     WHERE id = $1`,
+    [binding.id, principalId],
+  );
+  return principalId;
+}
+
 function validateExisting(binding, mapping, actionName) {
   if (binding === undefined) {
-    if (actionName === 'deactivate') throw new Error('The exact target binding does not exist');
+    if (actionName !== 'activate') throw new Error('The exact target binding does not exist');
     return;
   }
   const exact =
@@ -281,32 +393,33 @@ function hasExactKeys(value, expected) {
 }
 
 function parseArguments(args) {
+  const usage =
+    'Usage: gate-identity-map --file <mapping.json> [--deactivate | --connection-principal enable|disable] [--apply --expected-baseline <sha256>]';
   let file;
   let apply = false;
   let deactivate = false;
+  let connectionPrincipal;
   let expectedBaseline;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--file') file = args[++index];
     else if (arg === '--apply') apply = true;
     else if (arg === '--deactivate') deactivate = true;
+    else if (arg === '--connection-principal') connectionPrincipal = args[++index];
     else if (arg === '--expected-baseline') expectedBaseline = args[++index];
-    else
-      throw new Error(
-        'Usage: gate-identity-map --file <mapping.json> [--deactivate] [--apply --expected-baseline <sha256>]',
-      );
+    else throw new Error(usage);
   }
   if (
     file === undefined ||
+    (connectionPrincipal !== undefined && !['enable', 'disable'].includes(connectionPrincipal)) ||
+    (connectionPrincipal !== undefined && deactivate) ||
     (apply && !/^[a-f0-9]{64}$/i.test(expectedBaseline ?? '')) ||
     (!apply && expectedBaseline !== undefined) ||
     (apply && args.includes('--deactivate') !== deactivate)
   ) {
-    throw new Error(
-      'Usage: gate-identity-map --file <mapping.json> [--deactivate] [--apply --expected-baseline <sha256>]',
-    );
+    throw new Error(usage);
   }
-  return { file, apply, deactivate, expectedBaseline };
+  return { file, apply, deactivate, connectionPrincipal, expectedBaseline };
 }
 
 function required(name) {

@@ -37,8 +37,7 @@ Create a private JSON file with the exact existing principal and intended Gate i
   "principal_id": "00000000-0000-4000-8000-000000000002",
   "target": {
     "issuer": "https://gate.example.test",
-    "subject": "github:12345",
-    "client_id": "memory-mcp"
+    "subject": "github:12345"
   },
   "scope_ids": ["00000000-0000-4000-8000-000000000003"],
   "capability_ceiling": ["read"]
@@ -61,6 +60,22 @@ IDENTITY_MAPPING_DATABASE_URL="$MIGRATION_DATABASE_URL" \
 ```
 
 An exact existing mapping is idempotent. An inactive mapping can be reactivated only by a fresh baseline and apply. Deactivate with the same two-step procedure and `--deactivate`; do not delete bindings or change a policy through ad hoc SQL. The mapping file is an authorization decision and must be reviewed by the service owner.
+
+## Switch connections to a connection principal
+
+Stage 3 of [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) makes every Gate connection of a person act as one non-user connection principal, so AI writes stay proposals and protected changes need the person's approval at Gate. Set it only after Gate with change confirmations and the Lore API from the same release are deployed, migrations 0045 and 0046 are applied, and a hosted readback has confirmed both.
+
+Use the reviewed mapping file of the existing active binding. The binding's principal must be the person's active user principal; the tool refuses otherwise, because confirmed changes are applied as that principal. Run the dry-run and review `existing_binding.connection_principal_id` and `connection_principal`:
+
+```sh
+IDENTITY_MAPPING_DATABASE_URL="$MIGRATION_DATABASE_URL" \
+  npm run gate:identity:map -- --file /secure/path/gate-map.json \
+  --connection-principal enable
+```
+
+Apply with the reported digest and the same flag. The tool creates a `client` principal with issuer `urn:syntoria:lore:connection` and subject `binding:<binding id>`, acting for the binding's principal, and names it on the binding. It holds no grants; connections read the user principal's grants through it. Rerunning reuses the same principal.
+
+To revert, run the same two steps with `--connection-principal disable`. It clears the binding field, keeps the principal for a later enable, and works on an inactive binding. Connections then act as the user principal again. Confirmations that were pending stay valid and can still be completed.
 
 ## Production readback and remaining acceptance
 

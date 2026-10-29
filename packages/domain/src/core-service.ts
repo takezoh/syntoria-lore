@@ -205,8 +205,8 @@ export class CoreService {
       };
       await client.query(
         `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb)`,
+           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response, client_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb, $11)`,
         [
           actor.userId,
           changeSet.scope_id,
@@ -218,6 +218,7 @@ export class CoreService {
           JSON.stringify(changeSet),
           payloadHash,
           idempotencyKey,
+          actor.clientId ?? null,
         ],
       );
       await client.query(
@@ -500,8 +501,8 @@ export class CoreService {
       } else {
         await client.query(
           `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-             response, status, committed_at)
-           VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, 'committed', clock_timestamp())`,
+             response, status, committed_at, client_id)
+           VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, 'committed', clock_timestamp(), $7)`,
           [
             actor.userId,
             changeSet.scope_id,
@@ -509,6 +510,7 @@ export class CoreService {
             actor.principalId,
             requestId,
             changeSet.operations.length,
+            actor.clientId ?? null,
           ],
         );
       }
@@ -892,8 +894,8 @@ export class CoreService {
       };
       await client.query(
         `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb)`,
+           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response, client_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb, $11)`,
         [
           actor.userId,
           changeSet.scope_id,
@@ -905,6 +907,7 @@ export class CoreService {
           JSON.stringify(changeSet),
           payloadHash,
           idempotencyKey,
+          actor.clientId ?? null,
         ],
       );
       const reviewId = randomUUID();

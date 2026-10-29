@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
@@ -30,6 +30,7 @@ import {
   HttpTaskDispatcher,
   OutboxDispatcher,
 } from '@memory/jobs';
+import { ChangeConfirmationService } from '../apps/api/src/confirmations.js';
 import { createApiServer } from '../apps/api/src/server.js';
 import { createWorkerServer } from '../apps/worker/src/server.js';
 import {
@@ -156,8 +157,77 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   let workerBaseUrl: string;
   const gateTokens = new Map<string, Record<string, unknown>>();
   const introspectionCount = new Map<string, number>();
+  // Synthetic Gate change confirmations: tests decide them by changing `state` directly.
+  const gateConfirmations = new Map<
+    string,
+    {
+      resource: string;
+      reference: string;
+      change_hash: string;
+      subject: string;
+      connection_id: string;
+      summary: { title: string; lines: string[] };
+      state: 'pending' | 'approved' | 'denied' | 'used' | 'cancelled';
+      consumed_as?: { subject: string; connection_id: string };
+    }
+  >();
+  const gateResource = (init?: RequestInit) =>
+    Buffer.from(
+      String(new Headers(init?.headers).get('authorization')).replace(/^Basic /u, ''),
+      'base64',
+    )
+      .toString('utf8')
+      .split(':')[0]!;
   const gateFetch: typeof fetch = async (input, init) => {
     const url = String(input);
+    if (url === `${gateIssuer}/confirmations`) {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const owner = [...gateTokens.values()].find(
+        (claims) => claims['connection_id'] === body['connection_id'],
+      );
+      if (owner === undefined || owner['active'] === false || owner['sub'] !== body['subject']) {
+        return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 });
+      }
+      const id = randomBytes(32).toString('base64url');
+      gateConfirmations.set(id, {
+        resource: gateResource(init),
+        reference: String(body['reference']),
+        change_hash: String(body['change_hash']),
+        subject: String(body['subject']),
+        connection_id: String(body['connection_id']),
+        summary: body['summary'] as { title: string; lines: string[] },
+        state: 'pending',
+      });
+      return jsonResponse({ id, url: `${gateIssuer}/confirm?id=${id}` }, 201);
+    }
+    if (url === `${gateIssuer}/confirmations/consume`) {
+      const body = JSON.parse(String(init?.body)) as Record<string, string>;
+      const record = gateConfirmations.get(body['id']!);
+      if (
+        record === undefined ||
+        record.resource !== gateResource(init) ||
+        record.reference !== body['reference'] ||
+        record.change_hash !== body['change_hash'] ||
+        record.state === 'cancelled'
+      ) {
+        return jsonResponse({ status: 'expired' });
+      }
+      if (record.state !== 'approved') return jsonResponse({ status: record.state });
+      record.state = 'used';
+      return jsonResponse({
+        status: 'consumed',
+        subject: record.consumed_as?.subject ?? record.subject,
+        connection_id: record.consumed_as?.connection_id ?? record.connection_id,
+        decided_at: Math.floor(Date.now() / 1000),
+      });
+    }
+    if (url === `${gateIssuer}/confirmations/cancel`) {
+      const body = JSON.parse(String(init?.body)) as Record<string, string>;
+      const record = gateConfirmations.get(body['id']!);
+      if (record !== undefined && record.resource === gateResource(init))
+        record.state = 'cancelled';
+      return new Response(null, { status: 204 });
+    }
     if (url === `${gateIssuer}/.well-known/openid-configuration`) {
       return jsonResponse({
         issuer: gateIssuer,
@@ -336,6 +406,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       reviews: reviewService,
       governance,
       portability,
+      confirmations: new ChangeConfirmationService({
+        pool: app,
+        core: coreService,
+        governance,
+        reviews: reviewService,
+      }),
       ready: () => governance.verifyLedgerReadiness(),
       rateLimit: 10_000,
     });
@@ -416,6 +492,16 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         },
       );
     const bindingKey = [target.issuer, target.subject];
+    const clientTarget = { ...target, subject: `${target.subject}-client` };
+    const clientMapping = {
+      expected_source: { issuer, subject: clientSubject },
+      user_id: userId,
+      principal_id: clientPrincipalId,
+      target: clientTarget,
+      scope_ids: [scopeB],
+      capability_ceiling: ['read'],
+    };
+    let connectionSwitchSubject: string | undefined;
 
     try {
       await writeFile(mappingPath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
@@ -483,6 +569,126 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       const idempotentReadback = await readBinding();
       expect(idempotentReadback.rows).toEqual(firstReadback.rows);
 
+      const conflicting = runMapping('--connection-principal', 'enable', '--deactivate');
+      expect(conflicting.status).toBe(1);
+      expect(conflicting.stderr).toContain('Usage: gate-identity-map');
+
+      const switchConnectionPrincipal = (mode: 'enable' | 'disable') => {
+        const dryRun = runMapping('--connection-principal', mode);
+        expect(dryRun.status).toBe(0);
+        const planned = JSON.parse(dryRun.stdout) as { baseline_sha256: string };
+        const result = runMapping(
+          '--connection-principal',
+          mode,
+          '--apply',
+          '--expected-baseline',
+          planned.baseline_sha256,
+        );
+        expect(result.status).toBe(0);
+        return {
+          dryRun: JSON.parse(dryRun.stdout) as {
+            action: string;
+            connection_principal: { bound: boolean; principal: { id: string } | null };
+          },
+          result: JSON.parse(result.stdout) as {
+            status: string;
+            connection_principal_id: string | null;
+          },
+          baseline: planned.baseline_sha256,
+        };
+      };
+      const readSwitch = () =>
+        admin.query<{
+          binding_id: string;
+          connection_principal_id: string | null;
+          issuer: string | null;
+          subject: string | null;
+          actor_kind: string | null;
+          acts_for_principal_id: string | null;
+        }>(
+          `SELECT b.id::text AS binding_id, b.connection_principal_id::text,
+                  p.issuer, p.subject, p.actor_kind, p.acts_for_principal_id::text
+           FROM public.external_identity_bindings b
+           LEFT JOIN public.principals p
+             ON p.issuer = 'urn:syntoria:lore:connection' AND p.subject = 'binding:' || b.id
+           WHERE b.external_issuer = $1 AND b.external_subject = $2`,
+          bindingKey,
+        );
+
+      const enabled = switchConnectionPrincipal('enable');
+      expect(enabled.dryRun).toMatchObject({
+        action: 'connection_principal_enable',
+        connection_principal: { bound: false, principal: null },
+      });
+      expect(enabled.result.status).toBe('connection_principal_enabled');
+      const enabledReadback = (await readSwitch()).rows[0];
+      expect(enabledReadback).toMatchObject({
+        connection_principal_id: enabled.result.connection_principal_id,
+        actor_kind: 'client',
+        acts_for_principal_id: principalId,
+      });
+      connectionSwitchSubject = enabledReadback?.subject ?? undefined;
+      const resolved = await admin.query<{
+        principal_id: string;
+        actor_kind: string;
+        user_principal_id: string;
+      }>(
+        `SELECT principal_id::text, actor_kind, user_principal_id::text
+         FROM app.lock_external_identity_binding($1, $2)`,
+        bindingKey,
+      );
+      expect(resolved.rows).toEqual([
+        {
+          principal_id: enabled.result.connection_principal_id,
+          actor_kind: 'client',
+          user_principal_id: principalId,
+        },
+      ]);
+      const staleSwitch = runMapping(
+        '--connection-principal',
+        'enable',
+        '--apply',
+        '--expected-baseline',
+        enabled.baseline,
+      );
+      expect(staleSwitch.status).toBe(1);
+      expect(staleSwitch.stderr).toContain('Baseline changed; rerun dry-run');
+
+      const disabled = switchConnectionPrincipal('disable');
+      expect(disabled.result).toMatchObject({
+        status: 'connection_principal_disabled',
+        connection_principal_id: null,
+      });
+      expect((await readSwitch()).rows[0]).toMatchObject({
+        connection_principal_id: null,
+        subject: enabledReadback?.subject,
+      });
+      const reenabled = switchConnectionPrincipal('enable');
+      expect(reenabled.dryRun.connection_principal).toEqual({
+        bound: false,
+        principal: {
+          id: enabled.result.connection_principal_id,
+          issuer: 'urn:syntoria:lore:connection',
+          subject: enabledReadback?.subject,
+        },
+      });
+      expect(reenabled.result.connection_principal_id).toBe(enabled.result.connection_principal_id);
+      switchConnectionPrincipal('disable');
+
+      await writeFile(mappingPath, `${JSON.stringify(clientMapping)}\n`, { mode: 0o600 });
+      const clientPlan = runMapping();
+      expect(clientPlan.status).toBe(0);
+      const clientBaseline = JSON.parse(clientPlan.stdout) as { baseline_sha256: string };
+      expect(
+        runMapping('--apply', '--expected-baseline', clientBaseline.baseline_sha256).status,
+      ).toBe(0);
+      const clientSwitch = runMapping('--connection-principal', 'enable');
+      expect(clientSwitch.status).toBe(1);
+      expect(clientSwitch.stderr).toContain(
+        'A connection principal can act only for a user principal',
+      );
+      await writeFile(mappingPath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
+
       const deactivateDryRun = runMapping('--deactivate');
       expect(deactivateDryRun.status).toBe(0);
       const deactivateBaseline = JSON.parse(deactivateDryRun.stdout) as { baseline_sha256: string };
@@ -500,9 +706,16 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     } finally {
       await admin.query(
         `DELETE FROM public.external_identity_bindings
-         WHERE external_issuer = $1 AND external_subject = $2`,
-        bindingKey,
+         WHERE external_issuer = $1 AND external_subject IN ($2, $3)`,
+        [...bindingKey, clientTarget.subject],
       );
+      if (connectionSwitchSubject !== undefined) {
+        await admin.query(
+          `DELETE FROM public.principals
+           WHERE issuer = 'urn:syntoria:lore:connection' AND subject = $1`,
+          [connectionSwitchSubject],
+        );
+      }
       await rm(directory, { recursive: true, force: true });
     }
   }, 30_000);
@@ -3006,6 +3219,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       expect(names).toEqual(
         expect.arrayContaining(['remember_memory', 'forget_memory', 'capture', 'commit_changeset']),
       );
+      const descriptions = new Map(tools.tools.map((tool) => [tool.name, tool.description ?? '']));
+      expect(descriptions.get('remember_memory')).toContain('"proposed"');
+      expect(descriptions.get('propose_changeset')).toContain('"proposed"');
       const result = await client.callTool({
         name: 'remember_memory',
         arguments: {
@@ -3197,6 +3413,50 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       locked.release();
       operator.release();
     }
+  });
+
+  it('records the verified Gate client on each changeset as provenance only', async () => {
+    const bearer = await token([scopeB], 'memory:read memory:write');
+    const clientId = `provenance-${randomUUID()}`;
+    gateTokens.get(bearer)!.client_id = clientId;
+    const response = await post(
+      '/v1/memories:remember',
+      bearer,
+      {
+        scope_id: scopeB,
+        memory: { ...sampleMemory(), statement: `Provenance check ${randomUUID()}.` },
+      },
+      `provenance-${randomUUID()}`,
+    );
+    expect(response.status).toBe(200);
+    const { change_set_id: changeSetId } = (await response.json()) as { change_set_id: string };
+    const recorded = await admin.query<{ client_id: string | null; authority: string }>(
+      `SELECT c.client_id, v.authority FROM changesets c
+       JOIN memory_versions v ON v.user_id = c.user_id AND v.scope_id = c.scope_id AND v.change_set_id = c.id
+       WHERE c.user_id = $1 AND c.id = $2`,
+      [userId, changeSetId],
+    );
+    expect(recorded.rows).toHaveLength(1);
+    expect(recorded.rows[0]!.client_id).toBe(clientId);
+    const other = await token([scopeB], 'memory:read memory:write');
+    gateTokens.get(other)!.client_id = `provenance-${randomUUID()}`;
+    const otherResponse = await post(
+      '/v1/memories:remember',
+      other,
+      {
+        scope_id: scopeB,
+        memory: { ...sampleMemory(), statement: `Provenance check ${randomUUID()}.` },
+      },
+      `provenance-${randomUUID()}`,
+    );
+    expect(otherResponse.status).toBe(200);
+    const otherVersion = await admin.query<{ authority: string }>(
+      `SELECT v.authority FROM changesets c
+       JOIN memory_versions v ON v.user_id = c.user_id AND v.scope_id = c.scope_id AND v.change_set_id = c.id
+       WHERE c.user_id = $1 AND c.id = $2`,
+      [userId, ((await otherResponse.json()) as { change_set_id: string }).change_set_id],
+    );
+    expect(otherVersion.rows[0]!.authority).toBe(recorded.rows[0]!.authority);
   });
 
   it('rolls back writes when Gate revokes or becomes unavailable at the final commit check', async () => {
@@ -4111,6 +4371,428 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     await expect(governance.verifyLedgerReadiness()).resolves.toBeUndefined();
   }, 40_000);
 
+  type ConfirmationBody = {
+    status: string;
+    confirmation: {
+      confirmation_id: string;
+      status: string;
+      url: string;
+      summary: { title: string; lines: string[] };
+    };
+  };
+  const gateIdOf = (body: ConfirmationBody) =>
+    new URL(body.confirmation.url).searchParams.get('id')!;
+  const complete = async (confirmationId: string, bearer: string) =>
+    (await post(`/v1/confirmations/${confirmationId}:complete`, bearer, {})).json() as Promise<
+      Record<string, unknown> & { status: string }
+    >;
+
+  it('lets every connection of one person act as one non-user principal whose writes stay proposals', async () => {
+    const { gateSubject, connectionPrincipalId } = await connectionSubject([scopeB]);
+    const laptop = connectionToken(gateSubject, 'client-laptop');
+    const desktop = connectionToken(gateSubject, 'client-desktop');
+    const laptopActor = await authenticator.authenticate(`Bearer ${laptop}`);
+    const desktopActor = await authenticator.authenticate(`Bearer ${desktop}`);
+    expect(laptopActor.principalId).toBe(connectionPrincipalId);
+    expect(desktopActor.principalId).toBe(connectionPrincipalId);
+    expect(laptopActor.actorKind).toBe('client');
+    expect(laptopActor.capabilities).toEqual(expect.arrayContaining(['read', 'write']));
+    const response = await post(
+      '/v1/memories:remember',
+      laptop,
+      {
+        scope_id: scopeB,
+        memory: {
+          ...isolatedMemory(),
+          kind: 'decision',
+          statement: `Laptop says ${randomUUID()}.`,
+        },
+      },
+      `connection-${randomUUID()}`,
+    );
+    expect(response.status).toBe(200);
+    const { change_set_id: changeSetId } = (await response.json()) as { change_set_id: string };
+    const version = await admin.query<{ authority: string; client_id: string }>(
+      `SELECT v.authority, c.client_id FROM changesets c
+       JOIN memory_versions v ON v.user_id = c.user_id AND v.scope_id = c.scope_id AND v.change_set_id = c.id
+       WHERE c.user_id = $1 AND c.id = $2`,
+      [userId, changeSetId],
+    );
+    expect(version.rows[0]).toEqual({ authority: 'ai_proposal', client_id: 'client-laptop' });
+    const governed = await fetch(`${baseUrl}/v1/scopes/${scopeB}/retention`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${desktop}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ observation_days: 3650 }),
+    });
+    expect(governed.status).toBe(202);
+    expect(((await governed.json()) as ConfirmationBody).status).toBe('confirmation_required');
+  });
+
+  it('applies a protected change once, only after the person approves it at Gate', async () => {
+    const userToken = await token([scopeB], 'memory:read memory:write');
+    const statement = `Forget me after approval ${randomUUID()}.`;
+    const created = await post(
+      '/v1/memories:remember',
+      userToken,
+      { scope_id: scopeB, memory: { ...isolatedMemory(), statement } },
+      `confirm-${randomUUID()}`,
+    );
+    const memoryId = ((await created.json()) as { operations: { memory_ids: string[] }[] })
+      .operations[0]!.memory_ids[0]!;
+    const { gateSubject } = await connectionSubject([scopeB]);
+    const ai = connectionToken(gateSubject);
+    const key = `confirm-forget-${randomUUID()}`;
+    const forgetRequest = {
+      scope_id: scopeB,
+      selector: { memory_ids: [memoryId] },
+      reason_code: 'user_requested',
+    };
+    const requested = await post('/v1/forget', ai, forgetRequest, key);
+    expect(requested.status).toBe(202);
+    const body = (await requested.json()) as ConfirmationBody;
+    expect(body.status).toBe('confirmation_required');
+    expect(body.confirmation.status).toBe('pending');
+    expect(body.confirmation.summary.title).toBe('Forget memories');
+    expect(body.confirmation.summary.lines).toContain(`Memory (fact): ${statement}`);
+    expect(gateConfirmations.get(gateIdOf(body))).toMatchObject({
+      subject: gateSubject,
+      reference: body.confirmation.confirmation_id,
+      summary: body.confirmation.summary,
+    });
+    const confirmationId = body.confirmation.confirmation_id;
+
+    const replay = (await (
+      await post('/v1/forget', ai, forgetRequest, key)
+    ).json()) as ConfirmationBody;
+    expect(replay.confirmation.confirmation_id).toBe(confirmationId);
+    const reused = await post(
+      '/v1/forget',
+      ai,
+      { ...forgetRequest, reason_code: 'correction' },
+      key,
+    );
+    expect(reused.status).toBe(409);
+    const readMemory = () =>
+      fetch(`${baseUrl}/v1/memories/${memoryId}?scope_id=${scopeB}`, {
+        headers: { authorization: `Bearer ${userToken}` },
+      });
+    expect((await readMemory()).status).toBe(200);
+
+    expect((await complete(confirmationId, ai)).status).toBe('pending');
+    expect((await readMemory()).status).toBe(200);
+    gateConfirmations.get(gateIdOf(body))!.state = 'approved';
+    const completed = await complete(confirmationId, ai);
+    expect(completed.status).toBe('committed');
+    expect(completed['result']).toMatchObject({ status: 'ledger_pending' });
+    expect(gateConfirmations.get(gateIdOf(body))!.state).toBe('used');
+    expect((await readMemory()).status).toBe(404);
+    expect(await complete(confirmationId, ai)).toMatchObject({
+      status: 'committed',
+      result: completed['result'],
+    });
+    const stored = await admin.query<{ status: string; payload: unknown; summary: unknown }>(
+      'SELECT status, payload, summary FROM change_confirmations WHERE id = $1',
+      [confirmationId],
+    );
+    expect(stored.rows[0]).toEqual({ status: 'committed', payload: null, summary: null });
+    await governance.processPendingWorker(workerDb);
+  });
+
+  it('applies nothing for denied, modified, foreign or revoked confirmations', async () => {
+    const { gateSubject } = await connectionSubject([scopeB]);
+    const ai = connectionToken(gateSubject);
+    const retention = async () =>
+      (
+        await admin.query<{ observation_days: number }>(
+          'SELECT observation_days FROM scope_retention_policies WHERE user_id = $1 AND scope_id = $2',
+          [userId, scopeB],
+        )
+      ).rows[0]?.observation_days;
+    const before = await retention();
+    const open = async (days: number, bearer = ai) => {
+      const response = await fetch(`${baseUrl}/v1/scopes/${scopeB}/retention`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ observation_days: days }),
+      });
+      expect(response.status).toBe(202);
+      const body = (await response.json()) as ConfirmationBody;
+      return {
+        id: body.confirmation.confirmation_id,
+        gate: gateConfirmations.get(gateIdOf(body))!,
+      };
+    };
+
+    const denied = await open(1111);
+    denied.gate.state = 'denied';
+    expect((await complete(denied.id, ai)).status).toBe('denied');
+
+    const modified = await open(1112);
+    modified.gate.state = 'approved';
+    await admin.query('UPDATE change_confirmations SET change_hash = $2 WHERE id = $1', [
+      modified.id,
+      `sha256:${'0'.repeat(64)}`,
+    ]);
+    expect((await complete(modified.id, ai)).status).toBe('expired');
+
+    const foreign = await open(1113);
+    foreign.gate.state = 'approved';
+    foreign.gate.consumed_as = { subject: 'gate-someone-else', connection_id: 'connection-other' };
+    const foreignResult = await complete(foreign.id, ai);
+    expect(foreignResult).toMatchObject({
+      status: 'failed',
+      error: { code: 'confirmation_mismatch' },
+    });
+
+    const revokedToken = connectionToken(gateSubject);
+    const revoked = await open(1114, revokedToken);
+    revoked.gate.state = 'approved';
+    gateTokens.get(revokedToken)!['active'] = false;
+    expect((await post(`/v1/confirmations/${revoked.id}:complete`, revokedToken, {})).status).toBe(
+      401,
+    );
+    expect(revoked.gate.state).toBe('approved');
+
+    expect(await retention()).toBe(before);
+  });
+
+  it('commits a proposed decision with the person’s authority only after approval', async () => {
+    const { gateSubject } = await connectionSubject([scopeB]);
+    const ai = connectionToken(gateSubject, 'client-decider');
+    const statement = `Use PostgreSQL for new services ${randomUUID()}.`;
+    const proposal = await post(
+      '/v1/changesets',
+      ai,
+      {
+        scope_id: scopeB,
+        operations: [
+          { op: 'CREATE', memory: { ...isolatedMemory(), kind: 'decision', statement } },
+        ],
+      },
+      `proposal-${randomUUID()}`,
+    );
+    expect(proposal.status).toBe(200);
+    const { change_set_id: changeSetId } = (await proposal.json()) as { change_set_id: string };
+    const requested = await post(
+      `/v1/changesets/${changeSetId}:request-user-decision`,
+      ai,
+      {},
+      `decision-${randomUUID()}`,
+    );
+    expect(requested.status).toBe(202);
+    const body = (await requested.json()) as ConfirmationBody;
+    expect(body.confirmation.summary.lines).toContain(`1. Create decision: ${statement}`);
+    gateConfirmations.get(gateIdOf(body))!.state = 'approved';
+    expect((await complete(body.confirmation.confirmation_id, ai)).status).toBe('committed');
+    const version = await admin.query<{ authority: string; changed_by: string; client_id: string }>(
+      `SELECT v.authority, v.changed_by, c.client_id FROM changesets c
+       JOIN memory_versions v ON v.user_id = c.user_id AND v.scope_id = c.scope_id AND v.change_set_id = c.id
+       WHERE c.user_id = $1 AND c.id = $2`,
+      [userId, changeSetId],
+    );
+    expect(version.rows[0]).toEqual({
+      authority: 'user_decision',
+      changed_by: principalId,
+      client_id: 'client-decider',
+    });
+
+    const oversized = await post(
+      '/v1/changesets',
+      ai,
+      {
+        scope_id: scopeB,
+        operations: [
+          {
+            op: 'CREATE',
+            memory: { ...isolatedMemory(), kind: 'decision', statement: 'x'.repeat(4500) },
+          },
+        ],
+      },
+      `proposal-${randomUUID()}`,
+    );
+    const oversizedId = ((await oversized.json()) as { change_set_id: string }).change_set_id;
+    const tooLarge = await post(
+      `/v1/changesets/${oversizedId}:request-user-decision`,
+      ai,
+      {},
+      `decision-${randomUUID()}`,
+    );
+    expect(tooLarge.status).toBe(413);
+  });
+
+  it('cancels a pending confirmation when a memory it shows is forgotten', async () => {
+    const userToken = await token([scopeB], 'memory:read memory:write memory:admin');
+    const created = await post(
+      '/v1/memories:remember',
+      userToken,
+      {
+        scope_id: scopeB,
+        memory: { ...isolatedMemory(), statement: `Shown, then forgotten ${randomUUID()}.` },
+      },
+      `cancel-${randomUUID()}`,
+    );
+    const memoryId = ((await created.json()) as { operations: { memory_ids: string[] }[] })
+      .operations[0]!.memory_ids[0]!;
+    const { gateSubject } = await connectionSubject([scopeB]);
+    const ai = connectionToken(gateSubject);
+    const forgetRequest = {
+      scope_id: scopeB,
+      selector: { memory_ids: [memoryId] },
+      reason_code: 'user_requested',
+    };
+    const pending = (await (
+      await post('/v1/forget', ai, forgetRequest, `pending-${randomUUID()}`)
+    ).json()) as ConfirmationBody;
+    const direct = await post('/v1/forget', userToken, forgetRequest, `direct-${randomUUID()}`);
+    expect(direct.status).toBe(202);
+    const stored = await admin.query<{ status: string; payload: unknown; summary: unknown }>(
+      'SELECT status, payload, summary FROM change_confirmations WHERE id = $1',
+      [pending.confirmation.confirmation_id],
+    );
+    expect(stored.rows[0]).toEqual({ status: 'cancelled', payload: null, summary: null });
+    expect(gateConfirmations.get(gateIdOf(pending))!.state).toBe('cancelled');
+    gateConfirmations.get(gateIdOf(pending))!.state = 'approved';
+    expect((await complete(pending.confirmation.confirmation_id, ai)).status).toBe('cancelled');
+    await governance.processPendingWorker(workerDb);
+  });
+
+  it('refuses an approved change when the memory it showed changed afterwards', async () => {
+    const userToken = await token([scopeB], 'memory:read memory:write memory:admin');
+    const created = await post(
+      '/v1/memories:remember',
+      userToken,
+      {
+        scope_id: scopeB,
+        memory: { ...isolatedMemory(), statement: `Shown before a change ${randomUUID()}.` },
+      },
+      `stale-${randomUUID()}`,
+    );
+    const memoryId = ((await created.json()) as { operations: { memory_ids: string[] }[] })
+      .operations[0]!.memory_ids[0]!;
+    const { gateSubject } = await connectionSubject([scopeB]);
+    const ai = connectionToken(gateSubject);
+    const pending = (await (
+      await post(
+        '/v1/forget',
+        ai,
+        { scope_id: scopeB, selector: { memory_ids: [memoryId] }, reason_code: 'user_requested' },
+        `stale-forget-${randomUUID()}`,
+      )
+    ).json()) as ConfirmationBody;
+    const refine = await post(
+      '/v1/changesets',
+      userToken,
+      {
+        scope_id: scopeB,
+        operations: [
+          {
+            op: 'REFINE',
+            memory_id: memoryId,
+            expected_revision: 1,
+            statement: `Changed after it was shown ${randomUUID()}.`,
+            evidence: [evidence(`isolated-${randomUUID()}`)],
+          },
+        ],
+      },
+      `stale-refine-${randomUUID()}`,
+    );
+    const refineId = ((await refine.json()) as { change_set_id: string }).change_set_id;
+    const committed = await post(
+      `/v1/changesets/${refineId}:commit`,
+      userToken,
+      {},
+      `stale-commit-${randomUUID()}`,
+    );
+    expect(committed.status).toBe(200);
+    gateConfirmations.get(gateIdOf(pending))!.state = 'approved';
+    expect(await complete(pending.confirmation.confirmation_id, ai)).toMatchObject({
+      status: 'failed',
+      error: { code: 'confirmation_stale' },
+    });
+    const stillThere = await fetch(`${baseUrl}/v1/memories/${memoryId}?scope_id=${scopeB}`, {
+      headers: { authorization: `Bearer ${userToken}` },
+    });
+    expect(stillThere.status).toBe(200);
+  });
+
+  it('routes protected MCP tools through confirmations completed on the same endpoint', async () => {
+    const { gateSubject } = await connectionSubject([scopeB]);
+    const writeToken = connectionToken(gateSubject, 'client-mcp', mcpWriteAudience);
+    const writer = new McpClient({ name: 'memory-confirmation-client', version: '1.0.0' });
+    await writer.connect(
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp/write`), {
+        authProvider: { token: async () => writeToken },
+      }),
+    );
+    try {
+      const requested = await writer.callTool({
+        name: 'set_retention_policy',
+        arguments: { scope_id: scopeB, observation_days: 4242 },
+      });
+      const body = requested.structuredContent as unknown as ConfirmationBody;
+      expect(body.status).toBe('confirmation_required');
+      const restToken = connectionToken(gateSubject);
+      const mismatch = await post(
+        `/v1/confirmations/${body.confirmation.confirmation_id}:complete`,
+        restToken,
+        {},
+      );
+      expect(mismatch.status).toBe(409);
+      gateConfirmations.get(gateIdOf(body))!.state = 'approved';
+      const completed = await writer.callTool({
+        name: 'complete_confirmation',
+        arguments: { confirmation_id: body.confirmation.confirmation_id },
+      });
+      expect((completed.structuredContent as { status: string }).status).toBe('committed');
+      const policy = await admin.query<{ observation_days: number }>(
+        'SELECT observation_days FROM scope_retention_policies WHERE user_id = $1 AND scope_id = $2',
+        [userId, scopeB],
+      );
+      expect(policy.rows[0]!.observation_days).toBe(4242);
+    } finally {
+      await writer.close();
+    }
+  });
+
+  /** A Gate subject whose connections all act as one non-user principal for the integration user. */
+  async function connectionSubject(
+    scopeIds: string[],
+  ): Promise<{ gateSubject: string; connectionPrincipalId: string }> {
+    const gateSubject = `gate-${randomUUID()}`;
+    const connectionPrincipal = await admin.query<{ id: string }>(
+      `INSERT INTO principals(user_id, issuer, subject, actor_kind, acts_for_principal_id)
+       VALUES ($1, 'urn:syntoria:lore:connection', $2, 'client', $3) RETURNING id`,
+      [userId, gateSubject, principalId],
+    );
+    await admin.query(
+      `INSERT INTO external_identity_bindings (external_issuer, external_subject, user_id,
+         principal_id, connection_principal_id, scope_ids, capability_ceiling)
+       VALUES ($1, $2, $3, $4, $5, $6::uuid[], ARRAY['read', 'write', 'admin'])`,
+      [gateIssuer, gateSubject, userId, principalId, connectionPrincipal.rows[0]!.id, scopeIds],
+    );
+    return { gateSubject, connectionPrincipalId: connectionPrincipal.rows[0]!.id };
+  }
+
+  function connectionToken(
+    gateSubject: string,
+    clientId = `client-${randomUUID()}`,
+    tokenAudience = audience,
+  ): string {
+    const tokenValue = `opaque-${randomUUID()}`;
+    gateTokens.set(tokenValue, {
+      active: true,
+      token_type: 'Bearer',
+      gate_approved: true,
+      iss: gateIssuer,
+      sub: gateSubject,
+      connection_id: `connection-${randomUUID()}`,
+      client_id: clientId,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      aud: tokenAudience,
+    });
+    return tokenValue;
+  }
+
   async function token(
     scopeIds: string[],
     scope: string,
@@ -4185,6 +4867,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   }
 });
 
+/** A sample memory with its own evidence source, so another test's Forget cannot suppress it. */
+function isolatedMemory() {
+  return { ...sampleMemory(), evidence: [evidence(`isolated-${randomUUID()}`)] };
+}
+
 function sampleMemory() {
   return {
     kind: 'fact',
@@ -4195,8 +4882,9 @@ function sampleMemory() {
   };
 }
 
-function jsonResponse(value: unknown): Response {
+function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
+    status,
     headers: { 'content-type': 'application/json' },
   });
 }

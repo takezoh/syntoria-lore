@@ -9,6 +9,7 @@ import {
 import { withTransaction, uuidArray, type PoolClient } from '@memory/db';
 import type { Pool } from 'pg';
 import {
+  createConfirmationClient,
   createIdentityProviderVerifier,
   IdentityProviderError,
   type ExternalIdentityPrincipal,
@@ -27,6 +28,15 @@ interface BindingRow {
   readonly actor_kind: string;
   readonly scope_ids: string[];
   readonly capability_ceiling: string[];
+  readonly user_principal_id: string;
+}
+
+/** The Gate identity behind an actor, used to request and verify change confirmations. */
+export interface GateIdentity {
+  readonly subject: string;
+  readonly connectionId: string;
+  readonly clientId: string;
+  readonly userPrincipalId: string;
 }
 
 interface GrantRow {
@@ -44,6 +54,9 @@ interface ActorCredential {
 const knownCapabilities = new Set<Capability>(['read', 'write', 'admin']);
 
 export class Authenticator {
+  /** Gate change confirmations, created and consumed with this resource's credentials. */
+  readonly confirmations: ReturnType<typeof createConfirmationClient>;
+  readonly audience: string;
   private readonly verifier: ReturnType<typeof createIdentityProviderVerifier>;
   private readonly credentials = new WeakMap<ActorContext, ActorCredential>();
 
@@ -63,6 +76,78 @@ export class Authenticator {
       ...(fetch === undefined ? {} : { fetch }),
       ...(now === undefined ? {} : { now }),
     });
+    this.confirmations = createConfirmationClient(providerConfig, {
+      ...(fetch === undefined ? {} : { fetch }),
+    });
+    this.audience = options.audience;
+  }
+
+  gateIdentity(actor: ActorContext): GateIdentity | undefined {
+    const state = this.credentials.get(actor);
+    if (state === undefined) return undefined;
+    return Object.freeze({
+      subject: state.principal.subject,
+      connectionId: state.principal.connectionId,
+      clientId: state.principal.clientId,
+      userPrincipalId: state.binding.user_principal_id,
+    });
+  }
+
+  /**
+   * An actor for the person's user principal, used only to apply a change the person approved
+   * at Gate. Its commit re-checks the requesting connection and binding like the original actor.
+   */
+  async userActorFor(actor: ActorContext): Promise<ActorContext> {
+    const state = this.credentials.get(actor);
+    if (state === undefined) {
+      throw new CoreError(401, 'unauthorized', 'The Gate credential is no longer available');
+    }
+    const binding = state.binding;
+    const boundScopeIds = sortedUnique(binding.scope_ids);
+    let grants: GrantRow[];
+    try {
+      grants = await withTransaction(this.options.pool, async (client) => {
+        await setActorDatabaseContext(
+          client,
+          binding.user_id,
+          binding.user_principal_id,
+          boundScopeIds,
+        );
+        const result = await client.query<GrantRow>(
+          `SELECT scope_id, auth_epoch, capabilities
+           FROM app.lock_actor_access($1, $2, 'user', $3::uuid[])`,
+          [binding.user_id, binding.user_principal_id, boundScopeIds],
+        );
+        return result.rows;
+      });
+    } catch {
+      throw new CoreError(
+        503,
+        'authorization_unavailable',
+        'Local authorization is unavailable',
+        true,
+      );
+    }
+    if (grants.length === 0) {
+      throw new CoreError(403, 'forbidden', 'The user principal has no current grant');
+    }
+    const ceiling = new Set(binding.capability_ceiling.filter(isCapability));
+    const userActor = Object.freeze({
+      userId: binding.user_id,
+      principalId: binding.user_principal_id,
+      actorKind: 'user' as const,
+      scopeIds: Object.freeze(sortedUnique(grants.map((grant) => grant.scope_id))),
+      tokenScopeIds: Object.freeze(boundScopeIds),
+      capabilities: Object.freeze(effectiveCapabilities(grants, ceiling)),
+      authEpochs: Object.freeze(
+        Object.fromEntries(grants.map((grant) => [grant.scope_id, Number(grant.auth_epoch)])),
+      ),
+      clientId: state.principal.clientId,
+    });
+    bindActorAuthorizationGuard(userActor, (transaction) =>
+      this.revalidateBeforeCommit(actor, transaction as PoolClient),
+    );
+    return userActor;
   }
 
   authenticate(authorization: string | undefined): Promise<ActorContext> {
@@ -155,6 +240,7 @@ export class Authenticator {
       authEpochs: Object.freeze(
         Object.fromEntries(grants.map((grant) => [grant.scope_id, Number(grant.auth_epoch)])),
       ),
+      clientId: principal.clientId,
     });
     const state = Object.freeze({ token, principal, binding });
     this.credentials.set(actor, state);
@@ -169,7 +255,7 @@ export class Authenticator {
     principal: ExternalIdentityPrincipal,
   ): Promise<BindingRow | undefined> {
     const result = await client.query<BindingRow>(
-      `SELECT user_id, principal_id, actor_kind, scope_ids, capability_ceiling
+      `SELECT user_id, principal_id, actor_kind, scope_ids, capability_ceiling, user_principal_id
        FROM app.lock_external_identity_binding($1, $2)`,
       [principal.issuer, principal.subject],
     );
@@ -199,8 +285,9 @@ export class Authenticator {
     }
     if (
       binding.user_id !== actor.userId ||
-      binding.principal_id !== actor.principalId ||
-      binding.actor_kind !== actor.actorKind ||
+      binding.principal_id !== state.binding.principal_id ||
+      binding.actor_kind !== state.binding.actor_kind ||
+      binding.user_principal_id !== state.binding.user_principal_id ||
       !sameStrings(sortedUnique(binding.scope_ids), sortedUnique(state.binding.scope_ids)) ||
       !sameStrings(
         sortedUnique(binding.capability_ceiling),

@@ -268,6 +268,7 @@ const apiContract = {
               'application/json': { schema: { $ref: '#/components/schemas/CommittedChangeSet' } },
             },
           },
+          '202': { $ref: '#/components/responses/ConfirmationRequired' },
           '400': { $ref: '#/components/responses/CoreError' },
           '401': { $ref: '#/components/responses/CoreError' },
           '403': { $ref: '#/components/responses/CoreError' },
@@ -358,6 +359,98 @@ const apiContract = {
               'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
             },
           },
+        },
+      },
+    },
+    '/v1/changesets/{change_set_id}:request-user-decision': {
+      post: {
+        operationId: 'requestUserDecision',
+        summary:
+          'Commit a proposed ChangeSet with User authority; a non-User caller receives a Gate confirmation',
+        parameters: [
+          {
+            name: 'change_set_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Committed ChangeSet, when the caller is the User',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/CommittedChangeSet' } },
+            },
+          },
+          '202': { $ref: '#/components/responses/ConfirmationRequired' },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '413': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/confirmations/{confirmation_id}': {
+      get: {
+        operationId: 'getChangeConfirmation',
+        summary: 'Read a change confirmation and, while pending, its Gate URL and summary',
+        parameters: [
+          {
+            name: 'confirmation_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Change confirmation',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ChangeConfirmation' } },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
+        },
+      },
+    },
+    '/v1/confirmations/{confirmation_id}:complete': {
+      post: {
+        operationId: 'completeChangeConfirmation',
+        summary:
+          'Apply a change the person approved at Gate, once; pending, denied or expired confirmations change nothing',
+        parameters: [
+          {
+            name: 'confirmation_id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Resulting confirmation state, with the change’s response once committed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ChangeConfirmation' } },
+            },
+          },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '404': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '503': { $ref: '#/components/responses/CoreError' },
+          default: { $ref: '#/components/responses/CoreError' },
         },
       },
     },
@@ -496,9 +589,17 @@ const apiContract = {
         },
         responses: {
           '202': {
-            description: 'Content is unavailable immediately; physical purge is asynchronous',
+            description:
+              'Content is unavailable immediately and physical purge is asynchronous; a non-User caller instead receives a Gate confirmation',
             content: {
-              'application/json': { schema: { $ref: '#/components/schemas/ForgetAccepted' } },
+              'application/json': {
+                schema: {
+                  oneOf: [
+                    { $ref: '#/components/schemas/ForgetAccepted' },
+                    { $ref: '#/components/schemas/ConfirmationRequired' },
+                  ],
+                },
+              },
             },
           },
           '400': { $ref: '#/components/responses/CoreError' },
@@ -562,6 +663,7 @@ const apiContract = {
         },
         responses: {
           '200': { description: 'Updated source rights state' },
+          '202': { $ref: '#/components/responses/ConfirmationRequired' },
           '401': { $ref: '#/components/responses/CoreError' },
           '403': { $ref: '#/components/responses/CoreError' },
           '404': { $ref: '#/components/responses/CoreError' },
@@ -589,6 +691,7 @@ const apiContract = {
         },
         responses: {
           '200': { description: 'Grant state' },
+          '202': { $ref: '#/components/responses/ConfirmationRequired' },
           '401': { $ref: '#/components/responses/CoreError' },
           '403': { $ref: '#/components/responses/CoreError' },
           default: { $ref: '#/components/responses/CoreError' },
@@ -615,6 +718,7 @@ const apiContract = {
         },
         responses: {
           '200': { description: 'Saved retention policy' },
+          '202': { $ref: '#/components/responses/ConfirmationRequired' },
           '401': { $ref: '#/components/responses/CoreError' },
           '403': { $ref: '#/components/responses/CoreError' },
           default: { $ref: '#/components/responses/CoreError' },
@@ -850,6 +954,13 @@ const apiContract = {
         description: 'Application error with stable code and request id',
         content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
       },
+      ConfirmationRequired: {
+        description:
+          'A non-User caller asked for a change only the User may make; show the Gate URL to the person, then complete the confirmation',
+        content: {
+          'application/json': { schema: { $ref: '#/components/schemas/ConfirmationRequired' } },
+        },
+      },
     },
     schemas: {
       ForgetRequest: {
@@ -883,6 +994,59 @@ const apiContract = {
           reason_code: {
             enum: ['user_requested', 'source_revoked', 'retention_expired', 'correction'],
           },
+        },
+      },
+      ChangeConfirmation: {
+        type: 'object',
+        required: ['confirmation_id', 'scope_id', 'operation', 'status'],
+        properties: {
+          confirmation_id: { type: 'string', format: 'uuid' },
+          scope_id: { type: 'string', format: 'uuid' },
+          operation: {
+            enum: [
+              'commit_changeset',
+              'forget',
+              'decide_review',
+              'change_source_rights',
+              'change_scope_grant',
+              'set_retention_policy',
+            ],
+          },
+          status: {
+            enum: ['pending', 'approved', 'committed', 'denied', 'expired', 'cancelled', 'failed'],
+          },
+          url: {
+            type: 'string',
+            format: 'uri',
+            description: 'Gate approval page to show the person while pending',
+          },
+          summary: {
+            type: 'object',
+            required: ['title', 'lines'],
+            properties: {
+              title: { type: 'string' },
+              lines: { type: 'array', items: { type: 'string' } },
+            },
+          },
+          result: { description: 'The applied change’s normal response once committed' },
+          error: {
+            type: 'object',
+            description: 'Why an approved change could not be applied',
+            required: ['code', 'message'],
+            properties: { code: { type: 'string' }, message: { type: 'string' } },
+          },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      ConfirmationRequired: {
+        type: 'object',
+        required: ['status', 'confirmation'],
+        properties: {
+          status: { const: 'confirmation_required' },
+          confirmation: { $ref: '#/components/schemas/ChangeConfirmation' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
         },
       },
       ForgetAccepted: {

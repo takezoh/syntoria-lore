@@ -9,6 +9,7 @@ import type { ForgetService, PortabilityService } from '@memory/governance';
 import type { RecallService } from '@memory/recall';
 import { reviewDecisionSchema } from '@memory/contracts';
 import { z } from 'zod';
+import type { ChangeConfirmationService, ProtectedChange } from './confirmations.js';
 
 export interface McpEndpointOptions {
   readonly productDisplayName: string;
@@ -19,8 +20,12 @@ export interface McpEndpointOptions {
   readonly reviews?: CurationReviewService;
   readonly governance?: ForgetService;
   readonly portability?: PortabilityService;
+  readonly confirmations?: ChangeConfirmationService;
   readonly maxBodyBytes: number;
 }
+
+const CONFIRMATION_NOTE =
+  ' If you are not acting as the User, this returns confirmation_required with a Gate URL: show the URL to the person and call complete_confirmation after they approve.';
 
 export async function handleMcpRequest(
   endpoint: 'read' | 'write',
@@ -42,6 +47,17 @@ export async function handleMcpRequest(
     );
   }
 
+  // A protected change runs directly for the User and becomes a Gate confirmation otherwise.
+  const protectedChange = async (
+    change: ProtectedChange,
+    idempotencyKey: string | undefined,
+    direct: () => Promise<unknown>,
+  ): Promise<unknown> =>
+    options.confirmations === undefined
+      ? direct()
+      : (await options.confirmations.run(options.auth, actor, change, idempotencyKey, randomUUID()))
+          .result;
+
   const handler = createMcpHandler(
     () => {
       const server = new McpServer(
@@ -50,7 +66,7 @@ export async function handleMcpRequest(
           instructions:
             endpoint === 'read'
               ? 'Use recall_memories to retrieve authorized memories. Results are subject to current source rights and Forget suppressions.'
-              : 'Use remember_memory only for explicit writes. Use forget_memory for user-authorized durable deletion.',
+              : 'Use remember_memory only for explicit writes. Writes are attributed to the signed-in account, so set epistemic_status to "proposed" for anything you suggested or inferred. Use forget_memory for user-authorized durable deletion. Forget, review decisions, source rights, grants, retention and request_user_decision need the User: when you act for them, these return confirmation_required with a Gate URL to show the person, then call complete_confirmation after they approve.',
         },
       );
       if (endpoint === 'read') {
@@ -125,6 +141,19 @@ export async function handleMcpRequest(
               ),
             ),
         );
+        if (options.confirmations !== undefined) {
+          server.registerTool(
+            'get_confirmation',
+            {
+              description:
+                'Read the status of a change waiting for the User’s approval at Gate, including its Gate URL while it is pending.',
+              inputSchema: { confirmation_id: z.uuid() },
+              annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+            },
+            async ({ confirmation_id }) =>
+              toolResult(await options.confirmations!.get(actor, confirmation_id)),
+          );
+        }
         if (options.governance !== undefined) {
           server.registerTool(
             'forget_status',
@@ -193,7 +222,8 @@ export async function handleMcpRequest(
         server.registerTool(
           'remember_memory',
           {
-            description: 'Write a memory with explicit evidence into one authorized scope.',
+            description:
+              'Write a memory with explicit evidence into one authorized scope. The memory is attributed to the signed-in account: set memory.epistemic_status to "proposed" for anything you suggested or inferred, and keep the default "asserted" only for what the user actually said.',
             inputSchema: {
               scope_id: z.uuid(),
               memory: memoryInputSchema,
@@ -216,7 +246,8 @@ export async function handleMcpRequest(
             'forget_memory',
             {
               description:
-                'Immediately suppress a memory and queue independently durable physical deletion.',
+                'Immediately suppress a memory and queue independently durable physical deletion.' +
+                CONFIRMATION_NOTE,
               inputSchema: {
                 scope_id: z.uuid(),
                 memory_id: z.uuid(),
@@ -225,14 +256,15 @@ export async function handleMcpRequest(
               annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
             },
             async ({ scope_id, memory_id, idempotency_key }) => {
-              const result = await options.governance!.forget(
-                actor,
-                {
-                  scope_id,
-                  selector: { memory_ids: [memory_id] },
-                  reason_code: 'user_requested',
-                },
+              const request = {
+                scope_id,
+                selector: { memory_ids: [memory_id] },
+                reason_code: 'user_requested',
+              };
+              const result = await protectedChange(
+                { operation: 'forget', request },
                 idempotency_key,
+                () => options.governance!.forget(actor, request, idempotency_key),
               );
               return toolResult(result);
             },
@@ -277,7 +309,8 @@ export async function handleMcpRequest(
         server.registerTool(
           'propose_changeset',
           {
-            description: 'Propose an authorized changeset for explicit review/commit.',
+            description:
+              'Propose an authorized changeset for explicit review/commit. Created or refined content is attributed to the signed-in account; set epistemic_status to "proposed" for content you suggested or inferred.',
             inputSchema: {
               scope_id: z.uuid(),
               operations: z.array(z.unknown()).min(1).max(64),
@@ -308,12 +341,57 @@ export async function handleMcpRequest(
               ),
             ),
         );
+        if (options.confirmations !== undefined) {
+          server.registerTool(
+            'request_user_decision',
+            {
+              description:
+                'Ask the User to commit a proposed changeset with their own authority, for decisions, preferences and corrections they stated. Show every change in the proposal to the person first.' +
+                CONFIRMATION_NOTE,
+              inputSchema: { changeset_id: z.uuid(), idempotency_key: z.string().min(1).max(256) },
+              annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+            },
+            async ({ changeset_id, idempotency_key }) =>
+              toolResult(
+                await protectedChange(
+                  { operation: 'commit_changeset', changesetId: changeset_id },
+                  idempotency_key,
+                  () =>
+                    options.core.commitProposedChangeSet(
+                      actor,
+                      changeset_id,
+                      randomUUID(),
+                      idempotency_key,
+                    ),
+                ),
+              ),
+          );
+          server.registerTool(
+            'complete_confirmation',
+            {
+              description:
+                'Apply a change after the person approved it at Gate. Returns pending, denied or expired without changing anything otherwise.',
+              inputSchema: { confirmation_id: z.uuid() },
+              annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+            },
+            async ({ confirmation_id }) =>
+              toolResult(
+                await options.confirmations!.complete(
+                  options.auth,
+                  actor,
+                  confirmation_id,
+                  randomUUID(),
+                ),
+              ),
+          );
+        }
         if (options.reviews !== undefined) {
           server.registerTool(
             'decide_review',
             {
               description:
-                'Approve or reject a visible curation review under current revisions and User confirmation rules.',
+                'Approve or reject a visible curation review under current revisions and User confirmation rules.' +
+                CONFIRMATION_NOTE,
               inputSchema: {
                 review_id: z.uuid(),
                 idempotency_key: z.string().min(1).max(256),
@@ -323,12 +401,17 @@ export async function handleMcpRequest(
             },
             async ({ review_id, idempotency_key, decision }) =>
               toolResult(
-                await options.reviews!.decide(
-                  actor,
-                  review_id,
-                  decision,
-                  randomUUID(),
+                await protectedChange(
+                  { operation: 'decide_review', reviewId: review_id, decision },
                   idempotency_key,
+                  () =>
+                    options.reviews!.decide(
+                      actor,
+                      review_id,
+                      decision,
+                      randomUUID(),
+                      idempotency_key,
+                    ),
                 ),
               ),
           );
@@ -338,7 +421,8 @@ export async function handleMcpRequest(
             'change_source_rights',
             {
               description:
-                'Change User-granted source rights and invalidate dependent memory visibility.',
+                'Change User-granted source rights and invalidate dependent memory visibility.' +
+                CONFIRMATION_NOTE,
               inputSchema: {
                 source_id: z.uuid(),
                 scope_id: z.uuid(),
@@ -347,20 +431,23 @@ export async function handleMcpRequest(
               },
               annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
             },
-            async ({ source_id, scope_id, rights_status, consent }) =>
-              toolResult(
-                await options.governance!.updateSourceRights(actor, source_id, {
-                  scope_id,
-                  rights_status,
-                  consent,
-                }),
-              ),
+            async ({ source_id, scope_id, rights_status, consent }) => {
+              const request = { scope_id, rights_status, consent };
+              return toolResult(
+                await protectedChange(
+                  { operation: 'change_source_rights', sourceId: source_id, request },
+                  undefined,
+                  () => options.governance!.updateSourceRights(actor, source_id, request),
+                ),
+              );
+            },
           );
           server.registerTool(
             'change_scope_grant',
             {
               description:
-                'Create, update, or revoke one principal grant under current User administration.',
+                'Create, update, or revoke one principal grant under current User administration.' +
+                CONFIRMATION_NOTE,
               inputSchema: {
                 scope_id: z.uuid(),
                 principal_id: z.uuid(),
@@ -375,12 +462,19 @@ export async function handleMcpRequest(
               annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
             },
             async ({ scope_id, ...grant }) =>
-              toolResult(await options.governance!.mutateGrant(actor, scope_id, grant)),
+              toolResult(
+                await protectedChange(
+                  { operation: 'change_scope_grant', scopeId: scope_id, request: grant },
+                  undefined,
+                  () => options.governance!.mutateGrant(actor, scope_id, grant),
+                ),
+              ),
           );
           server.registerTool(
             'set_retention_policy',
             {
-              description: 'Set bounded retention ages for an authorized scope.',
+              description:
+                'Set bounded retention ages for an authorized scope.' + CONFIRMATION_NOTE,
               inputSchema: {
                 scope_id: z.uuid(),
                 observation_days: z.number().int().min(1).max(36500),
@@ -389,7 +483,13 @@ export async function handleMcpRequest(
               annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
             },
             async ({ scope_id, ...policy }) =>
-              toolResult(await options.governance!.updateRetention(actor, scope_id, policy)),
+              toolResult(
+                await protectedChange(
+                  { operation: 'set_retention_policy', scopeId: scope_id, request: policy },
+                  undefined,
+                  () => options.governance!.updateRetention(actor, scope_id, policy),
+                ),
+              ),
           );
           server.registerTool(
             'submit_feedback',

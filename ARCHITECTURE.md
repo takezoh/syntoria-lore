@@ -48,7 +48,7 @@ Recall first checks the actor and requested scopes, then selects eligible record
 
 ## Correctness boundaries
 
-- **Provenance and authority are separate.** Evidence identifies the source, speaker and lineage. Authority comes from the authenticated actor, memory kind and controlled user-confirmation path. Model output cannot assign authority, and stored authority does not prove an external claim.
+- **Provenance and authority are separate.** Evidence identifies the source, speaker and lineage. Authority comes from the authenticated principal's actor kind, the memory kind, the declared epistemic status and the controlled user-confirmation path. Requests and model output cannot assign authority, and stored authority does not prove an external claim. Because admission is keyed by Gate issuer and subject, every client of one Gate account shares its principal; a client acting as the user marks its own suggestions `proposed` to keep them as AI proposals.
 - **Time and knowledge are separate.** A revision records when it was learned; valid-time intervals record when it applies. Historical reads choose the latest revision known at the requested time before applying its valid interval.
 - **Changes are explicit.** ChangeSets compare expected revisions. A stale update fails instead of overwriting concurrent work. Supersede, retract and Forget have different semantics; contested is an epistemic flag, not a lifecycle state.
 - **Search is derived data.** Indexing can lag a committed revision. Recall reads committed records as well as the available indexes and reports index or provider insufficiency; an index result is never the authority for what was committed.
@@ -57,7 +57,7 @@ Recall first checks the actor and requested scopes, then selects eligible record
 
 ## Identity and runtime boundary
 
-Gate owns sign-in, approval and sessions. Lore accepts bearer tokens for the exact REST, MCP read or MCP write resource and has no browser login or session route. The API has a public HTTPS entry point but protected data operations require Gate verification, an existing Lore identity binding for the Gate issuer and immutable subject, and live grants. The worker remains private and accepts only its task and scheduler identities. Runtime topology, IAM and operator procedures belong in [infrastructure](docs/technical/infrastructure.md), [security](docs/technical/security.md) and [deployment](docs/technical/deployment.md).
+Gate owns sign-in, approval and sessions. Lore accepts bearer tokens for the exact REST, MCP read or MCP write resource and has no browser login or session route. The API has a public HTTPS entry point but protected data operations require Gate verification, an existing Lore identity binding for the Gate issuer and immutable subject, and live grants. MCP clients register dynamically with Gate; the binding does not distinguish them, so clients under one subject differ only in the resource they use. The worker remains private and accepts only its task and scheduler identities. Runtime topology, IAM and operator procedures belong in [infrastructure](docs/technical/infrastructure.md), [security](docs/technical/security.md) and [deployment](docs/technical/deployment.md).
 
 Syntoria Weave is a separate service for current shared state. Lore has no shared tables or required API dependency on Weave; a caller that needs both composes their results.
 

@@ -181,6 +181,115 @@ export function createIdentityProviderVerifier(
   return Object.freeze({ verifyToken, authenticate });
 }
 
+export interface ConfirmationClientConfig {
+  issuer: string;
+  clientId: string;
+  clientSecret: string;
+  timeoutMs?: number;
+  /** For isolated local tests only; forbidden when NODE_ENV is production. */
+  allowLoopbackHttp?: boolean;
+}
+
+export interface ConfirmationSummary {
+  readonly title: string;
+  readonly lines: readonly string[];
+}
+
+export interface ConfirmationRequest {
+  readonly subject: string;
+  readonly connectionId: string;
+  readonly reference: string;
+  readonly changeHash: string;
+  readonly summary: ConfirmationSummary;
+}
+
+export interface CreatedConfirmation {
+  readonly id: string;
+  readonly url: string;
+}
+
+export type ConsumeResult =
+  | { readonly status: 'consumed'; readonly subject: string; readonly connectionId: string; readonly decidedAt: number }
+  | { readonly status: 'pending' | 'denied' | 'used' | 'expired' };
+
+const CONFIRMATION_ID = /^[A-Za-z0-9_-]{43}$/u;
+const WAITING_STATUSES = new Set(['pending', 'denied', 'used', 'expired']);
+
+/**
+ * Creates, consumes and cancels Gate change confirmations with the resource's own credentials.
+ * A requesting connection that is no longer active surfaces as 401; every other failure as 503.
+ */
+export function createConfirmationClient(
+  config: ConfirmationClientConfig,
+  dependencies: IdentityProviderDependencies = {},
+) {
+  if (config.allowLoopbackHttp && process.env.NODE_ENV === 'production') {
+    throw new TypeError('Loopback HTTP is forbidden in production');
+  }
+  safeUrl(config.issuer, config.allowLoopbackHttp === true);
+  if (![config.clientId, config.clientSecret].every(nonempty)) throw new TypeError('Invalid confirmation client configuration');
+  const timeoutMs = config.timeoutMs ?? 3000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) throw new TypeError('Invalid Gate timeout');
+  const issuer = config.issuer.replace(/\/$/u, '');
+  const authorization = `Basic ${Buffer.from(`${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`, 'utf8').toString('base64')}`;
+  const fetcher = dependencies.fetch ?? globalThis.fetch;
+
+  async function call(path: string, body: Record<string, unknown>, expected: 200 | 201 | 204): Promise<Record<string, unknown>> {
+    const url = `${issuer}${path}`;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new IdentityProviderError(503)); }, timeoutMs);
+    });
+    async function send() {
+      const response = await fetcher(url, {
+        method: 'POST', redirect: 'error', signal: controller.signal,
+        headers: { accept: 'application/json', 'content-type': 'application/json', authorization },
+        body: JSON.stringify(body),
+      });
+      const unexpected = response.redirected || (response.url && response.url !== url) || response.status !== expected;
+      if (unexpected || expected === 204) {
+        await response.body?.cancel();
+        if (unexpected) throw new IdentityProviderError(response.status === 403 ? 401 : 503);
+        return {};
+      }
+      return readJson(response, controller.signal);
+    }
+    try { return await Promise.race([send(), timeout]); }
+    catch (error) { throw error instanceof IdentityProviderError ? error : new IdentityProviderError(503); }
+    finally { clearTimeout(timer); controller.abort(); }
+  }
+
+  async function create(request: ConfirmationRequest): Promise<CreatedConfirmation> {
+    const data = await call('/confirmations', {
+      subject: request.subject,
+      connection_id: request.connectionId,
+      reference: request.reference,
+      change_hash: request.changeHash,
+      summary: { title: request.summary.title, lines: [...request.summary.lines] },
+    }, 201);
+    const id = data.id;
+    if (typeof id !== 'string' || !CONFIRMATION_ID.test(id) || data.url !== `${issuer}/confirm?id=${id}`) throw new IdentityProviderError(503);
+    return Object.freeze({ id, url: data.url });
+  }
+
+  async function consume(id: string, reference: string, changeHash: string): Promise<ConsumeResult> {
+    const data = await call('/confirmations/consume', { id, reference, change_hash: changeHash }, 200);
+    if (data.status === 'consumed') {
+      if (!nonempty(data.subject) || !nonempty(data.connection_id) || !Number.isSafeInteger(data.decided_at)) throw new IdentityProviderError(503);
+      return Object.freeze({ status: 'consumed' as const, subject: data.subject, connectionId: data.connection_id, decidedAt: data.decided_at as number });
+    }
+    if (typeof data.status !== 'string' || !WAITING_STATUSES.has(data.status)) throw new IdentityProviderError(503);
+    return Object.freeze({ status: data.status as 'pending' | 'denied' | 'used' | 'expired' });
+  }
+
+  async function cancel(id: string, reference: string): Promise<void> {
+    await call('/confirmations/cancel', { id, reference }, 204);
+  }
+
+  return Object.freeze({ create, consume, cancel });
+}
+
 export function protectedResourceMetadata(resource: string, issuer: string) {
   safeUrl(resource, false);
   safeUrl(issuer, false);
