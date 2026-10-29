@@ -292,6 +292,11 @@ export interface ActorContext {
   readonly authEpochs: Readonly<Record<string, number>>;
   /** The verified Gate client registration, recorded as provenance only. */
   readonly clientId?: string;
+  /**
+   * True for a connection principal: an AI connection that acts for the user without the user's
+   * authority. It may read what the user can review, but every change it makes stays its own.
+   */
+  readonly actsForUser?: boolean;
 }
 
 export interface CoreErrorBody {

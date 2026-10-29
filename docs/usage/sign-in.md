@@ -12,9 +12,9 @@ End-to-end use with a hosted AI client and a real user has not been verified yet
 
 Lore has three resources: the REST API, MCP read and MCP write. A token must be issued for the exact resource the client uses, and a browser cookie cannot replace it.
 
-Lore admits your Gate account, not individual clients. Every client you approve with that account acts as you, with the same memories and permissions. To keep a client read-only, connect it only to MCP read, which can recall memories and follow changes. Connect a client to MCP write only if it should save, correct or forget memories. Because a client on MCP write writes as you, it should save its own suggestions as proposals rather than as your statements.
+Lore admits your Gate account, not individual clients. Every client you approve with that account acts for you, with the same memories and permissions, but not as you: Lore records the memories it writes as AI proposals and notes which client wrote them. To keep a client read-only, connect it only to MCP read, which can recall memories, follow changes and show what waits for your review. Connect a client to MCP write only if it should save, correct or request changes.
 
-A workflow that must never act as you needs its own Gate identity, admitted by the operator as a separate non-user principal. Lore then saves the memories it writes only as AI proposals waiting for review, and does not let it supersede, retract or refine your memories.
+Some changes need you, not your AI: recording your own decision, preference or correction, Forget, review decisions, enabling a capture source, source rights, access and retention. When an AI asks for one, Lore stores the exact change and gives the AI a Gate link to show you. Open it, sign in to Gate, read the change as Lore describes it and approve or deny it. The AI then completes it; nothing changes before you approve, and an approval is used once. The operator turns this separation on for your account. Export and import are not available to connected AIs.
 
 ## Keep access safe
 

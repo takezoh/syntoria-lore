@@ -568,7 +568,7 @@ export class CurationReviewService {
   ) {}
 
   async list(actor: ActorContext, rawQuery: unknown): Promise<Record<string, unknown>> {
-    if (actor.actorKind !== 'user')
+    if (actor.actorKind !== 'user' && actor.actsForUser !== true)
       throw new CoreError(403, 'user_required', 'Only the User may read the curation queue');
     const parsed = reviewListQuerySchema.safeParse(rawQuery);
     if (!parsed.success)
@@ -615,7 +615,7 @@ export class CurationReviewService {
   }
 
   async get(actor: ActorContext, reviewId: string): Promise<Record<string, unknown>> {
-    if (actor.actorKind !== 'user')
+    if (actor.actorKind !== 'user' && actor.actsForUser !== true)
       throw new CoreError(403, 'user_required', 'Only the User may read a curation review');
     if (!uuidSchema.safeParse(reviewId).success)
       throw new CoreError(400, 'invalid_request', 'review_id must be a UUID');

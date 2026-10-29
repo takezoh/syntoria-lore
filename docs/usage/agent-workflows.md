@@ -6,11 +6,11 @@ Lore gives an authorized AI access to the same versioned, evidence-linked memori
 
 Gate owns sign-in and OAuth approval. A client needs a bearer token for the exact resource it calls: REST, `/mcp/read` or `/mcp/write`. An operator must also map the Gate issuer and immutable subject to an existing Lore user and principal; current grants further limit scopes and capabilities. Lore has no login page or public self-service registration flow. Its current access path depends on operator-configured resources and identity bindings.
 
-Lore admits a Gate identity, not an individual OAuth client. Every client that signs in with the same Gate account acts as the same principal, with the same actor kind, scopes and grants; the introspected client ID is required but does not select a different principal. Separate clients therefore differ only in the resource they connect to: give a client `/mcp/read` alone to keep it read-only. A workflow that must not act as the user needs its own Gate identity, admitted by the operator as a non-user principal.
+Lore admits a Gate identity, not an individual OAuth client, and keeps the person apart from the AIs that act for them. When the operator turns this on for an account, every client that signs in with that Gate account acts as one non-user connection principal that reads the user's grants. Its writes receive `ai_proposal` authority, and Lore records the introspected client ID on each changeset as provenance. User authority comes only from a change the person approved at Gate, which Lore then applies as the user principal. Separate clients differ only in the resource they connect to and in that recorded client ID: give a client `/mcp/read` alone to keep it read-only.
 
 `admin` is an internal capability attached to a personal-account grant. It is not a separate service administrator account. Some operations also require the authenticated actor to be the user, even when a client has broad `admin` capability. See [client access](sign-in.md) for the user-facing prerequisites and [API authorization](../technical/mcp-api.md#entry-points-and-authorization) for the exact rules.
 
-For hosted use, ask the service operator to configure the exact resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [DCR production release record](../eval/dcr-production-release-20261020.md).
+For hosted use, ask the service operator to configure the exact resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [change confirmation release record](../eval/change-confirmation-release-20261029.md).
 
 ## Discover the available tools
 
@@ -19,7 +19,7 @@ For MCP, send `initialize` and then `tools/list` to the configured endpoint. Use
 | Need | Start with |
 | --- | --- |
 | Read-only workflow | `/mcp/read`: `recall_memories`, `get_memory`, `get_changes` and status tools |
-| Write-capable workflow | `/mcp/write`: `remember_memory`, `capture`, ChangeSets, reviews, Forget, feedback and portability tools |
+| Write-capable workflow | `/mcp/write`: `remember_memory`, `capture`, ChangeSets, confirmation tools, review decisions, Forget, source and policy changes, and feedback |
 | Operation meanings and errors | [MCP and HTTP API contract](../technical/mcp-api.md) |
 | Memory evidence, authority and retrieval bounds | [Memory system](../technical/memory-system.md) |
 
@@ -29,13 +29,15 @@ REST and MCP use the same domain services. Do not assume that a connected client
 
 For a direct user request, send `remember_memory` with the requested kind, statement, evidence and an idempotency key. An explicit write is synchronous and its response says whether the record committed. Authority and lifecycle are derived from the principal's actor kind, the memory kind and the declared `epistemic_status`; a request cannot set authority directly.
 
-When your client signs in as the user, Lore attributes its writes to the user. A write with the default `asserted` status (or `observed` or `inferred`) becomes active with `user_decision`, `user_preference` or `user_assertion` authority, depending on the kind. Send `epistemic_status: "proposed"` for anything the AI suggested or inferred; it then receives `ai_proposal` authority and remains a candidate until the user confirms it. Keep the default only for what the user actually said, and do not convert an inference into the user's words. A non-user principal's writes always receive `ai_proposal` authority and start as candidates.
+A connection's writes always receive `ai_proposal` authority and start as candidates, whatever `epistemic_status` they declare. To record what the person actually said with their authority, put it in a ChangeSet with `propose_changeset` and call `request_user_decision`. Lore answers `confirmation_required` with a Gate `url` and the summary it will show; give the URL to the person, then call `complete_confirmation` with the `confirmation_id`. It returns `pending` until they act, then `committed`, `denied` or `expired`, or `failed` if what they saw changed meanwhile. An approval is consumed once, and completing again returns the stored outcome. Never present the summary as already approved, and do not convert an inference into the person's words.
 
-For a source workflow, the user must first enable a source with consent. The client sends observations through `capture` with the source revision, stable `operation_id` and `Idempotency-Key`, then reads `capture_status` for the returned job. Lore processes submitted observations; it does not fetch complete chat histories or crawl external documents itself.
+If an operator admits an identity without a connection principal, that client acts as the user principal itself. Its writes with the default `asserted` status then receive user authority, so it must send `epistemic_status: "proposed"` for anything the AI suggested or inferred.
+
+For a source workflow, the person must first approve the source: call `configure_source` (REST `POST /v1/connectors`) and complete its confirmation. The client sends observations through `capture` with the source revision, stable `operation_id` and `Idempotency-Key`, then reads `capture_status` for the returned job. Lore processes submitted observations; it does not fetch complete chat histories or crawl external documents itself.
 
 The worker validates each proposal against exact source evidence and checks existing memories. It can commit only a narrow class of uncontested observed or inferred facts that have no unresolved match. Duplicate facts can add evidence to one existing memory. Decisions, preferences, conflicts, uncertain outputs and ambiguous matches can be held for user review. An episode must remain one complete condition/action/outcome experience. These are current server rules, not decisions an agent may bypass by changing its prompt.
 
-When a review is available, read the review and its expected revision first. A user decision can accept the curator proposal with its attribution or record a separate user statement. The second choice does not independently verify a technical or third-party claim.
+When a review is available, read it with `list_reviews` or `get_review` and check its expected revision first. Deciding it goes through a confirmation. The person can accept the curator proposal with its attribution or record a separate user statement; the second choice does not independently verify a technical or third-party claim.
 
 ## Recall before answering
 
@@ -45,9 +47,9 @@ Present a memory with its attribution and evidence, distinguish assertions from 
 
 ## Correct, give feedback and forget
 
-To revise a known memory, read its current revision and use `propose_changeset` followed by `commit_changeset` with that `expected_revision`. Use `SUPERSEDE` when it changed over time, `RETRACT` when it was wrong, `CORROBORATE` to add evidence, `REFINE` to produce a revision, and `CONTEST` or `RELATE` to record an evidenced dispute or link. A stale revision returns `revision_conflict`; recall again and reconcile before proposing. Only a user principal may supersede or retract, and a non-user principal cannot refine a user-attributed memory.
+To revise a known memory, read its current revision and use `propose_changeset` followed by `commit_changeset` with that `expected_revision`. Use `SUPERSEDE` when it changed over time, `RETRACT` when it was wrong, `CORROBORATE` to add evidence, `REFINE` to produce a revision, and `CONTEST` or `RELATE` to record an evidenced dispute or link. A stale revision returns `revision_conflict`; recall again and reconcile before proposing. Only a user principal may supersede or retract, and a non-user principal cannot refine a user-attributed memory, so a connection commits such a ChangeSet through `request_user_decision`.
 
-`submit_feedback` accepts `useful`, `incorrect`, `stale` or `not_relevant` and queues reassessment. It does not change the memory by itself and should not be treated as a truth vote. Forget is a user operation: call `forget_memory`, keep its request ID and follow `forget_status` until purge completes. Suppression takes effect immediately; the worker handles physical deletion. Never retain forgotten content in an agent cache.
+`submit_feedback` accepts `useful`, `incorrect`, `stale` or `not_relevant` and queues reassessment. It does not change the memory by itself and should not be treated as a truth vote. Forget is a user operation: call `forget_memory`, complete its confirmation after the person approves, keep the request ID from the result and follow `forget_status` until purge completes. Source rights, scope access and retention changes work the same way. Export and import stay unavailable to connections. Suppression takes effect immediately; the worker handles physical deletion. Never retain forgotten content in an agent cache.
 
 ## Keep clients in sync and recover safely
 

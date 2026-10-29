@@ -66,7 +66,7 @@ export async function handleMcpRequest(
           instructions:
             endpoint === 'read'
               ? 'Use recall_memories to retrieve authorized memories. Results are subject to current source rights and Forget suppressions.'
-              : 'Use remember_memory only for explicit writes. Writes are attributed to the signed-in account, so set epistemic_status to "proposed" for anything you suggested or inferred. Use forget_memory for user-authorized durable deletion. Forget, review decisions, source rights, grants, retention and request_user_decision need the User: when you act for them, these return confirmation_required with a Gate URL to show the person, then call complete_confirmation after they approve.',
+              : 'Use remember_memory only for explicit writes. Lore keeps what the person decided apart from what an AI wrote. When your connection acts for the person, everything you save is an AI proposal; to record their own decision or preference, propose the changeset and call request_user_decision. When your connection acts as the User, set epistemic_status to "proposed" for anything you suggested or inferred. Use forget_memory for user-authorized durable deletion. Forget, review decisions, source capture settings, source rights, grants, retention and request_user_decision need the User: when you act for them, these return confirmation_required with a Gate URL to show the person, then call complete_confirmation after they approve.',
         },
       );
       if (endpoint === 'read') {
@@ -223,7 +223,7 @@ export async function handleMcpRequest(
           'remember_memory',
           {
             description:
-              'Write a memory with explicit evidence into one authorized scope. The memory is attributed to the signed-in account: set memory.epistemic_status to "proposed" for anything you suggested or inferred, and keep the default "asserted" only for what the user actually said.',
+              'Write a memory with explicit evidence into one authorized scope. When your connection acts for the person, the memory is saved as an AI proposal; use propose_changeset and request_user_decision to record it with their authority. When it acts as the User, set memory.epistemic_status to "proposed" for anything you suggested or inferred, and keep the default "asserted" only for what the user actually said.',
             inputSchema: {
               scope_id: z.uuid(),
               memory: memoryInputSchema,
@@ -272,6 +272,31 @@ export async function handleMcpRequest(
         }
         if (options.connectors !== undefined) {
           server.registerTool(
+            'configure_source',
+            {
+              description:
+                'Enable or disable capture from one source in an authorized scope. Enabling records the person’s consent for Lore to accept and curate that source.' +
+                CONFIRMATION_NOTE,
+              inputSchema: {
+                scope_id: z.uuid(),
+                source_kind: z.enum(['chat', 'document', 'tool_result', 'episode']),
+                external_id: z.string().min(1).max(512),
+                enabled: z.boolean(),
+                consent: z.boolean(),
+                metadata: z.record(z.string(), z.unknown()).optional(),
+              },
+              annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+            },
+            async (source) =>
+              toolResult(
+                await protectedChange(
+                  { operation: 'configure_source', request: source },
+                  undefined,
+                  () => options.connectors!.configure(actor, source),
+                ),
+              ),
+          );
+          server.registerTool(
             'capture',
             {
               description:
@@ -310,7 +335,7 @@ export async function handleMcpRequest(
           'propose_changeset',
           {
             description:
-              'Propose an authorized changeset for explicit review/commit. Created or refined content is attributed to the signed-in account; set epistemic_status to "proposed" for content you suggested or inferred.',
+              'Propose an authorized changeset for explicit review/commit. When your connection acts for the person, commit records it as an AI proposal and request_user_decision asks the person to record it with their authority. When it acts as the User, set epistemic_status to "proposed" for content you suggested or inferred.',
             inputSchema: {
               scope_id: z.uuid(),
               operations: z.array(z.unknown()).min(1).max(64),

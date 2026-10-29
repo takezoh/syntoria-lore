@@ -21,18 +21,18 @@ A user's memories stay within that user's account. Lore is not a complete or aut
 | Explain it once | An explicit remember commits synchronously; every AI client that signs in with your account can recall it later |
 | Pick up context in another AI | Recall returns matching memories within the caller's size budget; each client can follow its own change feed to catch up |
 | See why your AI knows it | Every memory revision links to at least one piece of evidence with its source, location, speaker and event time |
-| Tell your decision from an AI's suggestion | Authority is derived from the signed-in account, the memory kind and the status the write declares; a write marked as proposed keeps AI-proposal authority and waits as a candidate; a request cannot set authority directly |
+| Tell your decision from an AI's suggestion | An AI you connect acts for you, not as you: its writes keep AI-proposal authority and wait as candidates, with the AI that wrote them recorded; your authority comes only from a change you approved at Gate; a request cannot set authority directly |
 | Correct it without losing what was true | Supersede keeps the earlier period, retract records a mistake and contest flags a dispute; a write based on an outdated revision is rejected instead of overwriting newer work |
 | Ask what was true then | Historical recall can ask what applied at a past time and what Lore knew at a past time |
 | Reuse a lesson where it applies | An experience keeps the condition, action and outcome together |
-| Capture without retyping | Sources are enabled with consent; curator proposals are checked against the cited source text; only uncontested facts are saved automatically and the rest wait for review |
-| Forget | Forgotten content stops being returned immediately, a content-free deletion record is kept, and a background process purges the content and its dependent data |
-| Take your memories with you | Memories, evidence and history can be exported as an encrypted bundle and imported elsewhere, with the original attribution kept as provenance |
+| Capture without retyping | A source is enabled only after you approve it; curator proposals are checked against the cited source text; only uncontested facts are saved automatically and the rest wait for review |
+| Forget | After you approve it, forgotten content stops being returned immediately, a content-free deletion record is kept, and a background process purges the content and its dependent data |
 
 ## What Lore does not promise
 
 - Lore does not verify that a memory is true. Attribution records who made a statement.
-- Lore cannot tell whether a statement saved under your account came from you. It admits your Gate account rather than each AI client and records the status your AI declares, so an AI connected as you must save its own suggestions as proposals.
+- Lore knows that you approved a change at Gate, not that you read it carefully. It also cannot tell an AI that controls your signed-in browser from you.
+- Export and import are not available to connected AIs.
 - Recall is bounded and can miss relevant memories. An empty result does not prove that nothing was said.
 - AIs do not receive memory changes automatically; each one recalls again or follows its own change feed.
 - Lore is not a complete archive of source documents. It keeps submitted observations and the excerpts a source permits.
@@ -53,7 +53,7 @@ The main building blocks are:
 | Memory kind | A fact, decision, preference, hypothesis, experience or procedure |
 | Observation | What someone said, wrote or did in a source; it records an assertion or event, not proof that a claim is true |
 | Evidence | The link from a memory revision to its source observation, location and available lineage |
-| Attribution | Who made a statement, based on the signed-in account, the declared status and source information |
+| Attribution | Who made a statement: you, through a change you approved, or one of your AIs, recorded with the AI that wrote it; plus the declared status and source information |
 | Time | When a memory applies and when Lore recorded or changed it |
 | History | Earlier revisions, replacement and retraction reasons, and relations to other memories |
 
@@ -61,7 +61,7 @@ An experience keeps a condition, action and outcome together so a future AI can 
 
 ## Attribution is not verification
 
-Lore distinguishes a user's own decision or preference, an AI proposal and a claim attributed to someone else. It derives authority from the signed-in account, the memory kind, the declared epistemic status and the controlled user-confirmation path; it never takes an authority label from a request or from model output. Because Lore admits a Gate account rather than an individual client, an AI connected as you writes as you: what it saves as asserted is recorded as your statement, and what it marks as proposed stays an AI proposal until you confirm it. Source speaker and location help explain where a claim came from. Neither a confident summary nor the fact that a memory was useful makes an outside-world claim true.
+Lore distinguishes a user's own decision or preference, an AI proposal and a claim attributed to someone else. It derives authority from who made the change, the memory kind, the declared epistemic status and the controlled user-confirmation path; it never takes an authority label from a request or from model output. An AI you connect acts for you but not as you, so what it saves stays an AI proposal, with the AI that wrote it recorded. It becomes your statement only when you approve that exact change at Gate. Source speaker and location help explain where a claim came from. Neither a confident summary nor the fact that a memory was useful makes an outside-world claim true.
 
 When a user confirms a candidate, that records the user's confirmation or statement. It does not independently verify a technical or third-party claim. The [memory-system reference](docs/technical/memory-system.md) describes the current proposal and review rules.
 
@@ -79,7 +79,7 @@ Recall combines the question with permitted scope, source rights, memory lifecyc
 
 ## Access
 
-AI clients connect through REST and Remote MCP; Lore has no sign-in page or memory browser of its own. Gate handles sign-in and approval, and the service operator must admit your Gate account to Lore before a client can read or write memories. Every client you approve with that account acts as you; to keep one read-only, connect it only to the read endpoint. See [client access](docs/usage/sign-in.md).
+AI clients connect through REST and Remote MCP; Lore has no sign-in page or memory browser of its own. Gate handles sign-in and approval, and the service operator must admit your Gate account to Lore before a client can read or write memories. Every client you approve with that account acts for you with the same memories and permissions, but its changes stay its own until you approve them; to keep one read-only, connect it only to the read endpoint. See [client access](docs/usage/sign-in.md).
 
 ## Scope and evidence
 

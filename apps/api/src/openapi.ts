@@ -124,6 +124,7 @@ const apiContract = {
               },
             },
           },
+          '202': { $ref: '#/components/responses/ConfirmationRequired' },
           '400': { $ref: '#/components/responses/CoreError' },
           '401': { $ref: '#/components/responses/CoreError' },
           '403': { $ref: '#/components/responses/CoreError' },

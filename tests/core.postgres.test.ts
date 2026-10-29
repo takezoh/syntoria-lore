@@ -411,6 +411,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         core: coreService,
         governance,
         reviews: reviewService,
+        connectors: connectorService,
       }),
       ready: () => governance.verifyLedgerReadiness(),
       rateLimit: 10_000,
@@ -4375,6 +4376,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     status: string;
     confirmation: {
       confirmation_id: string;
+      operation: string;
       status: string;
       url: string;
       summary: { title: string; lines: string[] };
@@ -4752,6 +4754,50 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     } finally {
       await writer.close();
     }
+  });
+
+  it('lets a connection read the review queue and enable a source only after approval', async () => {
+    const { gateSubject } = await connectionSubject([scopeB]);
+    const ai = connectionToken(gateSubject);
+    const reviews = await fetch(`${baseUrl}/v1/reviews?scope_id=${scopeB}`, {
+      headers: { authorization: `Bearer ${ai}` },
+    });
+    expect(reviews.status).toBe(200);
+    expect(Array.isArray(((await reviews.json()) as { reviews: unknown[] }).reviews)).toBe(true);
+    const separateWorkflow = await token([scopeB], 'memory:read memory:write', clientSubject);
+    const refused = await fetch(`${baseUrl}/v1/reviews?scope_id=${scopeB}`, {
+      headers: { authorization: `Bearer ${separateWorkflow}` },
+    });
+    expect(refused.status).toBe(403);
+
+    const externalId = `consented-source-${randomUUID()}`;
+    const source = {
+      scope_id: scopeB,
+      source_kind: 'document',
+      external_id: externalId,
+      enabled: true,
+      consent: true,
+    };
+    const readAuthorization = () =>
+      admin.query<{ enabled: boolean; consent: boolean; created_by: string }>(
+        `SELECT enabled, consent, created_by::text FROM connector_authorizations
+         WHERE user_id = $1 AND scope_id = $2 AND external_id = $3`,
+        [userId, scopeB, externalId],
+      );
+    const requested = await post('/v1/connectors', ai, source);
+    expect(requested.status).toBe(202);
+    const body = (await requested.json()) as ConfirmationBody;
+    expect(body.confirmation.operation).toBe('configure_source');
+    expect(body.confirmation.summary.title).toBe('Enable capture from a source');
+    expect(body.confirmation.summary.lines).toContain(
+      'Capture: not configured → enabled with consent',
+    );
+    expect((await readAuthorization()).rows).toEqual([]);
+    gateConfirmations.get(gateIdOf(body))!.state = 'approved';
+    expect((await complete(body.confirmation.confirmation_id, ai)).status).toBe('committed');
+    expect((await readAuthorization()).rows).toEqual([
+      { enabled: true, consent: true, created_by: principalId },
+    ]);
   });
 
   /** A Gate subject whose connections all act as one non-user principal for the integration user. */

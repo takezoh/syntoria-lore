@@ -72,7 +72,13 @@ const governance = new ForgetService(pool, governanceStorage.deletionLedger);
 const portability = new PortabilityService(pool, governanceStorage.portabilityStore, {
   hmacKey: requiredEnvironment('FORGET_HMAC_KEY'),
 });
-const confirmations = new ChangeConfirmationService({ pool, core, governance, reviews });
+const confirmations = new ChangeConfirmationService({
+  pool,
+  core,
+  governance,
+  reviews,
+  connectors,
+});
 const server = createApiServer({
   productDisplayName,
   auth,

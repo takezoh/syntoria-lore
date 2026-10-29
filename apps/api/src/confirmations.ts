@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { IdentityProviderError, type Authenticator } from '@memory/auth';
 import {
   changeSetSchema,
+  connectorAuthorizationSchema,
   CoreError,
   forgetRequestSchema,
   grantMutationSchema,
@@ -13,6 +14,7 @@ import {
 } from '@memory/contracts';
 import { uuidArray, withTransaction } from '@memory/db';
 import { withAuthorizedActor, type CoreService } from '@memory/domain';
+import type { ConnectorService } from '@memory/connectors';
 import type { ForgetService } from '@memory/governance';
 import type { CurationReviewService } from '@memory/jobs';
 import type { Pool, PoolClient } from 'pg';
@@ -37,7 +39,8 @@ export type ProtectedChange =
       readonly operation: 'set_retention_policy';
       readonly scopeId: string;
       readonly request: unknown;
-    };
+    }
+  | { readonly operation: 'configure_source'; readonly request: unknown };
 
 type Operation = ProtectedChange['operation'];
 
@@ -52,6 +55,7 @@ export interface ChangeConfirmationOptions {
   readonly core: CoreService;
   readonly governance?: ForgetService;
   readonly reviews?: CurationReviewService;
+  readonly connectors?: ConnectorService;
 }
 
 interface Summary {
@@ -523,6 +527,8 @@ export class ChangeConfirmationService {
           String(payload['scope_id']),
           payload['request'],
         );
+      case 'configure_source':
+        return this.connectors().configure(actor, payload['request']);
     }
   }
 
@@ -540,6 +546,8 @@ export class ChangeConfirmationService {
         return this.prepareGrant(actor, change.scopeId, change.request);
       case 'set_retention_policy':
         return this.prepareRetention(actor, change.scopeId, change.request);
+      case 'configure_source':
+        return this.prepareSource(actor, change.request);
     }
   }
 
@@ -800,6 +808,40 @@ export class ChangeConfirmationService {
     });
   }
 
+  private async prepareSource(actor: ActorContext, raw: unknown): Promise<PreparedChange> {
+    const request = parse(connectorAuthorizationSchema, raw, 'Connector authorization is invalid');
+    return this.read(actor, [request.scope_id], async (client) => {
+      const found = await client.query<{ enabled: boolean; consent: boolean }>(
+        `SELECT enabled, consent FROM connector_authorizations
+         WHERE user_id = $1 AND scope_id = $2 AND source_kind = $3 AND external_id = $4`,
+        [actor.userId, request.scope_id, request.source_kind, request.external_id],
+      );
+      const current = found.rows[0];
+      const state = (enabled: boolean, consent: boolean) =>
+        enabled && consent ? 'enabled with consent' : enabled ? 'enabled' : 'disabled';
+      const lines = [
+        ...(await scopeLine(client, actor, request.scope_id)),
+        ...labelled('Source: ', `${request.source_kind} ${request.external_id}`),
+        `Capture: ${current === undefined ? 'not configured' : state(current.enabled, current.consent)} → ${state(request.enabled, request.consent)}`,
+        request.enabled
+          ? 'Your AIs may send this source to Lore, and Lore may propose memories from it'
+          : 'Lore stops accepting and using observations from this source',
+        ...(Object.keys(request.metadata).length === 0
+          ? []
+          : labelled('Settings: ', canonical(request.metadata))),
+      ];
+      return {
+        scopeId: request.scope_id,
+        payload: { request },
+        summary: checkedSummary(
+          request.enabled ? 'Enable capture from a source' : 'Disable capture from a source',
+          lines,
+        ),
+        memoryIds: [],
+      };
+    });
+  }
+
   private read<T>(
     actor: ActorContext,
     scopeIds: readonly string[],
@@ -813,6 +855,13 @@ export class ChangeConfirmationService {
       throw new CoreError(503, 'feature_unavailable', 'Governance is not configured', true);
     }
     return this.options.governance;
+  }
+
+  private connectors(): ConnectorService {
+    if (this.options.connectors === undefined) {
+      throw new CoreError(503, 'feature_unavailable', 'Connector capture is not configured', true);
+    }
+    return this.options.connectors;
   }
 
   private reviews(): CurationReviewService {
@@ -836,6 +885,8 @@ function directPayload(change: ProtectedChange): Record<string, unknown> {
     case 'change_scope_grant':
     case 'set_retention_policy':
       return { scope_id: change.scopeId, request: change.request };
+    case 'configure_source':
+      return { request: change.request };
   }
 }
 

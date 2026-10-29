@@ -99,8 +99,11 @@ The first iteration covers:
 - `decide_review`
 - Forget, by memory, source or subject selector
 - `change_source_rights`, `change_scope_grant` and `set_retention_policy`
+- `configure_source`, which enables or disables capture from a source and records the person's consent (migration 0047, added on 2026-10-29 after the switch showed that no connection could enable a source otherwise)
 
-Enabling a source connector, export and import are not offered through confirmations and keep refusing non-user actors with `user_required`. Lore runs as one shared environment, so moving data between environments through an AI is not a use case.
+Export and import are not offered through confirmations and keep refusing non-user actors with `user_required`. Lore runs as one shared environment, so moving data between environments through an AI is not a use case.
+
+Reading is not a change. A connection principal (`ActorContext.actsForUser`) may list and read curation reviews, so an AI can show the person what waits for their decision. A separately admitted non-user principal still cannot.
 
 ### Pending confirmations
 

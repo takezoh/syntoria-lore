@@ -241,6 +241,7 @@ export class Authenticator {
         Object.fromEntries(grants.map((grant) => [grant.scope_id, Number(grant.auth_epoch)])),
       ),
       clientId: principal.clientId,
+      ...(binding.principal_id === binding.user_principal_id ? {} : { actsForUser: true }),
     });
     const state = Object.freeze({ token, principal, binding });
     this.credentials.set(actor, state);

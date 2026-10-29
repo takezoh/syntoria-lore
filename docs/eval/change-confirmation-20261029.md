@@ -50,3 +50,12 @@ This is the migration review record for `0045_change_confirmations.sql` and `004
 - [x] Forget, export/import, and restore behavior account for the changed data.
 - [x] Failure can be repaired by a documented forward action.
 - [x] The listed checks ran against a disposable database and their results are attached.
+
+## Addendum: 0047_confirm_source_configuration.sql
+
+After the switch was set in production on 2026-10-29, connections could no longer read the review queue or enable a capture source, because both required the user actor and neither went through a confirmation. The owner chose to allow reading and to require approval for enabling.
+
+- **Change:** `0047_confirm_source_configuration.sql` replaces the `operation` check on `change_confirmations` to add `configure_source`. The table has few rows, and replacing the check takes a brief `ACCESS EXCLUSIVE` lock and validates existing rows. No data changes.
+- **Compatibility:** the previous image never writes `configure_source`, so it keeps working after 0047. The new image needs 0047 before a connection requests a source change; deploy the migration first.
+- **Code:** `ActorContext.actsForUser` marks a connection principal. Review listing and reading accept it; a separately admitted non-user principal is still refused. `POST /v1/connectors` and the new `configure_source` MCP tool run directly for the user and return a confirmation to any other actor. Approval applies the stored request as the user principal.
+- **Verification:** on a fresh disposable database, `tests/core.postgres.test.ts` passed 43 of 43, together with the migration scripts. The new case covers review access for a connection, refusal for a separate non-user principal, and a source enabled only after approval, with `created_by` set to the user principal. Removing the review allowance made the case fail with 403, and it passed again once restored. Typecheck, lint, format, OpenAPI check and 88 unit tests passed.

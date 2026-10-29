@@ -14,7 +14,7 @@ Ask any AI connected to your account to remember a decision, a preference or a l
 
 ## See why your AI knows it
 
-Every memory keeps the evidence behind it: what was said, by whom, where and when. Your decision, your AI's suggestion and what someone else said stay distinct, so you can tell what you decided from what was only proposed. Ask “where did that come from?” and get the source, not just a confident answer.
+Every memory keeps the evidence behind it: what was said, by whom, where and when. Your decision, your AI's suggestion and what someone else said stay distinct, so you can tell what you decided from what was only proposed, and which AI wrote what. Ask “where did that come from?” and get the source, not just a confident answer.
 
 ## Correct it without losing what was true
 
@@ -22,7 +22,7 @@ Plans change and mistakes happen, and Lore records them differently. When a poli
 
 ## Decide what is kept and forgotten
 
-Lore keeps what you and your AIs send it. Background capture from a conversation or document source starts only after you enable that source with consent; Lore does not fetch your chat history on its own. Proposed memories that need your judgment, such as preferences, decisions and conflicts, wait for your review. Ask to forget something and it stops being returned right away, then is deleted from Lore's records in the background. Your memories, evidence and history can also be exported as an encrypted bundle.
+Lore keeps what you and your AIs send it. Background capture from a conversation or document source starts only after you approve that source; Lore does not fetch your chat history on its own. Proposed memories that need your judgment, such as preferences, decisions and conflicts, wait for your review. Ask to forget something and approve it, and it stops being returned right away, then is deleted from Lore's records in the background.
 
 ## Who it is for
 
@@ -53,7 +53,7 @@ See [use cases and example prompts](docs/usage/use-cases.md) for continuing in a
 
 Lore stores memories and their evidence; your AI decides when to remember or recall and what a result means for the task at hand. An explicit request to remember is saved immediately. When a connected source sends conversations or documents, Lore's background curator proposes memories, checks each one against the cited source text and existing memories, and saves only uncontested facts automatically. The rest wait for your review.
 
-Lore admits your Gate account rather than each AI client, so an AI connected as you writes as you. Lore records whose statement a memory is from that account and from the status the AI declares, so a careful AI saves its own suggestions as proposals; ask it to when the difference matters. Attribution says who said something, not whether it is true.
+Lore tells what you decided apart from what an AI wrote. Every AI you connect acts for you but not as you: what it saves is kept as an AI proposal, together with which AI saved it. A decision, preference or correction becomes yours, and Forget or another change to what Lore keeps takes effect, only after you approve that exact change. Your AI shows you a link to Gate, the shared sign-in service; you sign in, read the change as Lore describes it and approve or deny it. Attribution says who said something, not whether it is true.
 
 Recall returns a bounded set of matching memories with their evidence and uncertainty. It can miss things, and an empty answer does not prove that nothing was said. Forgotten content stops being returned immediately; backups may hold it until they expire, and a restored service applies the deletion before serving memories again.
 

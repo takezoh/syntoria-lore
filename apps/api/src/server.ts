@@ -526,9 +526,10 @@ async function handleRequest(
       result = await options.governance.submitFeedback(actor, { ...body, memory_id: memoryId });
     } else if (request.method === 'POST' && url.pathname === '/v1/connectors') {
       if (options.connectors === undefined) throw unavailableFeature('Connector capture');
-      result = await options.connectors.configure(
-        actor,
-        await readJson(request, options.maxBodyBytes ?? maxBodyBytes),
+      const connectors = options.connectors;
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      await protectedChange({ operation: 'configure_source', request: body }, undefined, () =>
+        connectors.configure(actor, body),
       );
     } else if (
       request.method === 'POST' &&
