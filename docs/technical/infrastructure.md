@@ -4,7 +4,7 @@
 
 The service is TypeScript on Node.js 24. One immutable container image serves the Cloud Run API, private worker and controlled jobs. The API exposes REST, Remote MCP and OpenAPI. Neon PostgreSQL with pgvector and pg_trgm stores user data and work state; Cloud Tasks delivers durable job IDs; Cloud Scheduler triggers worker sweeps; Cloud Storage holds the deletion ledger and encrypted exports; Vertex AI supplies extraction and embeddings.
 
-Gate owns sign-in, approvals, sessions and logout. This service consumes Gate through online bearer-token introspection and an operator-maintained binding to an existing Lore identity. The API uses a public HTTPS entry point with Gate bearer checks for protected data, while the worker remains private. The checked-in `infra/cloud/deployment.json` is a synthetic example profile, not the private production configuration or a deployment readback. Current rollout status belongs to [deployment](deployment.md).
+Gate owns sign-in, approvals, sessions and logout. This service consumes Gate through online bearer-token introspection and an operator-maintained binding to an existing Lore identity. The API uses a public HTTPS entry point with Gate bearer checks for protected data, while the worker remains private. The checked-in `infra/cloud/deployment.json` is a synthetic example profile; the production profile is the ignored `.local/cloud/deployment.json`. Neither is a deployment readback. Current rollout status belongs to [deployment](deployment.md).
 
 ```mermaid
 flowchart LR
@@ -53,7 +53,7 @@ Every actor-bound operation locks and compares the local binding, principal, gra
 
 Cloud Run IAM protects the worker: task and scheduler identities invoke it using the worker's canonical Cloud Run audience. The public API invocation boundary is separate from application authorization: protected data still requires a valid Gate bearer and current Lore grants. The API's Cloud Run URL remains its canonical service identity.
 
-`deployment.json` is a synthetic example for names, limits, resource URLs and secret-reference shape; `iam-contract.json` records the intended direct IAM boundary. Neither is itself a cloud readback. Current deployed values, readbacks and remaining acceptance work belong in [deployment](deployment.md) and its dated [release record](../eval/gate-production-release-20261018.md).
+`deployment.json` is a synthetic example of names, limits, resource URLs and secret-reference shape, and `iam-contract.json` of the intended direct IAM boundary; their production versions are the ignored `.local/cloud/deployment.json` and `.local/cloud/iam-contract.json`. Neither is itself a cloud readback. Current deployed values, readbacks and remaining acceptance work belong in [deployment](deployment.md) and its dated [release record](../eval/gate-production-release-20261018.md).
 
 ## Monitoring and remaining limits
 

@@ -9,3 +9,10 @@ var/
 coverage/
 # Private deployment profiles and rendered production configuration.
 .local/
+# Private keys and Terraform variable files never belong in the repository.
+*.pem
+*.key
+*.p12
+*.pfx
+*.tfvars
+*.tfvars.json

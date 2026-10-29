@@ -6,7 +6,7 @@ Migration 0048 is not yet applied in production. Applying it makes every binding
 
 ## Current boundary
 
-The checked-in `infra/cloud/deployment.json` remains a synthetic example profile with placeholder public origins. It is not the active production configuration or a cloud readback; private production configuration stays in ignored local deployment state. The Cloud Run API URL remains the canonical service identity. Production uses the approved direct Cloud Run domain-mapping design, with domain mapping, DNS and a Ready managed TLS certificate. No separate proxy or edge was added. Gate registration values in the example profile are not evidence of DNS, TLS, live registration or secret payloads.
+The checked-in `infra/cloud/deployment.json` is a synthetic example profile. The production profile, which `scripts/render-cloud-manifests.mjs` reads, is the ignored `.local/cloud/deployment.json`; see [the existing service contract](#existing-service-and-storage-contract). Neither is a cloud readback, and secret values stay in Secret Manager. The Cloud Run API URL remains the canonical service identity. Production uses the approved direct Cloud Run domain-mapping design, with domain mapping, DNS and a Ready managed TLS certificate. No separate proxy or edge was added. Gate registration values in the example profile are not evidence of DNS, TLS, live registration or secret payloads.
 
 The explicitly approved service-level `allUsers` invoker binding is active on the API. Application-level Gate bearer verification remains mandatory for protected data. The worker remains private with task and scheduler invokers only, and its IAM boundary is unchanged.
 
