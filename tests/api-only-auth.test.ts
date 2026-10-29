@@ -54,6 +54,7 @@ describe('API-only Gate authentication', () => {
         }
         return actor;
       }),
+      gateIdentity: () => undefined,
     } as unknown as Authenticator;
     const remember = vi.fn(async () => ({ committed: true }));
     const server = startServer(auth, { remember } as unknown as CoreService);
@@ -94,6 +95,7 @@ describe('API-only Gate authentication', () => {
       body,
     });
     expect(bearer.status).toBe(200);
+    expect(bearer.headers.get('strict-transport-security')).toBe('max-age=31536000');
     expect(bearer.headers.get('access-control-allow-origin')).toBe('https://client.example.test');
     expect(bearer.headers.get('access-control-allow-credentials')).toBeNull();
     expect(acceptedHeaders).toEqual([undefined, undefined, 'Bearer valid-gate-token']);
@@ -102,7 +104,10 @@ describe('API-only Gate authentication', () => {
 });
 
 function startServer(
-  auth: Authenticator = { authenticateBearer: async () => actor } as unknown as Authenticator,
+  auth: Authenticator = {
+    authenticateBearer: async () => actor,
+    gateIdentity: () => undefined,
+  } as unknown as Authenticator,
   core: CoreService = { remember: async () => ({ committed: true }) } as unknown as CoreService,
 ): Server {
   const server = createApiServer({

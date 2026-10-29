@@ -8,6 +8,7 @@ import {
 } from '@memory/contracts';
 import { getProductDisplayName } from '@memory/runtime';
 import type { Authenticator } from '@memory/auth';
+import type { ActorContext } from '@memory/contracts';
 import type { CoreService } from '@memory/domain';
 import type { ConnectorService } from '@memory/connectors';
 import type { RecallService } from '@memory/recall';
@@ -17,9 +18,9 @@ import type { PortabilityService } from '@memory/governance';
 import type { ChangeConfirmationService, ProtectedChange } from './confirmations.js';
 import { handleMcpRequest } from './mcp.js';
 import { createOpenApiDocument } from './openapi.js';
+import { RequestLimits } from './request-limits.js';
 
 const maxBodyBytes = 1_048_576;
-const rateWindowMs = 60_000;
 const rateLimit = 120;
 
 export interface ApiServerOptions {
@@ -41,13 +42,19 @@ export interface ApiServerOptions {
   readonly apiAllowedOrigins?: readonly string[];
   readonly ready?: () => Promise<void>;
   readonly maxBodyBytes?: number;
+  /** Requests per minute for one authenticated Gate connection. */
   readonly rateLimit?: number;
+  /** Failed authentications per minute for one client address. */
+  readonly unauthenticatedRateLimit?: number;
 }
 
 export function createApiServer(options?: ApiServerOptions): Server {
-  const requests = new Map<string, { start: number; count: number }>();
+  const limits = new RequestLimits({
+    connectionLimit: options?.rateLimit ?? rateLimit,
+    unauthenticatedLimit: options?.unauthenticatedRateLimit ?? rateLimit,
+  });
   return createServer((request, response) => {
-    void handleRequest(request, response, options, requests).catch(() => {
+    void handleRequest(request, response, options, limits).catch(() => {
       if (!response.headersSent)
         sendJson(response, 500, {
           error: {
@@ -66,7 +73,7 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: ApiServerOptions | undefined,
-  requests: Map<string, { start: number; count: number }>,
+  limits: RequestLimits,
 ): Promise<void> {
   const startedAt = performance.now();
   const requestId = randomUUID();
@@ -86,6 +93,8 @@ async function handleRequest(
   });
   response.setHeader('x-request-id', requestId);
   response.setHeader('cache-control', 'no-store');
+  // Browsers ignore this over plain HTTP, so local development is unaffected.
+  response.setHeader('strict-transport-security', 'max-age=31536000');
   let url: URL;
   try {
     url = new URL(request.url ?? '/', 'http://localhost');
@@ -243,24 +252,13 @@ async function handleRequest(
       response.end();
       return;
     }
-    const address = request.socket.remoteAddress ?? 'unknown';
-    const now = Date.now();
-    let bucket = requests.get(address);
-    if (bucket === undefined || now - bucket.start >= rateWindowMs) {
-      bucket = { start: now, count: 0 };
-      requests.set(address, bucket);
-    }
-    bucket.count += 1;
-    if (bucket.count > (options.rateLimit ?? rateLimit)) {
-      response.setHeader('retry-after', '60');
-      sendError(
-        response,
-        new CoreError(429, 'rate_limited', 'Request rate limit exceeded', true),
-        requestId,
-      );
+    if (request.method !== 'POST') {
+      response.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'POST' });
+      response.end('Method Not Allowed');
       return;
     }
     try {
+      const actor = await authenticateWithinLimits(endpointAuth, request, limits);
       const webRequest = await toWebRequest(request, options.maxBodyBytes ?? maxBodyBytes);
       const webResponse = await handleMcpRequest(
         endpoint,
@@ -277,6 +275,7 @@ async function handleRequest(
           maxBodyBytes: options.maxBodyBytes ?? maxBodyBytes,
         },
         webRequest,
+        actor,
       );
       const headers = Object.fromEntries(webResponse.headers.entries());
       if (originHeader !== undefined) {
@@ -290,6 +289,7 @@ async function handleRequest(
         error instanceof CoreError
           ? error
           : new CoreError(500, 'internal_error', 'MCP request could not be completed', true);
+      if (coreError.status === 429) response.setHeader('retry-after', '60');
       if (coreError.status === 401) {
         const metadataBase = options.mcpResourceBaseUrl ?? requestOrigin(request);
         const metadata = new URL(
@@ -308,33 +308,11 @@ async function handleRequest(
     return;
   }
 
-  const address = request.socket.remoteAddress ?? 'unknown';
-  const now = Date.now();
-  let bucket = requests.get(address);
-  if (bucket === undefined || now - bucket.start >= rateWindowMs) {
-    bucket = { start: now, count: 0 };
-    requests.set(address, bucket);
-    if (requests.size > 10_000) {
-      for (const [key, value] of requests)
-        if (now - value.start >= rateWindowMs) requests.delete(key);
-    }
-  }
-  bucket.count += 1;
-  if (bucket.count > (options.rateLimit ?? rateLimit)) {
-    response.setHeader('retry-after', '60');
-    sendError(
-      response,
-      new CoreError(429, 'rate_limited', 'Request rate limit exceeded', true),
-      requestId,
-    );
-    return;
-  }
-
   try {
     if (hasDuplicateRawHeader(request, 'authorization')) {
       throw new CoreError(401, 'unauthorized', 'Duplicate Authorization headers are not allowed');
     }
-    const actor = await options.auth.authenticateBearer(request.headers.authorization);
+    const actor = await authenticateWithinLimits(options.auth, request, limits);
     let result: unknown;
     let responseStatus = 200;
     // A protected change runs directly for the User and becomes a Gate confirmation (202) otherwise.
@@ -618,6 +596,7 @@ async function handleRequest(
     sendJson(response, responseStatus, withRequestMetadata(result, requestId));
   } catch (error) {
     if (error instanceof CoreError) {
+      if (error.status === 429) response.setHeader('retry-after', '60');
       sendError(response, error, requestId);
       return;
     }
@@ -627,6 +606,38 @@ async function handleRequest(
       requestId,
     );
   }
+}
+
+/**
+ * Authenticates the bearer within the request budgets. A failed authentication counts against
+ * the client address, and a verified one against its Gate connection, so unauthenticated traffic
+ * cannot use up an authenticated connection's budget or block a credential that verified recently.
+ */
+async function authenticateWithinLimits(
+  auth: Authenticator,
+  request: IncomingMessage,
+  limits: RequestLimits,
+): Promise<ActorContext> {
+  const address = request.socket.remoteAddress ?? 'unknown';
+  const credential = /^Bearer (\S+)$/i.exec(request.headers.authorization ?? '')?.[1];
+  if (!limits.admitCredential(address, credential)) throw rateLimited();
+  let actor: ActorContext;
+  try {
+    actor = await auth.authenticateBearer(request.headers.authorization);
+  } catch (error) {
+    if (error instanceof CoreError && (error.status === 401 || error.status === 403)) {
+      limits.recordFailure(address);
+    }
+    throw error;
+  }
+  if (credential !== undefined) limits.recordVerified(credential);
+  const connection = auth.gateIdentity(actor)?.connectionId ?? `principal:${actor.principalId}`;
+  if (!limits.admitConnection(connection)) throw rateLimited();
+  return actor;
+}
+
+function rateLimited(): CoreError {
+  return new CoreError(429, 'rate_limited', 'Request rate limit exceeded', true);
 }
 
 function telemetryRoute(method: string, pathname: string): string {

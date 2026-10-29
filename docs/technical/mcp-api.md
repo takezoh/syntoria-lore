@@ -124,7 +124,7 @@ Under `gate`:
 | `409 confirmation_endpoint_mismatch` | Complete the confirmation through the endpoint that requested it |
 | `410 cursor_expired` | Recall afresh and restart the feed |
 | `413 payload_too_large`, `summary_too_large` | Request body over 1 MiB, or a change too large to show in full for approval; split it |
-| `429 rate_limited` | Retry after the indicated delay |
+| `429 rate_limited` | Retry after the indicated delay. Each Gate connection has its own budget; repeated failed authentications from one address also exhaust a shared budget, during which only a credential that verified recently is accepted for verification |
 | `503 restore_not_ready`, `curator_timeout`, `database_error` | Retryable after a delay; protected reads stay closed during restore reconciliation |
 
 Keep the exact operation, `operation_id`, idempotency key and arguments of every write until its result is known. A lost response is an unknown outcome: resend the identical request or read the job status, never retry with a fresh ID.

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
-import { CoreError, memoryInputSchema } from '@memory/contracts';
+import { CoreError, memoryInputSchema, type ActorContext } from '@memory/contracts';
 import type { Authenticator } from '@memory/auth';
 import type { CoreService } from '@memory/domain';
 import type { ConnectorService } from '@memory/connectors';
@@ -31,13 +31,12 @@ export async function handleMcpRequest(
   endpoint: 'read' | 'write',
   options: McpEndpointOptions,
   incoming: Request,
+  /** The caller, already authenticated with `options.auth` for this endpoint's audience. */
+  actor: ActorContext,
 ): Promise<Response> {
   if (incoming.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405, headers: { allow: 'POST' } });
   }
-  const actor = await options.auth.authenticateBearer(
-    incoming.headers.get('authorization') ?? undefined,
-  );
   const requiredCapability = endpoint === 'read' ? 'read' : 'write';
   if (!actor.capabilities.includes(requiredCapability)) {
     throw new CoreError(

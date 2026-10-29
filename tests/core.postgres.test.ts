@@ -761,6 +761,36 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     }
   }, 30_000);
 
+  it('keeps a flood of failed authentications from blocking a verified connection', async () => {
+    const limited = createApiServer({
+      auth: authenticator,
+      core: coreService,
+      rateLimit: 3,
+      unauthenticatedRateLimit: 2,
+    });
+    await new Promise<void>((resolve) => limited.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = limited.address();
+      if (address === null || typeof address === 'string') throw new Error('No test address');
+      const owner = await token([scopeB], 'memory:read');
+      const changes = (bearer: string) =>
+        fetch(`http://127.0.0.1:${address.port}/v1/changes?scope_ids=${scopeB}`, {
+          headers: { authorization: `Bearer ${bearer}` },
+        });
+      expect((await changes(owner)).status).toBe(200);
+      expect((await changes(`forged-${randomUUID()}`)).status).toBe(401);
+      expect((await changes(`forged-${randomUUID()}`)).status).toBe(401);
+      const shed = await changes(`forged-${randomUUID()}`);
+      expect(shed.status).toBe(429);
+      expect(shed.headers.get('retry-after')).toBe('60');
+      expect((await changes(owner)).status).toBe(200);
+      expect((await changes(owner)).status).toBe(200);
+      expect((await changes(owner)).status).toBe(429);
+    } finally {
+      await new Promise<void>((resolve) => limited.close(() => resolve()));
+    }
+  });
+
   it('bounds pending deletion batches and defers a failed oldest request without starving later work', async () => {
     const requestIds = [randomUUID(), randomUUID()];
     try {
