@@ -4,7 +4,7 @@
 
 On 2026-10-29, Gate, Lore and Weave began serving the revisions below at 100% traffic. Gate hosts change confirmations, and unapproved DCR registrations now expire. Lore records the Gate client on each changeset and can route protected changes through Gate confirmations. Weave keeps 30 days of operations and records the committing client.
 
-The connection-principal switch is **not set** for any binding. Every Lore connection still acts as the binding's principal, so Lore behaves as before for existing connections: the confirmation path is deployed but no request takes it yet. The owner authorized this release on 2026-10-29 ("lore, gate, weave のデプロイを承認する"). Private origins, identity values and credential payloads are not included here.
+The connection-principal switch was set later the same day for the single production binding (see [Switch and follow-up release](#switch-and-follow-up-release)). Since then every Lore connection acts as a non-user connection principal, and user authority comes only from a change approved at Gate. The owner authorized this release on 2026-10-29 ("lore, gate, weave のデプロイを承認する"). Private origins, identity values and credential payloads are not included here.
 
 ## Source and artifacts
 
@@ -45,3 +45,11 @@ Public HTTPS probes on 2026-10-29:
 - **Gate:** route traffic back to `gate-api-davinci-20261024`. Confirmations created in the meantime then become unreachable.
 - **Lore:** route traffic back to `lore-api-dcr-921e9c0` while the switch is unset. Migrations 0044 to 0046 stay applied, and the previous image works with them.
 - **Weave:** the previous image fails its startup schema check after 0005. Roll forward with a fix instead.
+
+## Switch and follow-up release
+
+- **Switch.** On 2026-10-29 the owner ran the reviewed identity-mapping tool from their own shell, so the migration credential never reached the agent. The dry-run found exactly one active binding, whose principal is a `user`, with one scope and the `admin`, `read` and `write` ceiling. It was applied with that baseline. The readback shows the binding active and naming a new `client` connection principal. That principal is active, acts for the binding's user principal and holds no grants of its own.
+- **Gap found.** After the switch, a connection could no longer read the review queue, and no one could enable a capture source, because both required the user actor. The owner chose to allow reading and to require approval for enabling.
+- **Lore `a63458f`.** Cloud Build `b9ef3eb4-6783-4717-a962-3b53a9504ba2` produced image `sha256:f5147c7ace0b3b48a21dfd66c19c08bb0dbeae6ea3540f831db62c587724f1b4`. Execution `lore-neon-migrate-74bcb` applied `0047_confirm_source_configuration.sql` (`migration_count=47`, `reapply=passed`). Revision `lore-api-split-a63458f` was probed through a no-traffic tag (readiness 200, unauthenticated `POST /v1/connectors` 401) and then received 100% traffic. Public readiness returned 200 and an unauthenticated MCP write returned 401.
+- **Not yet observed in production.** No confirmation has been created, approved or consumed, and no AI write has been checked to land as an AI proposal.
+

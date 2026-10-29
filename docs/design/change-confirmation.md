@@ -1,6 +1,6 @@
 # Change confirmation design
 
-This document turns [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) into contracts for Gate and Lore. It is for the people who implement and review both services. It was written directly on 2026-10-28, because the dev-skills design runtime was unavailable (`production-design-source-unavailable`). Units U1 to U5 were implemented on 2026-10-28 and 2026-10-29 and released to production on 2026-10-29, without setting the switch (see [Implementation units](#implementation-units)). Nothing is accepted, and no formal design gate or independent review has run.
+This document turns [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) into contracts for Gate and Lore. It is for the people who implement and review both services. It was written directly on 2026-10-28, because the dev-skills design runtime was unavailable (`production-design-source-unavailable`). Units U1 to U5 were implemented on 2026-10-28 and 2026-10-29 and released to production on 2026-10-29, when the switch was also set (see [Implementation units](#implementation-units)). Nothing is accepted, and no formal design gate or independent review has run.
 
 ## Outcome
 
@@ -202,7 +202,7 @@ Ordered by dependency. Each unit is reviewable and reversible on its own.
 | U3 SDK | Gate | `createGateConfirmations` with tests | U2 | Implemented |
 | U4 Confirmation flow | Lore | Migration 0045 for `change_confirmations` and the suppression trigger; summary renderer and hash; confirmation service; tools and REST routes; protected-operation routing; tests; MCP/data-model/security docs | U3 | Implemented |
 | U5 Connection principal | Lore | Migration 0046 for `acts_for_principal_id`, `connection_principal_id` and both lock functions; authenticator and user-actor derivation; identity-mapping tool support; tests; identity and runbook docs | U4 | Implemented |
-| U6 Release and switch | Operations | Deploy Gate, then Lore; hosted readback; set `connection_principal_id` for the admitted subject; clearing it reverts | U1–U5, owner approval | Released 2026-10-29 ([change confirmation release record](../eval/change-confirmation-release-20261029.md)); switch not set |
+| U6 Release and switch | Operations | Deploy Gate, then Lore; hosted readback; set `connection_principal_id` for the admitted subject; clearing it reverts | U1–U5, owner approval | Released and switch set on 2026-10-29 ([change confirmation release record](../eval/change-confirmation-release-20261029.md)) |
 
 U1 and U2 can proceed in parallel. U5 can be written alongside U4, but U6 must not set the switch before U4 is deployed, or the person loses user authority entirely. The switch is set only with the identity-mapping tool's reviewed baseline, never by hand.
 
