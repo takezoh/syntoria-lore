@@ -225,6 +225,7 @@ function jobManifest(job, containerImage, environment, resourceProfile = 'api') 
     metadata: { name: job.job, namespace: config.projectNumber },
     spec: {
       template: {
+        metadata: { annotations: { 'run.googleapis.com/execution-environment': 'gen2' } },
         spec: {
           taskCount: 1,
           parallelism: 1,

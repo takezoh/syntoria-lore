@@ -48,7 +48,12 @@ type ServiceManifest = {
   spec: { template: { spec: { containers: ContainerManifest[] } } };
 };
 type JobManifest = {
-  spec: { template: { spec: { template: { spec: { containers: ContainerManifest[] } } } } };
+  spec: {
+    template: {
+      metadata: { annotations: Record<string, string> };
+      spec: { template: { spec: { containers: ContainerManifest[] } } };
+    };
+  };
 };
 type QueueManifest = {
   retryConfig: {
@@ -192,6 +197,11 @@ describe('cloud deployment manifests', () => {
       expect(envValue(worker, 'WORKER_TASK_URL')).toBe(deploymentConfig.services.worker.url);
       expect(container(worker).startupProbe.httpGet.path).toBe('/readyz');
 
+      for (const job of [migration, ledger]) {
+        expect(
+          job.spec.template.metadata.annotations['run.googleapis.com/execution-environment'],
+        ).toBe('gen2');
+      }
       expect(secretRefs(migration)).toEqual([
         { name: deploymentConfig.secrets.appDatabase, key: '1' },
         { name: deploymentConfig.secrets.migrationDatabase, key: '1' },
