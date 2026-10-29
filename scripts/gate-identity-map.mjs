@@ -8,8 +8,8 @@ const CONNECTION_ISSUER = 'urn:syntoria:lore:connection';
 const parsed = parseArguments(process.argv.slice(2));
 const spec = parseSpec(JSON.parse(await readFile(parsed.file, 'utf8')));
 const databaseUrl = required('IDENTITY_MAPPING_DATABASE_URL');
-const action = parsed.connectionPrincipal
-  ? `connection_principal_${parsed.connectionPrincipal}`
+const action = parsed.approval
+  ? `approval_${parsed.approval}`
   : parsed.deactivate
     ? 'deactivate'
     : 'activate';
@@ -21,9 +21,10 @@ try {
     const snapshot = await readLockedBaseline(client, spec);
     const current = await readTargetBinding(client, spec);
     validateExisting(current, spec, action);
-    const connection = parsed.connectionPrincipal
-      ? await readConnectionPrincipal(client, spec, snapshot, current, parsed.connectionPrincipal)
-      : undefined;
+    const connection =
+      action === 'activate'
+        ? await readConnectionPrincipal(client, spec, snapshot, current)
+        : undefined;
     const fingerprint = hashSnapshot({
       source: snapshot,
       target:
@@ -56,6 +57,7 @@ try {
               : {
                   active: current.active,
                   connection_principal_id: current.connection_principal_id,
+                  approval_policy: current.approval_policy,
                 },
           ...(connection === undefined ? {} : { connection_principal: connection }),
           baseline_sha256: fingerprint,
@@ -66,30 +68,14 @@ try {
       if (parsed.expectedBaseline !== fingerprint) {
         throw new Error(`Baseline changed; rerun dry-run. Current SHA-256 is ${fingerprint}`);
       }
-      if (connection !== undefined) {
-        const connectionPrincipalId = await applyConnectionPrincipal(
-          client,
-          spec,
-          current,
-          connection,
-          parsed.connectionPrincipal,
-        );
-        await client.query('COMMIT');
-        process.stdout.write(
-          `${JSON.stringify({
-            status: `connection_principal_${parsed.connectionPrincipal}d`,
-            target: spec.target,
-            connection_principal_id: connectionPrincipalId,
-            baseline_sha256: fingerprint,
-          })}\n`,
-        );
-      } else {
-        await applyBinding(client, spec, current, action);
-        await client.query('COMMIT');
-        process.stdout.write(
-          `${JSON.stringify({ status: action === 'activate' ? 'active' : 'inactive', target: spec.target, baseline_sha256: fingerprint })}\n`,
-        );
-      }
+      const result =
+        action === 'activate' || action === 'deactivate'
+          ? await applyBinding(client, spec, current, action, connection)
+          : await applyApproval(client, current, parsed.approval);
+      await client.query('COMMIT');
+      process.stdout.write(
+        `${JSON.stringify({ ...result, target: spec.target, baseline_sha256: fingerprint })}\n`,
+      );
     }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -101,21 +87,29 @@ try {
   await pool.end();
 }
 
-async function applyBinding(client, mapping, current, action) {
+/**
+ * Activation admits the subject and gives a user principal's binding its connection principal in
+ * the same transaction, so a Gate connection never acts as the person.
+ */
+async function applyBinding(client, mapping, current, action, connection) {
+  let binding = current;
   if (action === 'activate' && current === undefined) {
-    await client.query(
-      `INSERT INTO public.external_identity_bindings
-             (external_issuer, external_subject, user_id, principal_id, scope_ids, capability_ceiling)
-           VALUES ($1, $2, $3, $4, $5::uuid[], $6::text[])`,
-      [
-        mapping.target.issuer,
-        mapping.target.subject,
-        mapping.user_id,
-        mapping.principal_id,
-        mapping.scope_ids,
-        mapping.capability_ceiling,
-      ],
-    );
+    binding = (
+      await client.query(
+        `INSERT INTO public.external_identity_bindings
+               (external_issuer, external_subject, user_id, principal_id, scope_ids, capability_ceiling)
+             VALUES ($1, $2, $3, $4, $5::uuid[], $6::text[])
+             RETURNING id::text, connection_principal_id::text, approval_policy`,
+        [
+          mapping.target.issuer,
+          mapping.target.subject,
+          mapping.user_id,
+          mapping.principal_id,
+          mapping.scope_ids,
+          mapping.capability_ceiling,
+        ],
+      )
+    ).rows[0];
   } else if (action === 'activate' && current?.active === false) {
     await client.query(
       `UPDATE public.external_identity_bindings
@@ -131,6 +125,29 @@ async function applyBinding(client, mapping, current, action) {
       [mapping.target.issuer, mapping.target.subject],
     );
   }
+  if (action === 'deactivate') return { status: 'inactive' };
+  const connectionPrincipalId =
+    connection === undefined
+      ? null
+      : await applyConnectionPrincipal(client, mapping, binding, connection);
+  return {
+    status: 'active',
+    connection_principal_id: connectionPrincipalId,
+    approval_policy: binding.approval_policy,
+  };
+}
+
+/** Sets how the binding's connections have their protected changes approved. */
+async function applyApproval(client, binding, mode) {
+  if (binding.approval_policy !== mode) {
+    await client.query(
+      `UPDATE public.external_identity_bindings
+       SET approval_policy = $2, updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [binding.id, mode],
+    );
+  }
+  return { status: `approval_${mode}`, approval_policy: mode };
 }
 
 async function readLockedBaseline(client, mapping) {
@@ -185,7 +202,7 @@ async function readLockedBaseline(client, mapping) {
 async function readTargetBinding(client, mapping) {
   const result = await client.query(
     `SELECT id::text, user_id::text, principal_id::text, scope_ids::text[], capability_ceiling,
-            active, connection_principal_id::text
+            active, connection_principal_id::text, approval_policy
      FROM public.external_identity_bindings
      WHERE external_issuer = $1 AND external_subject = $2
      FOR UPDATE`,
@@ -195,17 +212,13 @@ async function readTargetBinding(client, mapping) {
 }
 
 /**
- * The binding's connection principal, or the one a previous disable left behind for reuse.
- * Every connection of the subject acts as it, with grants read from the binding's user principal.
- * Disable stays available on an inactive binding so the switch can always be cleared.
+ * The binding's connection principal, or one left behind for reuse, for a user principal's
+ * binding. Every connection of the subject acts as it, with grants read from the user principal.
+ * A binding of a non-user principal already acts as that principal and needs none.
  */
-async function readConnectionPrincipal(client, mapping, snapshot, binding, mode) {
-  if (mode === 'enable' && snapshot.principal.actor_kind !== 'user') {
-    throw new Error('A connection principal can act only for a user principal');
-  }
-  if (mode === 'enable' && binding.active !== true) {
-    throw new Error('The target binding is inactive');
-  }
+async function readConnectionPrincipal(client, mapping, snapshot, binding) {
+  if (snapshot.principal.actor_kind !== 'user') return undefined;
+  if (binding === undefined) return { bound: false, principal: null };
   const result = await client.query(
     `SELECT id::text, user_id::text, issuer, subject, actor_kind, active,
             acts_for_principal_id::text
@@ -217,7 +230,6 @@ async function readConnectionPrincipal(client, mapping, snapshot, binding, mode)
   );
   const principal = result.rows[0];
   if (
-    mode === 'enable' &&
     principal !== undefined &&
     (principal.actor_kind !== 'client' ||
       principal.active !== true ||
@@ -234,18 +246,7 @@ async function readConnectionPrincipal(client, mapping, snapshot, binding, mode)
   };
 }
 
-async function applyConnectionPrincipal(client, mapping, binding, connection, mode) {
-  if (mode === 'disable') {
-    if (connection.bound) {
-      await client.query(
-        `UPDATE public.external_identity_bindings
-         SET connection_principal_id = NULL, updated_at = clock_timestamp()
-         WHERE id = $1`,
-        [binding.id],
-      );
-    }
-    return null;
-  }
+async function applyConnectionPrincipal(client, mapping, binding, connection) {
   if (connection.bound) return connection.principal.id;
   const principalId =
     connection.principal?.id ??
@@ -394,32 +395,32 @@ function hasExactKeys(value, expected) {
 
 function parseArguments(args) {
   const usage =
-    'Usage: gate-identity-map --file <mapping.json> [--deactivate | --connection-principal enable|disable] [--apply --expected-baseline <sha256>]';
+    'Usage: gate-identity-map --file <mapping.json> [--deactivate | --approval auto|gate] [--apply --expected-baseline <sha256>]';
   let file;
   let apply = false;
   let deactivate = false;
-  let connectionPrincipal;
+  let approval;
   let expectedBaseline;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--file') file = args[++index];
     else if (arg === '--apply') apply = true;
     else if (arg === '--deactivate') deactivate = true;
-    else if (arg === '--connection-principal') connectionPrincipal = args[++index];
+    else if (arg === '--approval') approval = args[++index];
     else if (arg === '--expected-baseline') expectedBaseline = args[++index];
     else throw new Error(usage);
   }
   if (
     file === undefined ||
-    (connectionPrincipal !== undefined && !['enable', 'disable'].includes(connectionPrincipal)) ||
-    (connectionPrincipal !== undefined && deactivate) ||
+    (approval !== undefined && !['auto', 'gate'].includes(approval)) ||
+    (approval !== undefined && deactivate) ||
     (apply && !/^[a-f0-9]{64}$/i.test(expectedBaseline ?? '')) ||
     (!apply && expectedBaseline !== undefined) ||
     (apply && args.includes('--deactivate') !== deactivate)
   ) {
     throw new Error(usage);
   }
-  return { file, apply, deactivate, connectionPrincipal, expectedBaseline };
+  return { file, apply, deactivate, approval, expectedBaseline };
 }
 
 function required(name) {

@@ -36,7 +36,7 @@ Your AI can ask for the view at that time and return the supporting memories and
 
 > The review now happens on Tuesday. Replace the old Monday schedule and tell me when the new one starts.
 
-After you approve the change at Gate, the Monday schedule is kept as what applied until the change, and the Tuesday schedule applies from the new date. If another AI changed the same memory first, Lore reports a conflict instead of overwriting it, and your AI should look again before proposing the update.
+Once the change is approved, by your approval policy or by you at Gate, the Monday schedule is kept as what applied until the change, and the Tuesday schedule applies from the new date. If another AI changed the same memory first, Lore reports a conflict instead of overwriting it, and your AI should look again before proposing the update.
 
 ## Retract a wrong claim
 

@@ -29,7 +29,11 @@ interface BindingRow {
   readonly scope_ids: string[];
   readonly capability_ceiling: string[];
   readonly user_principal_id: string;
+  readonly approval_policy: string;
 }
+
+/** How a connection's protected changes are approved: at once by policy, or by the person at Gate. */
+export type ApprovalPolicy = 'auto' | 'gate';
 
 /** The Gate identity behind an actor, used to request and verify change confirmations. */
 export interface GateIdentity {
@@ -37,6 +41,7 @@ export interface GateIdentity {
   readonly connectionId: string;
   readonly clientId: string;
   readonly userPrincipalId: string;
+  readonly approvalPolicy: ApprovalPolicy;
 }
 
 interface GrantRow {
@@ -90,6 +95,7 @@ export class Authenticator {
       connectionId: state.principal.connectionId,
       clientId: state.principal.clientId,
       userPrincipalId: state.binding.user_principal_id,
+      approvalPolicy: state.binding.approval_policy as ApprovalPolicy,
     });
   }
 
@@ -193,13 +199,17 @@ export class Authenticator {
       throw new CoreError(403, 'forbidden', 'The Gate identity is not admitted');
     }
     const actorKind = actorKindSchema.safeParse(binding.actor_kind);
-    if (!actorKind.success) {
+    if (!actorKind.success || !isApprovalPolicy(binding.approval_policy)) {
       throw new CoreError(
         503,
         'authorization_unavailable',
         'The local identity binding is invalid',
         true,
       );
+    }
+    // A Gate connection is a client acting for the person, never the person.
+    if (actorKind.data === 'user') {
+      throw new CoreError(403, 'forbidden', 'The Gate connection cannot act as the user');
     }
     const boundScopeIds = sortedUnique(binding.scope_ids);
     const ceiling = new Set(binding.capability_ceiling.filter(isCapability));
@@ -256,7 +266,8 @@ export class Authenticator {
     principal: ExternalIdentityPrincipal,
   ): Promise<BindingRow | undefined> {
     const result = await client.query<BindingRow>(
-      `SELECT user_id, principal_id, actor_kind, scope_ids, capability_ceiling, user_principal_id
+      `SELECT user_id, principal_id, actor_kind, scope_ids, capability_ceiling, user_principal_id,
+         approval_policy
        FROM app.lock_external_identity_binding($1, $2)`,
       [principal.issuer, principal.subject],
     );
@@ -289,6 +300,7 @@ export class Authenticator {
       binding.principal_id !== state.binding.principal_id ||
       binding.actor_kind !== state.binding.actor_kind ||
       binding.user_principal_id !== state.binding.user_principal_id ||
+      binding.approval_policy !== state.binding.approval_policy ||
       !sameStrings(sortedUnique(binding.scope_ids), sortedUnique(state.binding.scope_ids)) ||
       !sameStrings(
         sortedUnique(binding.capability_ceiling),
@@ -388,6 +400,10 @@ function sortedUnique(values: readonly string[]): string[] {
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function isApprovalPolicy(value: string): value is ApprovalPolicy {
+  return value === 'auto' || value === 'gate';
 }
 
 function isCapability(value: string): value is Capability {

@@ -367,7 +367,7 @@ const apiContract = {
       post: {
         operationId: 'requestUserDecision',
         summary:
-          'Commit a proposed ChangeSet with User authority; a non-User caller receives a Gate confirmation',
+          'Commit a proposed ChangeSet with User authority; a connection’s request is applied by the approval policy, its result carrying `approval`, or receives a Gate confirmation',
         parameters: [
           {
             name: 'change_set_id',
@@ -591,7 +591,7 @@ const apiContract = {
         responses: {
           '202': {
             description:
-              'Content is unavailable immediately and physical purge is asynchronous; a non-User caller instead receives a Gate confirmation',
+              'Content is unavailable immediately and physical purge is asynchronous; a connection’s request is applied by the approval policy, its result carrying `approval`, or instead receives a Gate confirmation',
             content: {
               'application/json': {
                 schema: {
@@ -957,7 +957,7 @@ const apiContract = {
       },
       ConfirmationRequired: {
         description:
-          'A non-User caller asked for a change only the User may make; show the Gate URL to the person, then complete the confirmation',
+          'A connection asked for a change only the User may make and its approval policy asks the person; show the Gate URL to the person, then complete the confirmation',
         content: {
           'application/json': { schema: { $ref: '#/components/schemas/ConfirmationRequired' } },
         },
@@ -1016,6 +1016,11 @@ const apiContract = {
           status: {
             enum: ['pending', 'approved', 'committed', 'denied', 'expired', 'cancelled', 'failed'],
           },
+          approval: {
+            enum: ['person', 'policy'],
+            description:
+              'Who approved the change: the person at Gate, or the connection’s approval policy without asking',
+          },
           url: {
             type: 'string',
             format: 'uri',
@@ -1038,6 +1043,16 @@ const apiContract = {
           },
           request_id: { type: 'string', format: 'uuid' },
           trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      PolicyApproval: {
+        type: 'object',
+        description:
+          'Attached to a protected change’s result when the connection’s approval policy applied it without asking the person',
+        required: ['by', 'confirmation_id'],
+        properties: {
+          by: { const: 'policy' },
+          confirmation_id: { type: 'string', format: 'uuid' },
         },
       },
       ConfirmationRequired: {

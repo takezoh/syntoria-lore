@@ -25,7 +25,7 @@ export interface McpEndpointOptions {
 }
 
 const CONFIRMATION_NOTE =
-  ' If you are not acting as the User, this returns confirmation_required with a Gate URL: show the URL to the person and call complete_confirmation after they approve.';
+  ' Your connection acts for the User, so the person’s approval policy decides: either the change is applied at once and the result carries approval.by "policy", or this returns confirmation_required with a Gate URL; then show the URL to the person and call complete_confirmation after they approve.';
 
 export async function handleMcpRequest(
   endpoint: 'read' | 'write',
@@ -66,7 +66,7 @@ export async function handleMcpRequest(
           instructions:
             endpoint === 'read'
               ? 'Use recall_memories to retrieve authorized memories. Results are subject to current source rights and Forget suppressions.'
-              : 'Use remember_memory only for explicit writes. Lore keeps what the person decided apart from what an AI wrote. When your connection acts for the person, everything you save is an AI proposal; to record their own decision or preference, propose the changeset and call request_user_decision. When your connection acts as the User, set epistemic_status to "proposed" for anything you suggested or inferred. Use forget_memory for user-authorized durable deletion. Forget, review decisions, source capture settings, source rights, grants, retention and request_user_decision need the User: when you act for them, these return confirmation_required with a Gate URL to show the person, then call complete_confirmation after they approve.',
+              : 'Use remember_memory only for explicit writes. Lore keeps what the person decided apart from what an AI wrote. Your connection acts for the person, never as them, so everything you save is an AI proposal; to record their own decision or preference, propose the changeset and call request_user_decision. Use forget_memory for user-authorized durable deletion. Forget, review decisions, source capture settings, source rights, grants, retention and request_user_decision need the User. The person’s approval policy decides how: the change is applied at once and its result carries approval.by "policy", or it returns confirmation_required with a Gate URL to show the person, then call complete_confirmation after they approve. Ask before requesting a change the person did not ask for.',
         },
       );
       if (endpoint === 'read') {
@@ -223,7 +223,7 @@ export async function handleMcpRequest(
           'remember_memory',
           {
             description:
-              'Write a memory with explicit evidence into one authorized scope. When your connection acts for the person, the memory is saved as an AI proposal; use propose_changeset and request_user_decision to record it with their authority. When it acts as the User, set memory.epistemic_status to "proposed" for anything you suggested or inferred, and keep the default "asserted" only for what the user actually said.',
+              'Write a memory with explicit evidence into one authorized scope. Your connection acts for the person, so the memory is saved as an AI proposal; use propose_changeset and request_user_decision to record what the person decided with their authority.',
             inputSchema: {
               scope_id: z.uuid(),
               memory: memoryInputSchema,
@@ -335,7 +335,7 @@ export async function handleMcpRequest(
           'propose_changeset',
           {
             description:
-              'Propose an authorized changeset for explicit review/commit. When your connection acts for the person, commit records it as an AI proposal and request_user_decision asks the person to record it with their authority. When it acts as the User, set epistemic_status to "proposed" for content you suggested or inferred.',
+              'Propose an authorized changeset for explicit review/commit. Your connection acts for the person, so commit records it as an AI proposal and request_user_decision records it with their authority under their approval policy.',
             inputSchema: {
               scope_id: z.uuid(),
               operations: z.array(z.unknown()).min(1).max(64),
@@ -395,7 +395,7 @@ export async function handleMcpRequest(
             'complete_confirmation',
             {
               description:
-                'Apply a change after the person approved it at Gate. Returns pending, denied or expired without changing anything otherwise.',
+                'Apply a change after the person approved it at Gate. Returns pending, denied or expired without changing anything otherwise. A change the approval policy already applied is returned as committed.',
               inputSchema: { confirmation_id: z.uuid() },
               annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
             },

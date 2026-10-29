@@ -59,7 +59,7 @@ A pillar must not promise more than its supporting contract. New user-facing ben
 | --- | --- |
 | Lore remembers everything or archives your documents | It stores submitted observations and permitted excerpts; the source system keeps the complete original |
 | A returned memory is true or verified | Attribution records who made a statement; a user's confirmation records the user's statement, not an independent check |
-| Lore proves that you read and meant every change you approved | Lore keeps AI writes as AI proposals and grants your authority only to a change approved in your signed-in Gate session. That shows the session approved the exact change, not that you read it, and does not exclude an AI that controls your signed-in browser |
+| Lore proves that you read and meant every change you approved | Lore keeps AI writes as AI proposals and grants your authority only to an approved change. Under the default automatic policy nobody reads the change first; Lore records that the policy approved it. Approval at Gate shows that your signed-in session approved the exact change, not that you read it, and does not exclude an AI that controls your signed-in browser |
 | Every AI receives updates automatically | Each client recalls again or follows its own change cursor |
 | Recall finds every relevant memory | Search is bounded, indexes can lag, and an empty result is not proof of absence |
 | Feedback corrects a memory | Feedback is stored and queued for reassessment; it does not revise the memory by itself |

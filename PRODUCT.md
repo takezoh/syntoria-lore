@@ -21,17 +21,18 @@ A user's memories stay within that user's account. Lore is not a complete or aut
 | Explain it once | An explicit remember commits synchronously; every AI client that signs in with your account can recall it later |
 | Pick up context in another AI | Recall returns matching memories within the caller's size budget; each client can follow its own change feed to catch up |
 | See why your AI knows it | Every memory revision links to at least one piece of evidence with its source, location, speaker and event time |
-| Tell your decision from an AI's suggestion | An AI you connect acts for you, not as you: its writes keep AI-proposal authority and wait as candidates, with the AI that wrote them recorded; your authority comes only from a change you approved at Gate; a request cannot set authority directly |
+| Tell your decision from an AI's suggestion | An AI you connect acts for you, not as you: its writes keep AI-proposal authority and wait as candidates, with the AI that wrote them recorded; your authority comes only from a change approved for you, either by your approval policy, recorded as such, or by you at Gate; a request cannot set authority directly |
 | Correct it without losing what was true | Supersede keeps the earlier period, retract records a mistake and contest flags a dispute; a write based on an outdated revision is rejected instead of overwriting newer work |
 | Ask what was true then | Historical recall can ask what applied at a past time and what Lore knew at a past time |
 | Reuse a lesson where it applies | An experience keeps the condition, action and outcome together |
 | Capture without retyping | A source is enabled only after you approve it; curator proposals are checked against the cited source text; only uncontested facts are saved automatically and the rest wait for review |
-| Forget | After you approve it, forgotten content stops being returned immediately, a content-free deletion record is kept, and a background process purges the content and its dependent data |
+| Forget | Once approved, by your policy or by you at Gate, forgotten content stops being returned immediately, a content-free deletion record is kept, and a background process purges the content and its dependent data |
 
 ## What Lore does not promise
 
 - Lore does not verify that a memory is true. Attribution records who made a statement.
-- Lore knows that you approved a change at Gate, not that you read it carefully. It also cannot tell an AI that controls your signed-in browser from you.
+- With automatic approval, the default, a change an AI asks for on your behalf takes effect without asking you; Lore records that your policy approved it, not you.
+- When you approve each change at Gate, Lore knows that you approved it, not that you read it carefully. It also cannot tell an AI that controls your signed-in browser from you.
 - Export and import are not available to connected AIs.
 - Recall is bounded and can miss relevant memories. An empty result does not prove that nothing was said.
 - AIs do not receive memory changes automatically; each one recalls again or follows its own change feed.

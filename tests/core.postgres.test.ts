@@ -31,6 +31,7 @@ import {
   OutboxDispatcher,
 } from '@memory/jobs';
 import { ChangeConfirmationService } from '../apps/api/src/confirmations.js';
+import type { ActorContext } from '@memory/contracts';
 import { createApiServer } from '../apps/api/src/server.js';
 import { createWorkerServer } from '../apps/worker/src/server.js';
 import {
@@ -44,6 +45,22 @@ const adminUrl = process.env['TEST_ADMIN_URL'];
 const appUrl = process.env['TEST_APP_URL'];
 const runPostgresTests = adminUrl !== undefined && appUrl !== undefined;
 const forgetHmacKey = 'local-test-forget-hmac-key-with-32-bytes';
+
+/**
+ * Fixture tokens issued for a user principal stand for the person acting directly. Production
+ * never derives a user actor from a Gate token itself: it authenticates the connection, then
+ * derives the user actor with `userActorFor` only to apply an approved change. These fixtures
+ * take that same derivation for every request, so revocation and the final pre-commit checks of
+ * the connection still apply while the domain rules for the User are exercised over HTTP.
+ */
+const personTokens = new Set<string>();
+class PersonFixtureAuthenticator extends Authenticator {
+  override async authenticateBearer(authorization: string | undefined): Promise<ActorContext> {
+    const actor = await super.authenticateBearer(authorization);
+    const token = /^Bearer (\S+)$/i.exec(authorization ?? '')?.[1];
+    return token !== undefined && personTokens.has(token) ? this.userActorFor(actor) : actor;
+  }
+}
 
 describe.skipIf(!runPostgresTests)('PostgreSQL local role migration handoff', () => {
   it('renames the connected superuser through a temporary authorization and preserves its OID', async () => {
@@ -340,17 +357,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       clientSecret: 'synthetic-api-resource-secret',
       fetch: gateFetch,
     } as const;
-    authenticator = new Authenticator({
+    authenticator = new PersonFixtureAuthenticator({
       ...authConfig,
       audience,
     });
-    const mcpReadAuth = new Authenticator({
+    const mcpReadAuth = new PersonFixtureAuthenticator({
       ...authConfig,
       audience: mcpReadAudience,
       clientId: 'integration-mcp-read-resource',
       clientSecret: 'synthetic-mcp-read-secret',
     });
-    const mcpWriteAuth = new Authenticator({
+    const mcpWriteAuth = new PersonFixtureAuthenticator({
       ...authConfig,
       audience: mcpWriteAudience,
       clientId: 'integration-mcp-write-resource',
@@ -570,124 +587,147 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       const idempotentReadback = await readBinding();
       expect(idempotentReadback.rows).toEqual(firstReadback.rows);
 
-      const conflicting = runMapping('--connection-principal', 'enable', '--deactivate');
+      const conflicting = runMapping('--approval', 'gate', '--deactivate');
       expect(conflicting.status).toBe(1);
       expect(conflicting.stderr).toContain('Usage: gate-identity-map');
+      const unknownPolicy = runMapping('--approval', 'manual');
+      expect(unknownPolicy.status).toBe(1);
+      expect(unknownPolicy.stderr).toContain('Usage: gate-identity-map');
 
-      const switchConnectionPrincipal = (mode: 'enable' | 'disable') => {
-        const dryRun = runMapping('--connection-principal', mode);
-        expect(dryRun.status).toBe(0);
-        const planned = JSON.parse(dryRun.stdout) as { baseline_sha256: string };
-        const result = runMapping(
-          '--connection-principal',
-          mode,
-          '--apply',
-          '--expected-baseline',
-          planned.baseline_sha256,
-        );
-        expect(result.status).toBe(0);
-        return {
-          dryRun: JSON.parse(dryRun.stdout) as {
-            action: string;
-            connection_principal: { bound: boolean; principal: { id: string } | null };
-          },
-          result: JSON.parse(result.stdout) as {
-            status: string;
-            connection_principal_id: string | null;
-          },
-          baseline: planned.baseline_sha256,
-        };
-      };
       const readSwitch = () =>
         admin.query<{
           binding_id: string;
           connection_principal_id: string | null;
-          issuer: string | null;
+          approval_policy: string;
+          principal_id: string | null;
           subject: string | null;
           actor_kind: string | null;
           acts_for_principal_id: string | null;
         }>(
-          `SELECT b.id::text AS binding_id, b.connection_principal_id::text,
-                  p.issuer, p.subject, p.actor_kind, p.acts_for_principal_id::text
+          `SELECT b.id::text AS binding_id, b.connection_principal_id::text, b.approval_policy,
+                  p.id::text AS principal_id, p.subject, p.actor_kind,
+                  p.acts_for_principal_id::text
            FROM public.external_identity_bindings b
            LEFT JOIN public.principals p
              ON p.issuer = 'urn:syntoria:lore:connection' AND p.subject = 'binding:' || b.id
            WHERE b.external_issuer = $1 AND b.external_subject = $2`,
           bindingKey,
         );
+      const resolve = () =>
+        admin.query<{
+          principal_id: string;
+          actor_kind: string;
+          user_principal_id: string;
+          approval_policy: string;
+        }>(
+          `SELECT principal_id::text, actor_kind, user_principal_id::text, approval_policy
+           FROM app.lock_external_identity_binding($1, $2)`,
+          bindingKey,
+        );
 
-      const enabled = switchConnectionPrincipal('enable');
-      expect(enabled.dryRun).toMatchObject({
-        action: 'connection_principal_enable',
-        connection_principal: { bound: false, principal: null },
-      });
-      expect(enabled.result.status).toBe('connection_principal_enabled');
-      const enabledReadback = (await readSwitch()).rows[0];
-      expect(enabledReadback).toMatchObject({
-        connection_principal_id: enabled.result.connection_principal_id,
+      // Activation gave the user principal's binding its connection principal and the auto policy.
+      const activated = (await readSwitch()).rows[0]!;
+      connectionSwitchSubject = activated.subject ?? undefined;
+      expect(activated).toMatchObject({
+        connection_principal_id: activated.principal_id,
+        approval_policy: 'auto',
         actor_kind: 'client',
         acts_for_principal_id: principalId,
       });
-      connectionSwitchSubject = enabledReadback?.subject ?? undefined;
-      const resolved = await admin.query<{
-        principal_id: string;
-        actor_kind: string;
-        user_principal_id: string;
-      }>(
-        `SELECT principal_id::text, actor_kind, user_principal_id::text
-         FROM app.lock_external_identity_binding($1, $2)`,
-        bindingKey,
-      );
-      expect(resolved.rows).toEqual([
+      expect(JSON.parse(applied.stdout)).toMatchObject({
+        connection_principal_id: activated.principal_id,
+        approval_policy: 'auto',
+      });
+      expect((await resolve()).rows).toEqual([
         {
-          principal_id: enabled.result.connection_principal_id,
+          principal_id: activated.principal_id,
           actor_kind: 'client',
           user_principal_id: principalId,
+          approval_policy: 'auto',
         },
       ]);
+
+      const setApproval = (mode: 'auto' | 'gate') => {
+        const dryRun = runMapping('--approval', mode);
+        expect(dryRun.status).toBe(0);
+        const planned = JSON.parse(dryRun.stdout) as { action: string; baseline_sha256: string };
+        expect(planned.action).toBe(`approval_${mode}`);
+        const result = runMapping(
+          '--approval',
+          mode,
+          '--apply',
+          '--expected-baseline',
+          planned.baseline_sha256,
+        );
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          status: `approval_${mode}`,
+          approval_policy: mode,
+        });
+        return planned.baseline_sha256;
+      };
+      const gateBaseline = setApproval('gate');
+      expect((await resolve()).rows[0]?.approval_policy).toBe('gate');
       const staleSwitch = runMapping(
-        '--connection-principal',
-        'enable',
+        '--approval',
+        'gate',
         '--apply',
         '--expected-baseline',
-        enabled.baseline,
+        gateBaseline,
       );
       expect(staleSwitch.status).toBe(1);
       expect(staleSwitch.stderr).toContain('Baseline changed; rerun dry-run');
+      setApproval('auto');
+      expect((await resolve()).rows[0]?.approval_policy).toBe('auto');
 
-      const disabled = switchConnectionPrincipal('disable');
-      expect(disabled.result).toMatchObject({
-        status: 'connection_principal_disabled',
-        connection_principal_id: null,
-      });
-      expect((await readSwitch()).rows[0]).toMatchObject({
-        connection_principal_id: null,
-        subject: enabledReadback?.subject,
-      });
-      const reenabled = switchConnectionPrincipal('enable');
-      expect(reenabled.dryRun.connection_principal).toEqual({
+      // A user principal's binding without a connection principal never acts as the person.
+      await admin.query(
+        `UPDATE public.external_identity_bindings SET connection_principal_id = NULL
+         WHERE external_issuer = $1 AND external_subject = $2`,
+        bindingKey,
+      );
+      expect((await resolve()).rows).toEqual([]);
+      const repairPlan = runMapping();
+      expect(repairPlan.status).toBe(0);
+      const repairBaseline = JSON.parse(repairPlan.stdout) as {
+        connection_principal: unknown;
+        baseline_sha256: string;
+      };
+      expect(repairBaseline.connection_principal).toEqual({
         bound: false,
         principal: {
-          id: enabled.result.connection_principal_id,
+          id: activated.principal_id,
           issuer: 'urn:syntoria:lore:connection',
-          subject: enabledReadback?.subject,
+          subject: activated.subject,
         },
       });
-      expect(reenabled.result.connection_principal_id).toBe(enabled.result.connection_principal_id);
-      switchConnectionPrincipal('disable');
+      const repaired = runMapping('--apply', '--expected-baseline', repairBaseline.baseline_sha256);
+      expect(repaired.status).toBe(0);
+      expect(JSON.parse(repaired.stdout)).toMatchObject({
+        connection_principal_id: activated.principal_id,
+      });
+      expect((await resolve()).rows[0]?.principal_id).toBe(activated.principal_id);
 
+      // A binding of a non-user principal acts as that principal and needs no connection principal.
       await writeFile(mappingPath, `${JSON.stringify(clientMapping)}\n`, { mode: 0o600 });
       const clientPlan = runMapping();
       expect(clientPlan.status).toBe(0);
       const clientBaseline = JSON.parse(clientPlan.stdout) as { baseline_sha256: string };
-      expect(
-        runMapping('--apply', '--expected-baseline', clientBaseline.baseline_sha256).status,
-      ).toBe(0);
-      const clientSwitch = runMapping('--connection-principal', 'enable');
-      expect(clientSwitch.status).toBe(1);
-      expect(clientSwitch.stderr).toContain(
-        'A connection principal can act only for a user principal',
+      const clientApplied = runMapping(
+        '--apply',
+        '--expected-baseline',
+        clientBaseline.baseline_sha256,
       );
+      expect(clientApplied.status).toBe(0);
+      expect(JSON.parse(clientApplied.stdout)).toMatchObject({
+        status: 'active',
+        connection_principal_id: null,
+      });
+      const clientResolved = await admin.query<{ actor_kind: string }>(
+        'SELECT actor_kind FROM app.lock_external_identity_binding($1, $2)',
+        [clientTarget.issuer, clientTarget.subject],
+      );
+      expect(clientResolved.rows).toEqual([{ actor_kind: 'client' }]);
       await writeFile(mappingPath, `${JSON.stringify(mapping)}\n`, { mode: 0o600 });
 
       const deactivateDryRun = runMapping('--deactivate');
@@ -3221,8 +3261,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         expect.arrayContaining(['remember_memory', 'forget_memory', 'capture', 'commit_changeset']),
       );
       const descriptions = new Map(tools.tools.map((tool) => [tool.name, tool.description ?? '']));
-      expect(descriptions.get('remember_memory')).toContain('"proposed"');
-      expect(descriptions.get('propose_changeset')).toContain('"proposed"');
+      expect(descriptions.get('remember_memory')).toContain('AI proposal');
+      expect(descriptions.get('remember_memory')).toContain('request_user_decision');
+      expect(descriptions.get('propose_changeset')).toContain('approval policy');
       const result = await client.callTool({
         name: 'remember_memory',
         arguments: {
@@ -4500,6 +4541,135 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     await governance.processPendingWorker(workerDb);
   });
 
+  it('applies a protected change at once under the auto policy and records that the policy approved it', async () => {
+    const userToken = await token([scopeB], 'memory:read memory:write');
+    const statement = `Forget me by policy ${randomUUID()}.`;
+    const created = await post(
+      '/v1/memories:remember',
+      userToken,
+      { scope_id: scopeB, memory: { ...isolatedMemory(), statement } },
+      `policy-${randomUUID()}`,
+    );
+    const memoryId = ((await created.json()) as { operations: { memory_ids: string[] }[] })
+      .operations[0]!.memory_ids[0]!;
+    const { gateSubject, connectionPrincipalId } = await connectionSubject([scopeB], 'auto');
+    const ai = connectionToken(gateSubject, 'client-auto');
+    const aiActor = await authenticator.authenticate(`Bearer ${ai}`);
+    expect(aiActor).toMatchObject({ actorKind: 'client', principalId: connectionPrincipalId });
+
+    // The connection's own writes stay proposals; the policy approves only protected changes.
+    const remembered = await post(
+      '/v1/memories:remember',
+      ai,
+      {
+        scope_id: scopeB,
+        memory: { ...isolatedMemory(), kind: 'decision', statement: `AI says ${randomUUID()}.` },
+      },
+      `policy-remember-${randomUUID()}`,
+    );
+    const { change_set_id: proposalSetId } = (await remembered.json()) as { change_set_id: string };
+    const proposal = await admin.query<{ authority: string }>(
+      'SELECT authority FROM memory_versions WHERE user_id = $1 AND change_set_id = $2',
+      [userId, proposalSetId],
+    );
+    expect(proposal.rows).toEqual([{ authority: 'ai_proposal' }]);
+
+    const gateCreatesBefore = gateConfirmations.size;
+    const key = `policy-forget-${randomUUID()}`;
+    const forgetRequest = {
+      scope_id: scopeB,
+      selector: { memory_ids: [memoryId] },
+      reason_code: 'user_requested',
+    };
+    const forgotten = await post('/v1/forget', ai, forgetRequest, key);
+    expect(forgotten.status).toBe(202);
+    const body = (await forgotten.json()) as {
+      status: string;
+      approval: { by: string; confirmation_id: string };
+    };
+    expect(body).toMatchObject({ status: 'ledger_pending', approval: { by: 'policy' } });
+    expect(gateConfirmations.size).toBe(gateCreatesBefore);
+    const readMemory = () =>
+      fetch(`${baseUrl}/v1/memories/${memoryId}?scope_id=${scopeB}`, {
+        headers: { authorization: `Bearer ${userToken}` },
+      });
+    expect((await readMemory()).status).toBe(404);
+
+    const record = await admin.query<{
+      approval: string;
+      status: string;
+      requested_by: string;
+      client_id: string;
+      gate_confirmation_id: string | null;
+      payload: unknown;
+    }>(
+      `SELECT approval, status, requested_by::text, client_id, gate_confirmation_id, payload
+       FROM change_confirmations WHERE id = $1`,
+      [body.approval.confirmation_id],
+    );
+    expect(record.rows[0]).toEqual({
+      approval: 'policy',
+      status: 'committed',
+      requested_by: connectionPrincipalId,
+      client_id: 'client-auto',
+      gate_confirmation_id: null,
+      payload: null,
+    });
+    const replay = (await (await post('/v1/forget', ai, forgetRequest, key)).json()) as {
+      approval: { confirmation_id: string };
+    };
+    expect(replay.approval.confirmation_id).toBe(body.approval.confirmation_id);
+    expect(
+      (await post('/v1/forget', ai, { ...forgetRequest, reason_code: 'correction' }, key)).status,
+    ).toBe(409);
+    expect(await complete(body.approval.confirmation_id, ai)).toMatchObject({
+      status: 'committed',
+      approval: 'policy',
+    });
+
+    // Without a client key, every request is applied anew, as the User's own direct change is.
+    const setRetention = (observation_days: number) =>
+      fetch(`${baseUrl}/v1/scopes/${scopeB}/retention`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${ai}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ observation_days }),
+      });
+    const retention = async () =>
+      (
+        await admin.query<{ observation_days: number }>(
+          'SELECT observation_days FROM scope_retention_policies WHERE user_id = $1 AND scope_id = $2',
+          [userId, scopeB],
+        )
+      ).rows[0]?.observation_days;
+    for (const days of [3000, 3100, 3000]) {
+      const applied = await setRetention(days);
+      expect(applied.status).toBe(200);
+      expect(await retention()).toBe(days);
+    }
+    await governance.processPendingWorker(workerDb);
+  });
+
+  it('refuses a Gate subject bound to a user principal without a connection principal', async () => {
+    const gateSubject = `gate-${randomUUID()}`;
+    await admin.query(
+      `INSERT INTO external_identity_bindings (external_issuer, external_subject, user_id,
+         principal_id, scope_ids, capability_ceiling)
+       VALUES ($1, $2, $3, $4, ARRAY[$5]::uuid[], ARRAY['read', 'write', 'admin'])`,
+      [gateIssuer, gateSubject, userId, principalId, scopeB],
+    );
+    const asUser = connectionToken(gateSubject);
+    await expect(authenticator.authenticate(`Bearer ${asUser}`)).rejects.toMatchObject({
+      status: 403,
+    });
+    const response = await post(
+      '/v1/memories:remember',
+      asUser,
+      { scope_id: scopeB, memory: isolatedMemory() },
+      `as-user-${randomUUID()}`,
+    );
+    expect(response.status).toBe(403);
+  });
+
   it('applies nothing for denied, modified, foreign or revoked confirmations', async () => {
     const { gateSubject } = await connectionSubject([scopeB]);
     const ai = connectionToken(gateSubject);
@@ -4803,6 +4973,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   /** A Gate subject whose connections all act as one non-user principal for the integration user. */
   async function connectionSubject(
     scopeIds: string[],
+    approvalPolicy: 'auto' | 'gate' = 'gate',
   ): Promise<{ gateSubject: string; connectionPrincipalId: string }> {
     const gateSubject = `gate-${randomUUID()}`;
     const connectionPrincipal = await admin.query<{ id: string }>(
@@ -4812,9 +4983,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     await admin.query(
       `INSERT INTO external_identity_bindings (external_issuer, external_subject, user_id,
-         principal_id, connection_principal_id, scope_ids, capability_ceiling)
-       VALUES ($1, $2, $3, $4, $5, $6::uuid[], ARRAY['read', 'write', 'admin'])`,
-      [gateIssuer, gateSubject, userId, principalId, connectionPrincipal.rows[0]!.id, scopeIds],
+         principal_id, connection_principal_id, scope_ids, capability_ceiling, approval_policy)
+       VALUES ($1, $2, $3, $4, $5, $6::uuid[], ARRAY['read', 'write', 'admin'], $7)`,
+      [
+        gateIssuer,
+        gateSubject,
+        userId,
+        principalId,
+        connectionPrincipal.rows[0]!.id,
+        scopeIds,
+        approvalPolicy,
+      ],
     );
     return { gateSubject, connectionPrincipalId: connectionPrincipal.rows[0]!.id };
   }
@@ -4847,8 +5026,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   ): Promise<string> {
     const gateSubject = `gate-${randomUUID()}`;
     const clientId = 'integration-app-client';
-    const principal = await admin.query<{ id: string; user_id: string }>(
-      'SELECT id, user_id FROM principals WHERE issuer = $1 AND subject = $2',
+    const principal = await admin.query<{ id: string; user_id: string; actor_kind: string }>(
+      'SELECT id, user_id, actor_kind FROM principals WHERE issuer = $1 AND subject = $2',
       [issuer, tokenSubject],
     );
     if (principal.rows[0] === undefined) {
@@ -4867,15 +5046,29 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       .filter((value): value is 'read' | 'write' | 'admin' => value !== undefined);
     if (capabilityCeiling.length === 0)
       throw new Error(`Unknown local capability fixture ${scope}`);
+    // A Gate connection never acts as a user principal: it acts for one through its connection
+    // principal. The token is then registered as the person's own (see PersonFixtureAuthenticator).
+    const connectionPrincipal =
+      principal.rows[0].actor_kind === 'user'
+        ? (
+            await admin.query<{ id: string }>(
+              `INSERT INTO principals(user_id, issuer, subject, actor_kind, acts_for_principal_id)
+               VALUES ($1, 'urn:syntoria:lore:connection', $2, 'client', $3) RETURNING id`,
+              [principal.rows[0].user_id, gateSubject, principal.rows[0].id],
+            )
+          ).rows[0]!.id
+        : null;
     await admin.query(
       `INSERT INTO external_identity_bindings
-         (external_issuer, external_subject, user_id, principal_id, scope_ids, capability_ceiling)
-       VALUES ($1, $2, $3, $4, $5::uuid[], $6::text[])`,
+         (external_issuer, external_subject, user_id, principal_id, connection_principal_id,
+          scope_ids, capability_ceiling)
+       VALUES ($1, $2, $3, $4, $5, $6::uuid[], $7::text[])`,
       [
         gateIssuer,
         gateSubject,
         principal.rows[0].user_id,
         principal.rows[0].id,
+        connectionPrincipal,
         scopeIds,
         capabilityCeiling,
       ],
@@ -4892,6 +5085,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       exp: Math.floor(Date.now() / 1000) + 3600,
       aud: tokenAudience,
     });
+    if (connectionPrincipal !== null) personTokens.add(tokenValue);
     return tokenValue;
   }
 

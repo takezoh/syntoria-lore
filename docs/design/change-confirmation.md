@@ -1,10 +1,10 @@
 # Change confirmation design
 
-This document turns [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) into contracts for Gate and Lore. It is for the people who implement and review both services. It was written directly on 2026-10-28, because the dev-skills design runtime was unavailable (`production-design-source-unavailable`). Units U1 to U5 were implemented on 2026-10-28 and 2026-10-29 and released to production on 2026-10-29, when the switch was also set (see [Implementation units](#implementation-units)). Nothing is accepted, and no formal design gate or independent review has run.
+This document turns [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) into contracts for Gate and Lore. It is for the people who implement and review both services. It was written directly on 2026-10-28, because the dev-skills design runtime was unavailable (`production-design-source-unavailable`). Units U1 to U5 were implemented on 2026-10-28 and 2026-10-29 and released to production on 2026-10-29, when the switch was also set (see [Implementation units](#implementation-units)). Nothing is accepted, and no formal design gate or independent review has run. [ADR 0004](../adr/0004-approve-protected-changes-by-policy.md) (2026-10-29) made the approval a per-binding policy: this flow applies under `gate`, while `auto`, the current default, applies a protected change at once and records that the policy approved it; see [Approval policy](#approval-policy).
 
 ## Outcome
 
-Any AI the person connected can read and propose. Only the person can make a change carry user authority or change governance, and only by approving that exact change at Gate. Lore records which AI client asked for each change, but no permission depends on it.
+Any AI the person connected can read and propose, and never acts as the person. A change carries user authority or changes governance only once approved: by the binding's `auto` policy, recorded as such, or by the person approving that exact change at Gate under `gate`. Lore records which AI client asked for each change, but no permission depends on it.
 
 ## Terms
 
@@ -82,10 +82,17 @@ A `consumed` response also returns `subject`, `connection_id` and `decided_at`. 
 ### Principals and binding
 
 - `principals.acts_for_principal_id` names the user principal that a connection principal acts for. Only a non-user principal may have it, and the target must be an active user principal of the same user.
-- `external_identity_bindings.connection_principal_id` names the connection principal. While it is null, connections act as the binding's principal, which was the only behavior before 2026-10-29. The production binding has named a connection principal since then. Setting or clearing it is the stage 3 switch and is done only through the reviewed identity-mapping tool (`--connection-principal enable|disable`), which creates or reuses the connection principal and refuses a binding whose principal is not an active user principal.
+- `external_identity_bindings.connection_principal_id` names the connection principal. Before migration 0048 a null value let connections act as the binding's principal; since 0048 every binding of a user principal names one, the identity-mapping tool creates it on activation, and a binding that would resolve to a user principal is refused. A binding of a non-user principal acts as that principal and names none.
 - `app.lock_actor_access` reads grants through `coalesce(acts_for_principal_id, id)` and requires the parent to be active. Revoking or expiring the user's grant therefore removes the connection principal's access at the next check.
 - The connection principal's issuer is `urn:syntoria:lore:connection` and its subject is a value unique to its binding. The authenticator selects principals only through bindings, so no Gate token can resolve to it directly.
-- `app.lock_external_identity_binding` returns the acting principal (the connection principal when one is named) and the binding's user principal. It returns no row when a named connection principal is inactive, a user, or acts for a different principal.
+- `app.lock_external_identity_binding` returns the acting principal (the connection principal when one is named), the binding's user principal and its `approval_policy`. It returns no row when the acting principal is inactive or a user, or a named connection principal acts for a different principal.
+
+### Approval policy
+
+- `external_identity_bindings.approval_policy` is `auto` (default) or `gate`, set only through the reviewed identity-mapping tool (`--approval auto|gate`). The final pre-commit check refuses a request whose binding policy changed after authentication.
+- Under `gate`, the [Flow](#flow) above applies.
+- Under `auto`, a protected operation from a connection is prepared and summarized as for Gate, recorded in `change_confirmations` with `approval = 'policy'`, status `approved` and no Gate reference, then applied at once as the user principal through the same once-only path as a completed confirmation, and resolved `committed` or `failed`. The response is the change's normal response and status with `approval: { "by": "policy", "confirmation_id" }`. A permanent failure is returned as the error. With an idempotency key, a repeat returns the stored outcome and a different change is 409; without one, each request is applied anew, as a User's direct change is.
+- A record with `approval = 'policy'` is never pending, so Gate never shows, consumes or cancels it.
 
 ### Provenance
 
@@ -161,8 +168,10 @@ Gate:
 Lore:
 
 - **L-1** Lore shall record the verified `client_id` with every changeset written over a connection.
-- **L-2** While a binding names a connection principal, Lore shall authenticate every connection of that subject as that principal.
-- **L-3** When a non-user actor requests a protected operation, Lore shall store the exact operation, or reuse the pending confirmation for an identical operation, and return `confirmation_required` without executing it.
+- **L-2** Lore shall authenticate every connection of a subject whose binding names a connection principal as that principal.
+- **L-3** When a non-user actor whose binding uses the `gate` policy requests a protected operation, Lore shall store the exact operation, or reuse the pending confirmation for an identical operation, and return `confirmation_required` without executing it.
+- **L-3a** When a non-user actor whose binding uses the `auto` policy requests a protected operation, Lore shall record it with `approval = 'policy'` and the requesting connection, and apply it once as the user principal.
+- **L-3b** Lore shall refuse a Gate connection whose binding would resolve to a user principal.
 - **L-4** Lore shall render the summary only from the stored payload and shall reject, not truncate, a summary that exceeds Gate's limits.
 - **L-5** When completing a confirmation, Lore shall execute the stored operation as the user principal only after a `consumed` Gate response with matching subject and connection has been recorded as `approved`, and only while every commit of the operation re-verifies the connection and binding.
 - **L-6** Lore shall commit each confirmation at most once.

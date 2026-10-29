@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { IdentityProviderError, type Authenticator } from '@memory/auth';
+import { IdentityProviderError, type Authenticator, type GateIdentity } from '@memory/auth';
 import {
   changeSetSchema,
   connectorAuthorizationSchema,
@@ -20,7 +20,10 @@ import type { CurationReviewService } from '@memory/jobs';
 import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
 
-/** A change only the User may make. Other actors get a Gate confirmation instead. */
+/**
+ * A change only the User may make. Another actor's request is approved by its binding's policy:
+ * at once and recorded as a policy approval, or by the person through a Gate confirmation.
+ */
 export type ProtectedChange =
   | { readonly operation: 'commit_changeset'; readonly changesetId: string }
   | { readonly operation: 'forget'; readonly request: unknown }
@@ -46,7 +49,7 @@ type Operation = ProtectedChange['operation'];
 
 export interface ProtectedChangeResult {
   readonly result: unknown;
-  /** True when the change waits for the person's approval instead of running now. */
+  /** True when the change waits for the person's approval at Gate instead of running now. */
   readonly confirmationRequired: boolean;
 }
 
@@ -83,8 +86,10 @@ interface ConfirmationRow {
   readonly request_hash: string;
   readonly memory_ids: string[];
   readonly idempotency_key: string;
-  readonly gate_confirmation_id: string;
-  readonly gate_url: string;
+  /** Who approved the change: the person at Gate, or the binding's approval policy. */
+  readonly approval: 'person' | 'policy';
+  readonly gate_confirmation_id: string | null;
+  readonly gate_url: string | null;
   readonly status:
     'pending' | 'approved' | 'committed' | 'denied' | 'expired' | 'cancelled' | 'failed';
   readonly response: unknown;
@@ -94,8 +99,8 @@ type MemoryInput = Extract<ChangeOp, { op: 'CREATE' }>['memory'];
 type Evidence = MemoryInput['evidence'];
 
 const COLUMNS = `id, scope_id, gate_subject, connection_id, gate_audience, operation, payload, summary,
-  change_hash, request_hash, memory_ids, idempotency_key, gate_confirmation_id, gate_url, status,
-  response`;
+  change_hash, request_hash, memory_ids, idempotency_key, approval, gate_confirmation_id, gate_url,
+  status, response`;
 const TITLE_LIMIT = 120;
 const LINE_LIMIT = 64;
 const CHARACTER_LIMIT = 4000;
@@ -104,7 +109,7 @@ const uuid = z.uuid();
 export class ChangeConfirmationService {
   constructor(private readonly options: ChangeConfirmationOptions) {}
 
-  /** Runs a protected change for the User, or asks the person to approve it at Gate. */
+  /** Runs a protected change for the User, approves it by policy, or asks the person at Gate. */
   async run(
     auth: Authenticator,
     actor: ActorContext,
@@ -130,8 +135,15 @@ export class ChangeConfirmationService {
       }
       return { result, confirmationRequired: false };
     }
+    const identity = auth.gateIdentity(actor);
+    if (identity === undefined) {
+      throw new CoreError(403, 'user_required', 'Only the User may make this change');
+    }
+    if (identity.approvalPolicy === 'auto') {
+      return this.approveByPolicy(auth, actor, identity, change, idempotencyKey, requestId);
+    }
     return {
-      result: await this.request(auth, actor, change, idempotencyKey),
+      result: await this.request(auth, actor, identity, change, idempotencyKey),
       confirmationRequired: true,
     };
   }
@@ -166,6 +178,19 @@ export class ChangeConfirmationService {
       if (row.status !== 'approved') return view(row);
     }
     if (row.status !== 'approved') return view(row);
+    return view(await this.applyApproved(auth, actor, row, requestId));
+  }
+
+  /**
+   * Applies an approved change once as the User, under an idempotency key derived from the record,
+   * so a retry after a failure applies it at most once. A permanent failure resolves it as failed.
+   */
+  private async applyApproved(
+    auth: Authenticator,
+    actor: ActorContext,
+    row: ConfirmationRow,
+    requestId: string,
+  ): Promise<ConfirmationRow> {
     const userActor = await auth.userActorFor(actor);
     let result: unknown;
     try {
@@ -176,30 +201,109 @@ export class ChangeConfirmationService {
       });
     } catch (error) {
       if (error instanceof CoreError && isPermanent(error)) {
-        return view(
-          await this.resolve(actor, row, 'failed', {
-            error: { code: error.code, message: error.message },
-          }),
-        );
+        return this.resolve(actor, row, 'failed', {
+          error: { code: error.code, message: error.message },
+        });
       }
       throw error;
     }
     if (row.operation === 'forget') {
       await this.cancelAtGate(auth, actor, row.scope_id, row.memory_ids);
     }
-    return view(await this.resolve(actor, row, 'committed', result));
+    return this.resolve(actor, row, 'committed', result);
+  }
+
+  /**
+   * Applies a protected change that the binding's policy approves without asking the person. The
+   * record names the requesting connection and that the policy, not the person, approved it. The
+   * response is the change's own result with that approval attached.
+   */
+  private async approveByPolicy(
+    auth: Authenticator,
+    actor: ActorContext,
+    identity: GateIdentity,
+    change: ProtectedChange,
+    idempotencyKey: string | undefined,
+    requestId: string,
+  ): Promise<ProtectedChangeResult> {
+    const prepared = await this.prepare(actor, change);
+    const requestHash = sha256(
+      canonical({ operation: change.operation, payload: prepared.payload }),
+    );
+    // Without a client key every request is new, as it is for the User's direct changes.
+    const key = idempotencyKey ?? `policy:${randomUUID()}`;
+    let row = await withAuthorizedActor(
+      this.options.pool,
+      actor,
+      [prepared.scopeId],
+      'write',
+      async (client) => {
+        const existing = await client.query<ConfirmationRow>(
+          `SELECT ${COLUMNS} FROM change_confirmations
+           WHERE user_id = $1 AND requested_by = $2 AND idempotency_key = $3`,
+          [actor.userId, actor.principalId, key],
+        );
+        const found = existing.rows[0];
+        if (found !== undefined) {
+          if (found.request_hash !== requestHash) throw keyReused();
+          return found;
+        }
+        const id = randomUUID();
+        const inserted = await client.query<ConfirmationRow>(
+          `INSERT INTO change_confirmations(user_id, scope_id, id, requested_by, gate_subject,
+             client_id, connection_id, gate_audience, operation, payload, summary, change_hash,
+             request_hash, memory_ids, idempotency_key, approval, status, approved_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13,
+             $14::uuid[], $15, 'policy', 'approved', clock_timestamp())
+           RETURNING ${COLUMNS}`,
+          [
+            actor.userId,
+            prepared.scopeId,
+            id,
+            actor.principalId,
+            identity.subject,
+            identity.clientId,
+            identity.connectionId,
+            auth.audience,
+            change.operation,
+            JSON.stringify(prepared.payload),
+            JSON.stringify(prepared.summary),
+            changeHashOf(id, actor, prepared, change.operation),
+            requestHash,
+            prepared.memoryIds,
+            key,
+          ],
+        );
+        return inserted.rows[0]!;
+      },
+    );
+    if (row.approval === 'person') {
+      // The key was used for a Gate request made while the binding asked the person.
+      return {
+        result: { status: 'confirmation_required', confirmation: view(row) },
+        confirmationRequired: row.status === 'pending',
+      };
+    }
+    if (row.status === 'approved') row = await this.applyApproved(auth, actor, row, requestId);
+    if (row.status === 'failed') {
+      const failure = (row.response as { error?: { code?: string; message?: string } } | null)
+        ?.error;
+      throw new CoreError(
+        409,
+        failure?.code ?? 'change_failed',
+        failure?.message ?? 'The change could not be applied',
+      );
+    }
+    return { result: withPolicyApproval(row), confirmationRequired: false };
   }
 
   private async request(
     auth: Authenticator,
     actor: ActorContext,
+    identity: GateIdentity,
     change: ProtectedChange,
     idempotencyKey: string | undefined,
   ): Promise<Record<string, unknown>> {
-    const identity = auth.gateIdentity(actor);
-    if (identity === undefined) {
-      throw new CoreError(403, 'user_required', 'Only the User may make this change');
-    }
     const prepared = await this.prepare(actor, change);
     const requestHash = sha256(
       canonical({ operation: change.operation, payload: prepared.payload }),
@@ -225,17 +329,7 @@ export class ChangeConfirmationService {
           return found;
         }
         const id = randomUUID();
-        const changeHash = `sha256:${sha256(
-          canonical({
-            v: 1,
-            confirmation_id: id,
-            user_id: actor.userId,
-            scope_id: prepared.scopeId,
-            operation: change.operation,
-            payload: prepared.payload,
-            summary: prepared.summary,
-          }),
-        )}`;
+        const changeHash = changeHashOf(id, actor, prepared, change.operation);
         let created: { id: string; url: string };
         try {
           created = await auth.confirmations.create({
@@ -304,11 +398,13 @@ export class ChangeConfirmationService {
         );
         const current = locked.rows[0];
         if (current === undefined) throw notFound();
-        if (current.status !== 'pending') return current;
+        // Only a confirmation the person approves at Gate is ever pending.
+        if (current.status !== 'pending' || current.gate_confirmation_id === null) return current;
+        const gateConfirmationId = current.gate_confirmation_id;
         let result: Awaited<ReturnType<Authenticator['confirmations']['consume']>>;
         try {
           result = await auth.confirmations.consume(
-            current.gate_confirmation_id,
+            gateConfirmationId,
             current.id,
             current.change_hash,
           );
@@ -468,7 +564,8 @@ export class ChangeConfirmationService {
         (
           await client.query<{ id: string; gate_confirmation_id: string }>(
             `SELECT id, gate_confirmation_id FROM change_confirmations
-             WHERE user_id = $1 AND scope_id = $2 AND status = 'cancelled' AND gate_audience = $3
+             WHERE user_id = $1 AND scope_id = $2 AND status = 'cancelled' AND approval = 'person'
+               AND gate_audience = $3
                AND memory_ids && $4::uuid[] AND resolved_at > clock_timestamp() - interval '5 minutes'`,
             [actor.userId, scopeId, auth.audience, memoryIds],
           )
@@ -890,12 +987,42 @@ function directPayload(change: ProtectedChange): Record<string, unknown> {
   }
 }
 
+/** Binds a confirmation's identity, scope, operation, payload and summary in one hash. */
+function changeHashOf(
+  id: string,
+  actor: ActorContext,
+  prepared: PreparedChange,
+  operation: Operation,
+): string {
+  return `sha256:${sha256(
+    canonical({
+      v: 1,
+      confirmation_id: id,
+      user_id: actor.userId,
+      scope_id: prepared.scopeId,
+      operation,
+      payload: prepared.payload,
+      summary: prepared.summary,
+    }),
+  )}`;
+}
+
+/** A policy-approved change's own result, with the approval that let it run. */
+function withPolicyApproval(row: ConfirmationRow): Record<string, unknown> {
+  const approval = { by: 'policy', confirmation_id: row.id };
+  const result = row.response;
+  return result !== null && typeof result === 'object' && !Array.isArray(result)
+    ? { ...(result as Record<string, unknown>), approval }
+    : { result, approval };
+}
+
 function view(row: ConfirmationRow): Record<string, unknown> {
   const base = {
     confirmation_id: row.id,
     scope_id: row.scope_id,
     operation: row.operation,
     status: row.status,
+    approval: row.approval,
   };
   if (row.status === 'pending') return { ...base, url: row.gate_url, summary: row.summary };
   if (row.status === 'committed') return { ...base, result: row.response };

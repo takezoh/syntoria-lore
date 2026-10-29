@@ -93,7 +93,11 @@ Source-rights revocation is separate from Forget. It blocks dependent reads unde
 
 ## Change confirmations
 
-A change only the user may make, requested by any other actor, waits for the person's approval at Gate. The [change confirmation design](../design/change-confirmation.md) defines the contract.
+A change only the user may make, requested by a connection, is approved according to the binding's approval policy. The [change confirmation design](../design/change-confirmation.md) defines the contract.
+
+Under `auto`, the default, Lore applies the exact change at once as the user principal and returns the change's normal response and status with `approval: { "by": "policy", "confirmation_id": … }`. The record names the requesting connection and has `approval: "policy"`. A repeated request with the same idempotency key returns the stored outcome; reusing it for a different change is `409 idempotency_key_reused`. A permanent failure returns the error and leaves the record `failed`.
+
+Under `gate`:
 
 1. The protected tool or route stores the exact change, renders a plain-text summary from stored data and creates a Gate confirmation. It returns `{ "status": "confirmation_required", "confirmation": { "confirmation_id", "url", "summary", … } }`, with HTTP 202 on REST. A summary over Gate's limits returns `413 summary_too_large`; split the change.
 2. Show the `url` to the person. They sign in at Gate and approve or deny. The AI cannot supply the summary or approve.

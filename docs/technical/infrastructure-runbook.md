@@ -61,23 +61,21 @@ IDENTITY_MAPPING_DATABASE_URL="$MIGRATION_DATABASE_URL" \
 
 An exact existing mapping is idempotent. An inactive mapping can be reactivated only by a fresh baseline and apply. Deactivate with the same two-step procedure and `--deactivate`; do not delete bindings or change a policy through ad hoc SQL. The mapping file is an authorization decision and must be reviewed by the service owner.
 
-## Switch connections to a connection principal
+## Set the approval policy
 
-Stage 3 of [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) makes every Gate connection of a person act as one non-user connection principal, so AI writes stay proposals and protected changes need the person's approval at Gate. Set it only after Gate with change confirmations and the Lore API from the same release are deployed, migrations 0045 and 0046 are applied, and a hosted readback has confirmed both.
+Every Gate connection of a person acts as one non-user connection principal ([ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md)), so AI writes stay proposals. Activating a binding of a user principal creates that principal: a `client` principal with issuer `urn:syntoria:lore:connection` and subject `binding:<binding id>`, acting for the binding's principal and holding no grants of its own. Rerunning activation reuses it and repairs a binding whose field was cleared. Migration 0048 gave every existing binding of a user principal its connection principal. Lore refuses a binding that would let a connection act as the user principal.
 
-Use the reviewed mapping file of the existing active binding. The binding's principal must be the person's active user principal; the tool refuses otherwise, because confirmed changes are applied as that principal. Run the dry-run and review `existing_binding.connection_principal_id` and `connection_principal`:
+How a connection's protected changes are approved is the binding's `approval_policy` ([ADR 0004](../adr/0004-approve-protected-changes-by-policy.md)): `auto` applies each one at once and records `approval: "policy"`; `gate` asks the person to approve each one at Gate. New bindings and every binding after migration 0048 use `auto`. To change it, run the dry-run with the reviewed mapping file of the existing binding:
 
 ```sh
 IDENTITY_MAPPING_DATABASE_URL="$MIGRATION_DATABASE_URL" \
   npm run gate:identity:map -- --file /secure/path/gate-map.json \
-  --connection-principal enable
+  --approval gate
 ```
 
-Apply with the reported digest and the same flag. The tool creates a `client` principal with issuer `urn:syntoria:lore:connection` and subject `binding:<binding id>`, acting for the binding's principal, and names it on the binding. It holds no grants; connections read the user principal's grants through it. Rerunning reuses the same principal.
+Review `existing_binding.approval_policy`, then apply with the reported digest and the same flag. Requests already authenticated under the old policy fail their final pre-commit check and must be retried. Confirmations pending at Gate stay valid after a switch to `auto` and can still be completed.
 
-On 2026-10-29 the switch was set for the single production binding. The owner ran the tool from their own shell, reading the migration URL into an environment variable so it was never printed. See the [change confirmation release record](../eval/change-confirmation-release-20261029.md).
-
-To revert, run the same two steps with `--connection-principal disable`. It clears the binding field, keeps the principal for a later enable, and works on an inactive binding. Connections then act as the user principal again. Confirmations that were pending stay valid and can still be completed.
+Before 0048, the same tool set the stage 3 switch with `--connection-principal enable|disable`; it was set for the single production binding on 2026-10-29 (see the [change confirmation release record](../eval/change-confirmation-release-20261029.md)). That flag no longer exists.
 
 ## Rotate the migration credential
 

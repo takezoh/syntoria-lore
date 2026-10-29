@@ -14,6 +14,8 @@ summary: All AI connections of an admitted person share one non-user principal, 
 
 ## Decision
 
+Rule 3 is amended by [ADR 0004](0004-approve-protected-changes-by-policy.md): on 2026-10-29 the owner made the approval a per-binding policy whose default, `auto`, approves a requested change without asking the person; rules 1 and 2 stand, and no connection may act as the user principal.
+
 Proposed on 2026-10-20; not yet accepted. Stages 1 to 3 are in production since 2026-10-29, with the switch set for the single production binding. The owner decided that authorization does not depend on which AI makes a request; it depends on whether the person approved. Approving a Gate connection lets an AI read and propose within the admitted scopes. A user decision or a governance operation needs the person's approval of that specific change.
 
 Lore would adopt three rules:

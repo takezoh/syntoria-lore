@@ -60,7 +60,7 @@ This document is the product contract for Release 1: the functional requirements
 
 ## Acceptance contracts
 
-- **AC-01 Decision provenance:** An AI recommendation is never stored or returned as an user decision.
+- **AC-01 Decision provenance:** An AI recommendation is never stored or returned as an user decision unless it was approved, and every approval records whether the person approved it at Gate or the account's `auto` approval policy approved it ([ADR 0004](../adr/0004-approve-protected-changes-by-policy.md)).
 - **AC-02 Temporal correctness:** Renames and policy changes are distinguished from three viewpoints: current, past and what was known at the time.
 - **AC-03 Consolidation:** Resending the same information does not multiply records, and independent evidence from another source is not lost.
 - **AC-04 Multi-client:** An explicit change by client A is correctly visible to client B's recall and change feed.
