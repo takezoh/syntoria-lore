@@ -6,7 +6,7 @@ Lore does not have a sign-in page, browser session or memory-browsing app. Gate 
 
 The service operator must admit your Gate account to Lore. Admission maps the Gate issuer and your immutable subject to an existing Lore user and principal, and that principal needs a current grant for the requested scopes and capabilities. Gate sign-in or approval alone does not give a client access to memories; Gate approval and Lore admission are separate checks. The repository does not provide a public sign-up flow or create the admission and grant for you, so ask the operator which Lore resources and permissions are available.
 
-End-to-end use with a hosted AI client and a real user has not been verified yet, and no real approval has been made at Gate. The dated [change confirmation release record](../eval/change-confirmation-release-20261029.md) lists what the hosted probes covered.
+End-to-end use with a hosted AI client and a real user has not been verified yet, and no real approval has been made at Gate. The dated [change confirmation](../eval/change-confirmation-release-20261029.md) and [approval policy](../eval/approval-policy-release-20261029.md) release records list what the hosted probes covered.
 
 ## Choose what each client can do
 

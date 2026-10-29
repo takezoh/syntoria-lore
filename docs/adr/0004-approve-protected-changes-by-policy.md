@@ -45,7 +45,7 @@ The owner asked that AI and human operations be distinguished wherever they were
 
 ## Confirmation
 
-Checks: a connection under `auto` applies a protected change once, records `approval = 'policy'` with its connection and returns `approval.by = "policy"`; a repeated key returns the stored outcome and a different change with it is 409; requests without a key are applied anew; the connection's own writes stay `ai_proposal`; a binding resolving to a user principal is refused; `gate` keeps the ADR 0003 flow; migration 0048 backfills a connection principal for a user-principal binding and keeps an existing one. On 2026-10-29 these passed locally against PostgreSQL (`tests/core.postgres.test.ts`, 45 tests) together with an upgrade check of 0048 from a database at 0047. Nothing is deployed, and no hosted behavior is verified.
+Checks: a connection under `auto` applies a protected change once, records `approval = 'policy'` with its connection and returns `approval.by = "policy"`; a repeated key returns the stored outcome and a different change with it is 409; requests without a key are applied anew; the connection's own writes stay `ai_proposal`; a binding resolving to a user principal is refused; `gate` keeps the ADR 0003 flow; migration 0048 backfills a connection principal for a user-principal binding and keeps an existing one. On 2026-10-29 these passed locally against PostgreSQL (`tests/core.postgres.test.ts`, 45 tests) together with an upgrade check of 0048 from a database at 0047. Migration 0048 and the API were released to production on 2026-10-29 ([release record](../eval/approval-policy-release-20261029.md)); the hosted probes cover readiness and authentication rejection only, and no policy approval has been observed in production.
 
 ## Sources
 
