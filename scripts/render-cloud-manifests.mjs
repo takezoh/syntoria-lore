@@ -4,10 +4,12 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const config = JSON.parse(
-  await readFile(join(repositoryRoot, 'infra/cloud/deployment.json'), 'utf8'),
+const { image, outputDirectory, configPath } = parseArguments(process.argv.slice(2));
+// Production identifiers stay out of tracked files: infra/cloud/deployment.json is a synthetic
+// example, and the production profile is the ignored .local/cloud/deployment.json.
+const config = await readProfile(
+  configPath ?? join(repositoryRoot, '.local/cloud/deployment.json'),
 );
-const { image, outputDirectory } = parseArguments(process.argv.slice(2));
 assertImage(image);
 if (!isAbsolute(outputDirectory)) throw new Error('--output-dir must be an absolute path');
 
@@ -260,18 +262,31 @@ function secretEnv(name, secret, version = '1') {
 function parseArguments(args) {
   let image;
   let outputDirectory;
+  let configPath;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--image') image = args[++index];
     else if (argument === '--output-dir') outputDirectory = args[++index];
+    else if (argument === '--config') configPath = args[++index];
     else throw new Error(`Unknown argument: ${argument}`);
   }
-  if (image === undefined || outputDirectory === undefined) {
+  if (image === undefined || outputDirectory === undefined || configPath === '') {
     throw new Error(
-      'Usage: render-cloud-manifests.mjs --image <repository@sha256:digest> --output-dir <absolute-path>',
+      'Usage: render-cloud-manifests.mjs --image <repository@sha256:digest> --output-dir <absolute-path> [--config <deployment-profile.json>]',
     );
   }
-  return { image, outputDirectory };
+  return { image, outputDirectory, configPath };
+}
+
+async function readProfile(path) {
+  try {
+    return JSON.parse(await readFile(resolve(path), 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `Deployment profile ${path} is unavailable; copy infra/cloud/deployment.json to .local/cloud/deployment.json and fill in the production values`,
+      { cause: error },
+    );
+  }
 }
 
 function assertImage(value, imageName = config.imageName, argumentName = '--image') {

@@ -7,3 +7,5 @@ dist/
 .env.local
 var/
 coverage/
+# Private deployment profiles and rendered production configuration.
+.local/

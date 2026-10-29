@@ -5,12 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { verifyCloudBoundaryReadbacks } from './cloud-boundary-policy.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const config = JSON.parse(
-  await readFile(join(repositoryRoot, 'infra/cloud/iam-contract.json'), 'utf8'),
-);
 
 try {
-  const inputDirectory = parseArguments(process.argv.slice(2));
+  const { inputDirectory, contractPath } = parseArguments(process.argv.slice(2));
+  // infra/cloud/iam-contract.json is a synthetic example; the production contract is ignored.
+  const config = JSON.parse(
+    await readFile(
+      resolve(contractPath ?? join(repositoryRoot, '.local/cloud/iam-contract.json')),
+      'utf8',
+    ),
+  );
   const readbacks = await loadReadbacks(inputDirectory, config.readbackFiles);
   const result = verifyCloudBoundaryReadbacks(config, readbacks);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -22,11 +26,18 @@ try {
 }
 
 function parseArguments(args) {
-  if (args.length !== 2 || args[0] !== '--input-dir') {
-    throw new Error('Usage: verify-cloud-boundaries.mjs --input-dir <absolute-readback-directory>');
+  const usage =
+    'Usage: verify-cloud-boundaries.mjs --input-dir <absolute-readback-directory> [--contract <iam-contract.json>]';
+  let inputDirectory;
+  let contractPath;
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === '--input-dir') inputDirectory = args[++index];
+    else if (args[index] === '--contract') contractPath = args[++index];
+    else throw new Error(usage);
   }
-  if (!isAbsolute(args[1])) throw new Error('--input-dir must be an absolute path');
-  return resolve(args[1]);
+  if (inputDirectory === undefined || contractPath === '') throw new Error(usage);
+  if (!isAbsolute(inputDirectory)) throw new Error('--input-dir must be an absolute path');
+  return { inputDirectory: resolve(inputDirectory), contractPath };
 }
 
 async function loadReadbacks(inputDirectory, files) {

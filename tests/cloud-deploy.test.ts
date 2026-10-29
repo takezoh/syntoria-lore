@@ -20,8 +20,11 @@ import type {
   CloudBoundaryReadbacks,
 } from '../scripts/cloud-boundary-policy.mjs';
 import { isExcludedBuildContextPath } from '../scripts/cloud-build-context-policy.mjs';
+import { renderCloudBuild } from '../scripts/render-cloud-build.mjs';
 
 const renderer = join(process.cwd(), 'scripts/render-cloud-manifests.mjs');
+// The tracked profile is a synthetic example; production renders read the ignored .local profile.
+const exampleProfile = ['--config', join(process.cwd(), 'infra/cloud/deployment.json')];
 const contextPreparer = join(process.cwd(), 'scripts/prepare-cloud-build-context.mjs');
 const contextPolicy = join(process.cwd(), 'scripts/cloud-build-context-policy.mjs');
 const deploymentConfig = JSON.parse(
@@ -71,6 +74,24 @@ type SourceContextSummary = {
 };
 
 describe('cloud deployment manifests', () => {
+  it('renders the tracked Cloud Build configuration from the example profile', async () => {
+    const tracked = await readFile(join(process.cwd(), 'infra/cloud/cloudbuild.yaml'), 'utf8');
+    expect(renderCloudBuild(deploymentConfig)).toBe(tracked);
+    expect(
+      renderCloudBuild({
+        ...deploymentConfig,
+        project: 'private-project',
+        artifactRegistry: 'asia-southeast1-docker.pkg.dev/private-project/lore',
+        build: {
+          ...deploymentConfig.build,
+          serviceAccount: 'builder@private-project.iam.gserviceaccount.com',
+        },
+      }),
+    ).toContain(
+      'serviceAccount: projects/private-project/serviceAccounts/builder@private-project.iam.gserviceaccount.com',
+    );
+  });
+
   it('keeps local defaults generic while deployment.env pins Lore physical volumes', async () => {
     const [compose, deploymentEnv, workflow, envExample] = await Promise.all([
       readFile(join(process.cwd(), 'compose.yaml'), 'utf8'),
@@ -123,7 +144,7 @@ describe('cloud deployment manifests', () => {
     try {
       const result = spawnSync(
         process.execPath,
-        [renderer, '--image', immutableImage, '--output-dir', outputDirectory],
+        [renderer, '--image', immutableImage, '--output-dir', outputDirectory, ...exampleProfile],
         { encoding: 'utf8' },
       );
       expect(result.status, result.stderr).toBe(0);
@@ -205,6 +226,7 @@ describe('cloud deployment manifests', () => {
         process.execPath,
         [
           renderer,
+          ...exampleProfile,
           '--image',
           `${deploymentConfig.artifactRegistry}/${deploymentConfig.imageName}:latest`,
           '--output-dir',

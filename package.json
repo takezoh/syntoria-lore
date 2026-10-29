@@ -34,6 +34,7 @@
     "cloud:restore:smoke": "node --import tsx scripts/cloud-restore-clone-smoke.ts",
     "cloud:neon:migrate": "node scripts/cloud-neon-migrate.mjs",
     "cloud:manifests": "node scripts/render-cloud-manifests.mjs",
+    "cloud:build-config": "node scripts/render-cloud-build.mjs",
     "cloud:build-context": "node scripts/prepare-cloud-build-context.mjs",
     "gate:identity:map": "node scripts/gate-identity-map.mjs",
     "gate:integration": "node scripts/testing/verify-gate-integration.mjs",

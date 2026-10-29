@@ -26,6 +26,8 @@ Use `deployment.json` for synthetic configuration shape and `iam-contract.json` 
 
 The app database has 43 applied migrations. Migration 0043 replaces client-specific admission with explicit issuer/subject admission while preserving effective active authority. Prior migration records and public RLS policies are unchanged. See the [release record](../eval/dcr-production-release-20261020.md) for the fenced rollout, preservation evidence and rollback restrictions.
 
+Production identifiers stay out of tracked files: the project ID and number, service accounts, Cloud Run URLs, bucket names and public origins. `infra/cloud/deployment.json`, `infra/cloud/iam-contract.json` and `infra/cloud/cloudbuild.yaml` carry synthetic values such as `example-project`, `123456789012` and `example.com`. Keep the production profile in `.local/cloud/deployment.json` and the production IAM contract in `.local/cloud/iam-contract.json`; `.local` is excluded from Git, Docker and Cloud Build sources. `npm run cloud:manifests` and `npm run cloud:verify-boundaries` read them by default (`--config` and `--contract` select another file), and `npm run cloud:build-config -- --output <absolute-path>` renders the Cloud Build configuration from the profile.
+
 ## Gate configuration contract
 
 Runtime configuration requires:
