@@ -9,7 +9,7 @@ Gate owns sign-in, approvals, sessions and logout. This service consumes Gate th
 ```mermaid
 flowchart LR
   Client[MCP or API client] -->|opaque API bearer| API[REST /v1]
-  Client -->|opaque read/write bearer| MCP[Separate MCP resources]
+  Client -->|opaque MCP bearer| MCP[Single MCP resource at /mcp]
   API --> Gate[Gate online introspection]
   MCP --> Gate
   API --> Admission[Existing principal + binding + grants]
@@ -31,8 +31,8 @@ flowchart LR
 | Service | Route | Contract |
 | --- | --- | --- |
 | API | `/v1/*` | REST; API-resource Gate bearer only |
-| API | `POST /mcp/read`, `POST /mcp/write` | Streamable HTTP MCP; separate resource audiences, credentials and tool sets; Gate bearer only |
-| API | `/.well-known/oauth-protected-resource/mcp/read`, `.../mcp/write` | Public metadata naming Gate, resource URI and supported OAuth scopes |
+| API | `POST /mcp` | Streamable HTTP MCP; one exact resource audience; tools selected by the actor's current read/write capabilities; Gate bearer only |
+| API | `/.well-known/oauth-protected-resource/mcp` | Public metadata naming Gate and the exact MCP resource URI |
 | API | `/openapi.json`, `/healthz`, `/readyz` | Health and schema; no memory data |
 | Worker | `POST /internal/jobs/run` | Cloud Tasks delivery of one `job_id` |
 | Worker | `POST /internal/dispatch/sweep` | IAM-authenticated scheduler sweep |
@@ -41,11 +41,11 @@ The API rejects duplicate Authorization headers before Node's header normalizati
 
 ## Gate identity and admission
 
-Gate issues opaque authorization-code tokens for the API, MCP read and MCP write resources. Each resource has its own client ID and secret for introspection; the audiences are the configured public API origin and its `/mcp/read` and `/mcp/write` paths. The verifier discovers Gate's OIDC metadata and introspection endpoint, checks active status, issuer, immutable subject, nonempty client ID and exact audience, and fails closed when Gate is unavailable. It does not verify local JWT/JWKS tokens or cache successful authorization.
+Gate issues opaque authorization-code tokens for the API and one MCP resource. Each resource has its own client ID and secret for introspection; their audiences are the configured public API origin and its `/mcp` path. The MCP client credential validates the MCP resource only; Lore derives operation access from the bound principal's current capability ceiling and grants. The verifier discovers Gate's OIDC metadata and introspection endpoint, checks active status, issuer, immutable subject, nonempty client ID and exact audience, and fails closed when Gate is unavailable. It does not verify local JWT/JWKS tokens or cache successful authorization.
 
 An operator must map an exact `(Gate issuer, subject)` tuple in `external_identity_bindings` to an existing Lore user and principal. The binding contains an explicit scope list and capability ceiling; current, unexpired database grants, source rights and authorization epochs further restrict access. OAuth consent alone never creates a Lore user or grants memory access. The mapping tool hashes both the existing principal/grant snapshot and target binding before it applies.
 
-MCP clients own their OAuth callback and send the resulting Gate bearer token to Lore. Lore does not start Gate login, resume a Gate browser session, or expose a device-logout flow. Users manage sign-in, approvals, sessions and logout in Gate; OAuth client grants remain independently revocable there.
+MCP clients own their OAuth callback and send the resulting Gate bearer token to Lore. Connections under the same Gate subject resolve to the same Lore principal and capability set; the OAuth client ID is provenance, not a permission selector. Lore does not start Gate login, resume a Gate browser session, or expose a device-logout flow. Users manage sign-in, approvals, sessions and logout in Gate; OAuth client grants remain independently revocable there.
 
 Every actor-bound operation locks and compares the local binding, principal, grants and source rights. The transaction runs one final Gate check immediately before COMMIT. If the identity, local binding, grant, rights or Gate service is unavailable or changed, the operation fails without committing. PostgreSQL RLS remains forced; application and worker roles are non-superuser and `NOBYPASSRLS`.
 

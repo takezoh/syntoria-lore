@@ -148,8 +148,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   const gateIssuer = 'https://gate.integration.test';
   const audience = 'memory-local-test';
   const mcpBaseUrl = 'http://127.0.0.1:8080';
-  const mcpReadAudience = `${mcpBaseUrl}/mcp/read`;
-  const mcpWriteAudience = `${mcpBaseUrl}/mcp/write`;
+  const mcpAudience = `${mcpBaseUrl}/mcp`;
   let admin: Pool;
   let app: Pool;
   let workerDb: Pool;
@@ -361,17 +360,11 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       ...authConfig,
       audience,
     });
-    const mcpReadAuth = new PersonFixtureAuthenticator({
+    const mcpAuth = new PersonFixtureAuthenticator({
       ...authConfig,
-      audience: mcpReadAudience,
-      clientId: 'integration-mcp-read-resource',
-      clientSecret: 'synthetic-mcp-read-secret',
-    });
-    const mcpWriteAuth = new PersonFixtureAuthenticator({
-      ...authConfig,
-      audience: mcpWriteAudience,
-      clientId: 'integration-mcp-write-resource',
-      clientSecret: 'synthetic-mcp-write-secret',
+      audience: mcpAudience,
+      clientId: 'integration-mcp-resource',
+      clientSecret: 'synthetic-mcp-secret',
     });
     const cursorKey = Buffer.alloc(32, 7);
     const cursorCodec = new CursorCodec('test', new Map([['test', cursorKey]]));
@@ -412,8 +405,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     await governance.verifyLedgerReadiness();
     server = createApiServer({
       auth: authenticator,
-      mcpReadAuth,
-      mcpWriteAuth,
+      mcpAuth,
       mcpAuthorizationServerUrl: gateIssuer,
       mcpResourceBaseUrl: mcpBaseUrl,
       apiAllowedOrigins: ['https://app.integration.test'],
@@ -3184,10 +3176,10 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       body: JSON.stringify({ query: retainedStatement, scope_id: scopeB }),
     });
     expect(blockedRecall.status).toBe(503);
-    const blockedMcp = await fetch(`${baseUrl}/mcp/read`, {
+    const blockedMcp = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${await token([scopeB], 'memory:read', subject, mcpReadAudience)}`,
+        authorization: `Bearer ${await token([scopeB], 'memory:read', subject, mcpAudience)}`,
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
       },
@@ -3235,7 +3227,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     expect(restoredRead.status).toBe(200);
   }, 40_000);
 
-  it('serves a read-only MCP audience through the official SDK client', async () => {
+  it('serves only read operations to a read-only grant on the shared MCP resource', async () => {
     const statement = `MCP read client fixture ${randomUUID()}`;
     const user = await token([scopeB], 'memory:admin');
     const created = await post(
@@ -3249,10 +3241,10 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     );
     expect(created.status).toBe(200);
 
-    const accessToken = await token([scopeB], 'memory:read', subject, mcpReadAudience);
+    const accessToken = await token([scopeB], 'memory:read', subject, mcpAudience);
     const client = new McpClient({ name: 'memory-read-e2e', version: '1.0.0' });
     await client.connect(
-      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp/read`), {
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
         authProvider: { token: async () => accessToken },
       }),
     );
@@ -3270,16 +3262,30 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       });
       expect(JSON.stringify(result)).toContain(statement);
       expect(result.isError).not.toBe(true);
+      await expect(
+        client.callTool({
+          name: 'remember_memory',
+          arguments: {
+            scope_id: scopeB,
+            idempotency_key: `mcp-read-denied-${randomUUID()}`,
+            memory: {
+              ...sampleMemory(),
+              statement: `Denied MCP write ${randomUUID()}`,
+              evidence: [evidence(`mcp-read-denied-${randomUUID()}`)],
+            },
+          },
+        }),
+      ).rejects.toThrow();
     } finally {
       await client.close();
     }
   }, 20_000);
 
-  it('serves MCP writes only to a distinct write audience and commits through CoreService', async () => {
-    const accessToken = await token([scopeB], 'memory:write', subject, mcpWriteAudience);
+  it('serves only write operations to a write-only grant on the shared MCP resource', async () => {
+    const accessToken = await token([scopeB], 'memory:write', subject, mcpAudience);
     const client = new McpClient({ name: 'memory-write-e2e', version: '1.0.0' });
     await client.connect(
-      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp/write`), {
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
         authProvider: { token: async () => accessToken },
       }),
     );
@@ -3315,36 +3321,23 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       [userId, scopeB, statement],
     );
     expect(committed.rows[0]?.count).toBe('1');
-
-    const wrongAudienceClient = new McpClient({
-      name: 'memory-wrong-audience',
-      version: '1.0.0',
-    });
-    await expect(
-      wrongAudienceClient.connect(
-        new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp/read`), {
-          authProvider: { token: async () => accessToken },
-        }),
-      ),
-    ).rejects.toThrow();
-    await wrongAudienceClient.close().catch(() => undefined);
   }, 20_000);
 
   it('publishes protected-resource metadata and rejects untrusted MCP hosts and origins', async () => {
-    const metadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp/read`);
+    const metadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
     expect(metadata.status).toBe(200);
     expect(await metadata.json()).toMatchObject({
-      resource: mcpReadAudience,
+      resource: mcpAudience,
       authorization_servers: [gateIssuer],
       scopes_supported: ['openid'],
     });
-    const badOrigin = await fetch(`${baseUrl}/mcp/read`, {
+    const badOrigin = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: { origin: 'https://attacker.example', 'content-type': 'application/json' },
       body: '{}',
     });
     expect(badOrigin.status).toBe(403);
-    const badHost = await fetch(`${baseUrl}/mcp/read`, {
+    const badHost = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: { host: 'attacker.example', 'content-type': 'application/json' },
       body: '{}',
@@ -3355,7 +3348,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         {
           hostname: '127.0.0.1',
           port: Number(new URL(baseUrl).port),
-          path: '/mcp/read',
+          path: '/mcp',
           method: 'POST',
           headers: {
             host: 'attacker.example',
@@ -3400,7 +3393,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     });
     expect(cookieOnly.status).toBe(401);
 
-    const mcpCookieOnly = await fetch(`${baseUrl}/mcp/read`, {
+    const mcpCookieOnly = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: {
         cookie: '__Secure-gate_session=synthetic-session',
@@ -3409,7 +3402,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       body: '{}',
     });
     expect(mcpCookieOnly.status).toBe(401);
-    const mcpGet = await fetch(`${baseUrl}/mcp/read`, { method: 'GET' });
+    const mcpGet = await fetch(`${baseUrl}/mcp`, { method: 'GET' });
     expect(mcpGet.status).toBe(405);
 
     const bearer = await token([scopeB], 'memory:read memory:write');
@@ -3551,24 +3544,17 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     }
   });
 
-  it('completes Remember → Recall → get_changes → Forget → not found with two official SDK clients', async () => {
-    const writeToken = await token([scopeB], 'memory:admin', subject, mcpWriteAudience);
-    let readToken = await token([scopeB], 'memory:read', subject, mcpReadAudience);
-    const writer = new McpClient({ name: 'memory-governance-write-client', version: '1.0.0' });
-    const reader = new McpClient({ name: 'memory-governance-read-client', version: '1.0.0' });
-    await writer.connect(
-      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp/write`), {
+  it('completes Remember → Recall → get_changes → Forget → not found on one MCP connection', async () => {
+    const writeToken = await token([scopeB], 'memory:admin', subject, mcpAudience);
+    const client = new McpClient({ name: 'memory-governance-client', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
         authProvider: { token: async () => writeToken },
-      }),
-    );
-    await reader.connect(
-      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp/read`), {
-        authProvider: { token: async () => readToken },
       }),
     );
     const statement = `MCP complete governance ${randomUUID()}`;
     try {
-      const remembered = await writer.callTool({
+      const remembered = await client.callTool({
         name: 'remember_memory',
         arguments: {
           scope_id: scopeB,
@@ -3584,20 +3570,20 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       const memoryId = memory.rows[0]?.id;
       expect(memoryId).toBeDefined();
 
-      const recalled = await reader.callTool({
+      const recalled = await client.callTool({
         name: 'recall_memories',
         arguments: { query: statement, scope_id: scopeB, mode: 'precise' },
       });
       expect(recalled.isError).not.toBe(true);
       expect(JSON.stringify(recalled)).toContain(statement);
-      const changes = await reader.callTool({
+      const changes = await client.callTool({
         name: 'get_changes',
         arguments: { scope_id: scopeB, limit: 100 },
       });
       expect(changes.isError).not.toBe(true);
       expect(JSON.stringify(changes)).toContain(memoryId);
 
-      const forgotten = await writer.callTool({
+      const forgotten = await client.callTool({
         name: 'forget_memory',
         arguments: {
           scope_id: scopeB,
@@ -3611,13 +3597,12 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       await expect(coreService.getMemory(freshActor, scopeB, memoryId!, {})).rejects.toMatchObject({
         status: 404,
       });
-      readToken = await token([scopeB], 'memory:read', subject, mcpReadAudience);
       const sweep = await fetch(`${workerBaseUrl}/internal/governance/sweep`, {
         method: 'POST',
         headers: { authorization: `Bearer ${workerTaskToken}` },
       });
       expect(sweep.status).toBe(200);
-      const afterForget = await reader.callTool({
+      const afterForget = await client.callTool({
         name: 'get_memory',
         arguments: { scope_id: scopeB, memory_id: memoryId! },
       });
@@ -3628,7 +3613,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         [userId, scopeB, memoryId],
       );
       expect(persistedForgetEvents.rows).toContainEqual({ op: 'RETRACT', tombstone: true });
-      const changesAfterForget = await reader.callTool({
+      const changesAfterForget = await client.callTool({
         name: 'get_changes',
         arguments: { scope_id: scopeB, limit: 100 },
       });
@@ -3638,8 +3623,7 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       expect(JSON.stringify(changesAfterForget)).toContain(memoryId);
       expect(JSON.stringify(changesAfterForget)).not.toContain(statement);
     } finally {
-      await writer.close();
-      await reader.close();
+      await client.close();
     }
   }, 30_000);
 
@@ -4919,10 +4903,10 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
 
   it('routes protected MCP tools through confirmations completed on the same endpoint', async () => {
     const { gateSubject } = await connectionSubject([scopeB]);
-    const writeToken = connectionToken(gateSubject, 'client-mcp', mcpWriteAudience);
+    const writeToken = connectionToken(gateSubject, 'client-mcp', mcpAudience);
     const writer = new McpClient({ name: 'memory-confirmation-client', version: '1.0.0' });
     await writer.connect(
-      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp/write`), {
+      new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
         authProvider: { token: async () => writeToken },
       }),
     );

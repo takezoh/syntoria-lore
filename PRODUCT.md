@@ -80,7 +80,7 @@ Recall combines the question with permitted scope, source rights, memory lifecyc
 
 ## Access
 
-AI clients connect through REST and Remote MCP; Lore has no sign-in page or memory browser of its own. Gate handles sign-in and approval, and the service operator must admit your Gate account to Lore before a client can read or write memories. Every client you approve with that account acts for you with the same memories and permissions, but its changes stay its own until you approve them; to keep one read-only, connect it only to the read endpoint. See [client access](docs/usage/sign-in.md).
+AI clients connect through REST and Remote MCP; Lore has no sign-in page or memory browser of its own. Gate handles sign-in and approval, and the service operator must admit your Gate account to Lore before a client can read or write memories. MCP has one connection URL; Lore makes read and write operations available from the mapped principal's current capabilities. Every client you approve with the same Gate account acts for you with the same memories and permissions, but its changes stay its own until you approve them. See [client access](docs/usage/sign-in.md).
 
 ## Scope and evidence
 

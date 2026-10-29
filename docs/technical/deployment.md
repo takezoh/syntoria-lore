@@ -4,6 +4,8 @@ The approval policy release completed on 2026-10-29, after the change confirmati
 
 Under the `auto` policy, protected changes an AI requests, including user decisions and Forget, are applied without asking the person at Gate; set `gate` with the identity-mapping tool to restore per-change approval.
 
+The source contract now uses one MCP resource at the exact audience `https://<api-origin>/mcp`. This consolidation has not been deployed or verified against a hosted Gate or MCP client. Before rollout, register that exact Gate resource, configure one dedicated MCP introspection client and secret, update the ignored production profile and Secret Manager reference, and deploy the matching API image. MCP clients must reconnect and obtain a token for `/mcp`; tokens issued for the former `/mcp/read` or `/mcp/write` audiences do not match. No legacy route or audience fallback is provided. Existing memory, identity and grant records need no migration. A pending confirmation remains bound to the OAuth resource that created it and cannot move between old and new resource credentials.
+
 ## Current boundary
 
 The checked-in `infra/cloud/deployment.json` is a synthetic example profile. The production profile, which `scripts/render-cloud-manifests.mjs` reads, is the ignored `.local/cloud/deployment.json`; see [the existing service contract](#existing-service-and-storage-contract). Neither is a cloud readback, and secret values stay in Secret Manager. The Cloud Run API URL remains the canonical service identity. Production uses the approved direct Cloud Run domain-mapping design, with domain mapping, DNS and a Ready managed TLS certificate. No separate proxy or edge was added. Gate registration values in the example profile are not evidence of DNS, TLS, live registration or secret payloads.
@@ -39,12 +41,12 @@ Runtime configuration requires:
 | `AUTH_ISSUER` | Canonical HTTPS Gate issuer, with no trailing slash, credentials, query or fragment |
 | `AUTH_AUDIENCE` | Public API resource origin under the configured Gate cookie parent |
 | `AUTH_API_RESOURCE_CLIENT_ID`, `AUTH_API_RESOURCE_CLIENT_SECRET` | API-only Gate introspection credentials |
-| `AUTH_MCP_READ_AUDIENCE`, `AUTH_MCP_READ_RESOURCE_CLIENT_ID`, `AUTH_MCP_READ_RESOURCE_CLIENT_SECRET` | MCP read resource and its independent introspection credentials |
-| `AUTH_MCP_WRITE_AUDIENCE`, `AUTH_MCP_WRITE_RESOURCE_CLIENT_ID`, `AUTH_MCP_WRITE_RESOURCE_CLIENT_SECRET` | MCP write resource and its independent introspection credentials |
+| `AUTH_MCP_AUDIENCE` | Exact MCP resource audience: the configured public API origin plus `/mcp` |
+| `AUTH_MCP_RESOURCE_CLIENT_ID`, `AUTH_MCP_RESOURCE_CLIENT_SECRET` | The MCP resource's dedicated Gate introspection credentials |
 | `API_ALLOWED_ORIGINS` | Optional exact Origin allowlist for browser clients that send bearer tokens; CORS is not an authorization control |
 | `MCP_BASE_URL`, `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS` | Public resource metadata and MCP Host/Origin allowlists |
 
-The API, read and write resources use distinct Gate resource registrations and secrets. Configure their audiences as the public API origin, `/mcp/read` and `/mcp/write`. Resource credentials must not be reused as OAuth client secrets. Secret values belong only in the approved secret manager and never in checked-in configuration, manifests, build contexts or logs.
+The REST API and MCP use distinct Gate resource registrations and secrets. Configure their audiences as the public API origin and its `/mcp` path. The MCP resource credential authenticates the MCP resource; read and write permissions come from the mapped Lore principal's current capability ceiling and grants. Resource credentials must not be reused as OAuth client secrets. Secret values belong only in the approved secret manager and never in checked-in configuration, manifests, build contexts or logs.
 
 Gate access tokens are opaque. The service discovers the issuer's introspection endpoint and checks each presented token online for active state, issuer, client and exact audience. There is no local JWKS verifier or positive authorization cache. A Gate subject is admitted only when an operator-created `external_identity_bindings` row maps that exact identity to an existing principal, selected scopes and capability ceiling. Current grants, source rights and authorization epochs still apply.
 
@@ -54,7 +56,7 @@ Prepare one reviewed mapping file per Gate subject. It must identify the expecte
 
 The 2026-10-18 production cutover and current state are:
 
-1. Gate API, MCP read and MCP write resources and their secret references are configured for the deployed API. Private probes verified resource credentials; Gate identity bindings point to existing users and grants.
+1. At the 2026-10-18 cutover, Gate API, MCP read and MCP write resources and their secret references were configured for the deployed API. Those dated readbacks describe the prior resource split; the single `/mcp` resource in this source requires the rollout prerequisites above. Gate identity bindings point to existing users and grants.
 2. Migration 0042 was applied and rechecked; backup bytes, database hashes, RLS, sequences and the GCS ledger head were read back. Ledger reconciliation reported already-current with zero replay and zero purge.
 3. The immutable image is serving 100% on the API and worker. The worker's private readiness and Scheduler path passed. A real Gate browser login and approval were confirmed; positive authenticated MCP data access was not.
 4. Domain mapping, DNS, public API invocation and the Ready TLS certificate are active. The 2026-10-19 API-only correction now serves 100% of API and Gate traffic. Production probes verified the removed Lore login/session routes, cookie-only and invalid-bearer rejection, MCP method behavior, worker privacy, and removal of the obsolete browser app. Positive hosted MCP data access and successful real-user retrieval remain unverified.

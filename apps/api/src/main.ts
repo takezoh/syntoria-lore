@@ -21,10 +21,8 @@ const issuer = canonicalIssuer(requiredEnvironment('AUTH_ISSUER'));
 const audience = requiredEnvironment('AUTH_AUDIENCE');
 const allowLoopbackHttp = process.env['AUTH_GATE_ALLOW_LOOPBACK_HTTP'] === '1';
 const mcpBaseUrl = requiredEnvironment('MCP_BASE_URL');
-const mcpReadAudience = canonicalMcpResource(mcpBaseUrl, 'read');
-const mcpWriteAudience = canonicalMcpResource(mcpBaseUrl, 'write');
-assertConfiguredAudience('AUTH_MCP_READ_AUDIENCE', mcpReadAudience);
-assertConfiguredAudience('AUTH_MCP_WRITE_AUDIENCE', mcpWriteAudience);
+const mcpAudience = canonicalMcpResource(mcpBaseUrl);
+assertConfiguredAudience('AUTH_MCP_AUDIENCE', mcpAudience);
 const mcpAllowedHosts = (process.env['MCP_ALLOWED_HOSTS'] ?? 'localhost,127.0.0.1,::1')
   .split(',')
   .map((value) => value.trim())
@@ -45,19 +43,12 @@ const auth = new Authenticator({
   clientId: requiredEnvironment('AUTH_API_RESOURCE_CLIENT_ID'),
   clientSecret: requiredEnvironment('AUTH_API_RESOURCE_CLIENT_SECRET'),
 });
-const mcpReadAuth = new Authenticator({
+const mcpAuth = new Authenticator({
   pool,
   ...commonIdentityProviderConfig,
-  audience: mcpReadAudience,
-  clientId: requiredEnvironment('AUTH_MCP_READ_RESOURCE_CLIENT_ID'),
-  clientSecret: requiredEnvironment('AUTH_MCP_READ_RESOURCE_CLIENT_SECRET'),
-});
-const mcpWriteAuth = new Authenticator({
-  pool,
-  ...commonIdentityProviderConfig,
-  audience: mcpWriteAudience,
-  clientId: requiredEnvironment('AUTH_MCP_WRITE_RESOURCE_CLIENT_ID'),
-  clientSecret: requiredEnvironment('AUTH_MCP_WRITE_RESOURCE_CLIENT_SECRET'),
+  audience: mcpAudience,
+  clientId: requiredEnvironment('AUTH_MCP_RESOURCE_CLIENT_ID'),
+  clientSecret: requiredEnvironment('AUTH_MCP_RESOURCE_CLIENT_SECRET'),
 });
 const core = new CoreService(pool, CursorCodec.fromEnvironment());
 const governanceStorage = createGovernanceStorage();
@@ -82,8 +73,7 @@ const confirmations = new ChangeConfirmationService({
 const server = createApiServer({
   productDisplayName,
   auth,
-  mcpReadAuth,
-  mcpWriteAuth,
+  mcpAuth,
   mcpAuthorizationServerUrl: issuer,
   mcpResourceBaseUrl: mcpBaseUrl,
   apiAllowedOrigins,
@@ -136,7 +126,7 @@ function canonicalIssuer(value: string): string {
   return parsed.origin;
 }
 
-function canonicalMcpResource(baseUrl: string, endpoint: 'read' | 'write'): string {
+function canonicalMcpResource(baseUrl: string): string {
   const base = new URL(baseUrl);
   if (
     (base.protocol !== 'http:' && base.protocol !== 'https:') ||
@@ -150,7 +140,7 @@ function canonicalMcpResource(baseUrl: string, endpoint: 'read' | 'write'): stri
       'MCP_BASE_URL must be an HTTP origin without credentials, path, query, or fragment',
     );
   }
-  return new URL(`/mcp/${endpoint}`, base).toString();
+  return new URL('/mcp', base).toString();
 }
 
 function assertConfiguredAudience(name: string, canonical: string): void {

@@ -72,7 +72,7 @@ describe('API-only Gate authentication', () => {
     });
     expect(restCookieOnly.status).toBe(401);
 
-    const mcpCookieOnly = await fetch(`${origin}/mcp/read`, {
+    const mcpCookieOnly = await fetch(`${origin}/mcp`, {
       method: 'POST',
       headers: {
         cookie: '__Secure-gate_session=opaque-session',
@@ -81,7 +81,21 @@ describe('API-only Gate authentication', () => {
       body: '{}',
     });
     expect(mcpCookieOnly.status).toBe(401);
-    expect((await fetch(`${origin}/mcp/read`, { method: 'GET' })).status).toBe(405);
+    expect((await fetch(`${origin}/mcp`, { method: 'GET' })).status).toBe(405);
+    expect((await fetch(`${origin}/mcp/read`, { method: 'POST' })).status).toBe(404);
+    expect((await fetch(`${origin}/mcp/write`, { method: 'POST' })).status).toBe(404);
+    const metadata = await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`);
+    expect(metadata.status).toBe(200);
+    expect(await metadata.json()).toMatchObject({
+      resource: 'http://127.0.0.1/mcp',
+      authorization_servers: ['https://gate.example.test'],
+    });
+    expect((await fetch(`${origin}/.well-known/oauth-protected-resource/mcp/read`)).status).toBe(
+      404,
+    );
+    expect((await fetch(`${origin}/.well-known/oauth-protected-resource/mcp/write`)).status).toBe(
+      404,
+    );
 
     const bearer = await fetch(`${origin}/v1/memories:remember`, {
       method: 'POST',
@@ -112,8 +126,7 @@ function startServer(
 ): Server {
   const server = createApiServer({
     auth,
-    mcpReadAuth: auth,
-    mcpWriteAuth: auth,
+    mcpAuth: auth,
     mcpAuthorizationServerUrl: 'https://gate.example.test',
     mcpResourceBaseUrl: 'http://127.0.0.1',
     mcpAllowedHosts: ['127.0.0.1'],

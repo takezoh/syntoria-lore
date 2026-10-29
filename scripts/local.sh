@@ -103,7 +103,8 @@ Usage: sh scripts/local.sh COMMAND [ARGS]
   restore-reconcile     replay the separate deletion ledger through the non-bypass worker role
   scheduler | duplicate-scheduler | fail-next-task | fail-next-provider [curator|embedding]
   smoke | recovery-smoke | eval | load [COUNT] [CONCURRENCY] | acceptance
-  smoke/eval/load require Gate bearer tokens in LOCAL_*_BEARER_TOKEN environment variables
+  smoke needs LOCAL_API_BEARER_TOKEN and a read+write LOCAL_MCP_BEARER_TOKEN
+  eval also needs LOCAL_API_READONLY_BEARER_TOKEN for its authorization probes
   acceptance also restarts the Compose stack and verifies previously stored data
 EOF
     ;;

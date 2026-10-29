@@ -134,8 +134,8 @@ Lore renders the statements, kinds, statuses, subjects, validity, context, targe
 ### Tool and API behavior
 
 - A protected operation called by a non-user actor returns HTTP 202 (MCP: a successful result) with `{ "status": "confirmation_required", "confirmation": { "confirmation_id", "url", "summary", … } }`, not `user_required`. The same idempotency key returns the same confirmation, and reusing it for a different change returns 409. A pending confirmation for the same operation and payload from the same principal is returned instead of creating another. Operations without an idempotency key use the request's content hash as one.
-- `get_confirmation` (MCP read endpoint) and `GET /v1/confirmations/{id}` return the local state without changing anything.
-- `complete_confirmation` (MCP write endpoint) and `POST /v1/confirmations/{id}:complete` apply an approved change once. They return `committed` with the change's normal response, or `pending`, `denied`, `expired`, `cancelled` or `failed` without applying anything. A confirmation completes only through the endpoint that requested it, because Gate consumes it only for that resource's credentials; another endpoint receives 409.
+- `get_confirmation` (MCP `/mcp`) and `GET /v1/confirmations/{id}` return the local state without changing anything.
+- `complete_confirmation` (MCP `/mcp`) and `POST /v1/confirmations/{id}:complete` apply an approved change once. They return `committed` with the change's normal response, or `pending`, `denied`, `expired`, `cancelled` or `failed` without applying anything. A confirmation completes only through the OAuth resource that requested it, because Gate consumes it with that resource's credentials. MCP read and write operations share `/mcp`; the REST API remains a separate resource and receives 409 if it attempts to complete an MCP confirmation. See [ADR 0005](../adr/0005-use-one-mcp-resource.md).
 - A User actor keeps calling the same tools and routes and is never asked for a confirmation.
 
 ### Commit

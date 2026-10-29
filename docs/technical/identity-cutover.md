@@ -2,6 +2,8 @@
 
 The Gate identity cutover is deployed and preserves existing Lore user IDs, principals, grants, memories and history. The follow-up API-only correction is also deployed: Lore has no browser sign-in behavior and Gate remains the online identity authority. The obsolete Lore browser binding was deactivated through the reviewed exact-baseline procedure; existing users, principals, grants and the MCP binding were retained. Neither step creates a user from an OAuth profile or expands grants.
 
+The source now expects one MCP resource at `/mcp`, with tool exposure based on the mapped principal's current capabilities. This source change has not been deployed; hosted Gate registration and MCP client reconnection remain rollout prerequisites documented in [deployment](deployment.md).
+
 ## Data and authority contract
 
 The current `external_identity_bindings` table is keyed by exact Gate issuer and immutable subject. Migration 0043 consolidates equivalent active admissions without merging inactive permissions or conflicting policies. Each row points to an existing user and principal and limits access to an explicit scope list and capability ceiling. Existing principals, grants, source rights, authorization epochs and forced RLS remain in force. Migration 0041 and earlier applied SQL are unchanged.
@@ -12,7 +14,7 @@ Do not use a Gate login token as evidence for an operator mapping. The operator'
 
 ## Runtime authentication
 
-The API has three independent Gate resource verifiers: API, MCP read and MCP write. Each uses its own introspection client credentials and exact audience. Lore accepts bearer tokens only; Gate owns sign-in, approvals, sessions and logout, while MCP clients own their OAuth callback. A token must be active at Gate and name an introspected client ID and expected issuer/audience. Tokens are not decoded as local JWTs. The service does not cache successful Gate checks. Invalid or revoked credentials return 401; an identity without a local binding or current grant returns 403; a Gate or authorization-storage outage returns 503 and fails closed. `/auth-return.html` and `/v1/session` return 404; a cookie alone does not authorize REST or MCP.
+The API has separate Gate resource verifiers for REST and the single MCP resource at `/mcp`; each uses dedicated introspection credentials and an exact audience. Lore accepts bearer tokens only; Gate owns sign-in, approvals, sessions and logout, while MCP clients own their OAuth callback. A token must be active at Gate and name an introspected client ID and expected issuer/audience. Tokens are not decoded as local JWTs. The service does not cache successful Gate checks. Invalid or revoked credentials return 401; an identity without a local binding or current grant returns 403; a Gate or authorization-storage outage returns 503 and fails closed. MCP lists operations from the actor's current `read` and `write` capabilities, then domain services enforce scope and higher authority requirements. `/auth-return.html` and `/v1/session` return 404; a cookie alone does not authorize REST or MCP.
 
 REST and MCP ignore Cookie headers; cookie-only requests do not authorize, and a valid resource-specific Gate bearer token is required. `/auth-return.html` and `/v1/session` return 404. REST CORS is non-credentialed and uses the optional `API_ALLOWED_ORIGINS` allowlist; Origin does not authorize a request. MCP checks Host and supplied Origin only for DNS-rebinding protection. Gate owns browser login, sessions and logout; OAuth client grants remain revocable there.
 
@@ -27,7 +29,7 @@ npm run build
 node --env-file=/tmp/memory-gate-test.env scripts/testing/verify-gate-integration.mjs
 ```
 
-The harness uses a synthetic GitHub exchange and local Gate configuration. It verifies removed Lore callback/session routes, cookie-only rejection, API bearer write/read, resource separation, opaque API/MCP tokens, SDK MCP calls, outage handling and actual OAuth grant revocation. Hosted DNS/TLS, GitHub identity, Cloud Run, Firestore and Neon remain outside this local evidence.
+The harness uses a synthetic GitHub exchange and local Gate configuration. It verifies removed Lore callback/session routes, cookie-only rejection, API bearer write/read, API versus MCP audience separation, opaque API/MCP tokens, SDK MCP calls, outage handling and actual OAuth grant revocation. Hosted DNS/TLS, GitHub identity, Cloud Run, Firestore and Neon remain outside this local evidence.
 
 For the preservation regression, the disposable database test applies prior migration SQL unchanged, creates existing user, principal, scopes, grants, memory, idempotency receipt/hash and v1 cursor, applies 0041 and then 0042 twice, and checks exact IDs, values, table OID, RLS and empty initial Gate bindings. Keep this procedure on isolated test databases; the hosted migration requires its own backup, readback and approved deployment window.
 

@@ -33,8 +33,7 @@ export interface ApiServerOptions {
   readonly governance?: ForgetService;
   readonly portability?: PortabilityService;
   readonly confirmations?: ChangeConfirmationService;
-  readonly mcpReadAuth?: Authenticator;
-  readonly mcpWriteAuth?: Authenticator;
+  readonly mcpAuth?: Authenticator;
   readonly mcpAuthorizationServerUrl?: string;
   readonly mcpResourceBaseUrl?: string;
   readonly mcpAllowedHosts?: readonly string[];
@@ -126,11 +125,7 @@ async function handleRequest(
     response.end('Not Found');
     return;
   }
-  if (
-    request.method === 'GET' &&
-    /^\/\.well-known\/oauth-protected-resource\/mcp\/(read|write)$/.test(url.pathname)
-  ) {
-    const endpoint = url.pathname.endsWith('/read') ? 'read' : 'write';
+  if (request.method === 'GET' && url.pathname === '/.well-known/oauth-protected-resource/mcp') {
     if (options?.mcpAuthorizationServerUrl === undefined) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('Not Found');
@@ -151,7 +146,7 @@ async function handleRequest(
       return;
     }
     const origin = options.mcpResourceBaseUrl ?? requestOrigin(request);
-    const resource = new URL(`/mcp/${endpoint}`, origin).toString();
+    const resource = new URL('/mcp', origin).toString();
     sendJson(response, 200, {
       resource,
       authorization_servers: [options.mcpAuthorizationServerUrl],
@@ -187,9 +182,7 @@ async function handleRequest(
   }
   if (
     options?.ready !== undefined &&
-    (url.pathname.startsWith('/v1/') ||
-      url.pathname === '/mcp/read' ||
-      url.pathname === '/mcp/write')
+    (url.pathname.startsWith('/v1/') || url.pathname === '/mcp')
   ) {
     try {
       await options.ready();
@@ -202,9 +195,8 @@ async function handleRequest(
       return;
     }
   }
-  if (url.pathname === '/mcp/read' || url.pathname === '/mcp/write') {
-    const endpoint = url.pathname === '/mcp/read' ? 'read' : 'write';
-    const endpointAuth = endpoint === 'read' ? options?.mcpReadAuth : options?.mcpWriteAuth;
+  if (url.pathname === '/mcp') {
+    const endpointAuth = options?.mcpAuth;
     if (options === undefined || endpointAuth === undefined) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('Not Found');
@@ -261,7 +253,6 @@ async function handleRequest(
       const actor = await authenticateWithinLimits(endpointAuth, request, limits);
       const webRequest = await toWebRequest(request, options.maxBodyBytes ?? maxBodyBytes);
       const webResponse = await handleMcpRequest(
-        endpoint,
         {
           productDisplayName: options.productDisplayName ?? getProductDisplayName(),
           auth: endpointAuth,
@@ -292,10 +283,7 @@ async function handleRequest(
       if (coreError.status === 429) response.setHeader('retry-after', '60');
       if (coreError.status === 401) {
         const metadataBase = options.mcpResourceBaseUrl ?? requestOrigin(request);
-        const metadata = new URL(
-          '/.well-known/oauth-protected-resource/mcp/' + endpoint,
-          metadataBase,
-        );
+        const metadata = new URL('/.well-known/oauth-protected-resource/mcp', metadataBase);
         response.setHeader('www-authenticate', `Bearer resource_metadata="${metadata.toString()}"`);
       }
       sendError(response, coreError, requestId);

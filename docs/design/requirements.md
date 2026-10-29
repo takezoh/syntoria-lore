@@ -52,7 +52,7 @@ This document is the product contract for Release 1: the functional requirements
 **Security, operations and portability (FR-GOV)**
 
 - FR-GOV-01: Authorize delegated OAuth access per user, scope and operation.
-- FR-GOV-02: Provide read-only and write-capable MCP entry points with separate authorization policies.
+- FR-GOV-02: Provide one MCP entry point and authorize each operation from the principal's current capabilities.
 - FR-GOV-03: Instrument and audit capture, curation, recall and forget without logging content or secrets.
 - FR-GOV-04: Re-evaluate or block rights-dependent derived memories when source access is stopped or deleted.
 - FR-GOV-05: Export memories, relations, evidence and history in a portable format.

@@ -2,6 +2,8 @@
 
 This runbook describes code-level and local verification for the Gate cutover; it does not authorize hosted changes. The Gate-only API and worker rollout, the 2026-10-19 API-only authentication correction, the 2026-10-20 DCR release and the 2026-10-29 change confirmation release are deployed. The latest API and Gate revisions are Ready at 100% traffic, and the connection-principal switch is set for the production binding; the API's approved public invoker binding and public HTTPS certificate remain active, and the worker remains private with unchanged IAM. The checked-in `infra/cloud/deployment.json` is a synthetic example; the production profile stays in the ignored `.local/cloud/deployment.json`. Production negative-authentication probes passed; positive hosted MCP data access remains unverified.
 
+The source contract now requires one Gate MCP resource at the exact `/mcp` audience. That change has not been deployed. Before a rollout, update the ignored deployment profile and Secret Manager reference, register the matching Gate resource and reconnect MCP clients; this runbook does not authorize those hosted changes.
+
 ## Verify the implementation locally
 
 Use Node.js 24 and npm 11. The unit command does not need a database. The PostgreSQL command requires the prepared loopback test cluster and never targets the hosted database.
@@ -21,7 +23,7 @@ npm run build
 node --env-file=/tmp/memory-gate-test.env scripts/testing/verify-gate-integration.mjs
 ```
 
-The harness uses a synthetic GitHub identity exchange. It exercises Gate OAuth approval and grant revocation, while Lore callback and session routes remain absent; cookie-only REST and MCP requests are rejected; an opaque API-resource token writes and reads a memory; a resource-specific MCP token reads that same memory; resource audiences remain isolated; and a Gate outage fails closed. It does not use hosted Firestore, GitHub, Cloud Run, public DNS/TLS or hosted Neon.
+The harness uses a synthetic GitHub identity exchange. It exercises Gate OAuth approval and grant revocation, while Lore callback and session routes remain absent; cookie-only REST and MCP requests are rejected; an opaque API-resource token writes and reads a memory; an MCP-resource token uses the shared `/mcp` endpoint; the API and MCP audiences remain isolated; and a Gate outage fails closed. It does not use hosted Firestore, GitHub, Cloud Run, public DNS/TLS or hosted Neon.
 
 ## Review an identity mapping
 
@@ -92,4 +94,4 @@ The API, worker, Weave runtime and Weave jobs use other roles and are not affect
 
 The 2026-10-19 production readback is recorded in the [API-only correction record](../eval/api-only-gate-auth-correction-20261019.md). `/readyz` returned 200; `/auth-return.html` and `/v1/session` returned 404; unauthenticated, cookie-only and invalid-bearer REST/MCP probes returned 401 where applicable; MCP GET returned 405; resource metadata returned 200; and anonymous worker access returned 403. Gate returned a GitHub redirect and set a cookie for both MCP read and write login initiation. These checks establish the deployed negative boundaries and OAuth initiation only. The 2026-10-29 readbacks for the change confirmation release, the switch and the follow-up release are in the [change confirmation release record](../eval/change-confirmation-release-20261029.md).
 
-Positive hosted MCP data access with a real user, including successful retrieval from Lore, remains unverified. Hosted bearer access to each exact resource, wrong-resource rejection, and hosted grant-revocation or Gate-outage behavior also remain separate acceptance checks; local harness results do not establish them. Track recovery, PITR, observability, capacity, cost, security/privacy and broader production acceptance separately, and capture future readbacks in a dated release record.
+Positive hosted MCP data access with a real user, including successful retrieval from Lore, remains unverified. Hosted bearer access to the exact API and `/mcp` resources, rejection of a token at the other resource, capability-specific tool visibility, and hosted grant-revocation or Gate-outage behavior remain separate acceptance checks; local harness results do not establish them. Track recovery, PITR, observability, capacity, cost, security/privacy and broader production acceptance separately, and capture future readbacks in a dated release record.

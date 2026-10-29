@@ -30,6 +30,9 @@ const contextPolicy = join(process.cwd(), 'scripts/cloud-build-context-policy.mj
 const deploymentConfig = JSON.parse(
   await readFile(join(process.cwd(), 'infra/cloud/deployment.json'), 'utf8'),
 );
+const iamContractConfig = JSON.parse(
+  await readFile(join(process.cwd(), 'infra/cloud/iam-contract.json'), 'utf8'),
+);
 const immutableImage = `${deploymentConfig.artifactRegistry}/${deploymentConfig.imageName}@sha256:${'a'.repeat(64)}`;
 
 type SecretReference = { name: string; key: string };
@@ -122,7 +125,7 @@ describe('cloud deployment manifests', () => {
     expect(workflow).not.toContain('THYMESIS_TEST_ADMIN_URL');
   });
 
-  it('configures API-only Gate resources with separate resource audiences', () => {
+  it('configures one MCP resource audience alongside the separate REST resource', () => {
     expect(deploymentConfig.gate.issuer).toBe('https://gate.example.com');
     expect(deploymentConfig.services.api.url).toMatch(/^https:\/\/[^/]+\.run\.app$/);
     expect(deploymentConfig.services.api.publicUrl).toBe(deploymentConfig.gate.resourceOrigin);
@@ -130,13 +133,15 @@ describe('cloud deployment manifests', () => {
     expect(deploymentConfig.gate).not.toHaveProperty('browserAppId');
     expect(deploymentConfig.gate).not.toHaveProperty('browserClientId');
     expect(deploymentConfig.gate).not.toHaveProperty('browserRedirectUri');
+    expect(deploymentConfig.gate.mcpResource.clientId).toBe('memory-mcp-resource');
+    expect(deploymentConfig.gate).not.toHaveProperty('readResource');
+    expect(deploymentConfig.gate).not.toHaveProperty('writeResource');
     expect(
       new Set([
         deploymentConfig.gate.apiResource.clientId,
-        deploymentConfig.gate.readResource.clientId,
-        deploymentConfig.gate.writeResource.clientId,
+        deploymentConfig.gate.mcpResource.clientId,
       ]).size,
-    ).toBe(3);
+    ).toBe(2);
     expect(deploymentConfig.neon.sourceMigrationCount).toBe(41);
     expect(deploymentConfig.neon.targetActivationStatus).toBe(
       'gate-cutover-deployed; public-https-active; api-only-auth-pending',
@@ -186,6 +191,20 @@ describe('cloud deployment manifests', () => {
         name: deploymentConfig.gate.apiResource.clientSecretSecret,
         key: '1',
       });
+      expect(envValue(api, 'AUTH_MCP_AUDIENCE')).toBe(
+        `${deploymentConfig.gate.resourceOrigin}/mcp`,
+      );
+      expect(envValue(api, 'AUTH_MCP_RESOURCE_CLIENT_ID')).toBe(
+        deploymentConfig.gate.mcpResource.clientId,
+      );
+      const mcpResourceSecret = envSecret(api, 'AUTH_MCP_RESOURCE_CLIENT_SECRET');
+      expect(mcpResourceSecret).toEqual({
+        name: deploymentConfig.gate.mcpResource.clientSecretSecret,
+        key: '1',
+      });
+      expect(iamContractConfig.secretAccessors[mcpResourceSecret!.name]).toContain('api');
+      expect(envValue(api, 'AUTH_MCP_READ_AUDIENCE')).toBeUndefined();
+      expect(envValue(api, 'AUTH_MCP_WRITE_AUDIENCE')).toBeUndefined();
       expect(envSecret(worker, 'WORKER_DATABASE_URL')).toEqual({
         name: deploymentConfig.secrets.workerDatabase,
         key: '1',

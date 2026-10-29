@@ -18,17 +18,15 @@ if (
 const base = apiBase.origin;
 const scopeId = '22222222-2222-4222-8222-222222222222';
 const restToken = required('LOCAL_API_BEARER_TOKEN');
-const userToken = required('LOCAL_MCP_WRITE_BEARER_TOKEN');
-const readerToken = required('LOCAL_MCP_READ_BEARER_TOKEN');
-const metadata = await fetch(`${base}/.well-known/oauth-protected-resource/mcp/read`).then((r) =>
+const mcpToken = required('LOCAL_MCP_BEARER_TOKEN');
+const metadata = await fetch(`${base}/.well-known/oauth-protected-resource/mcp`).then((r) =>
   r.json(),
 );
-if (metadata.resource !== `${base}/mcp/read`)
-  throw new Error('MCP metadata resource is not canonical');
-const wrongAudience = await fetch(`${base}/mcp/read`, {
+if (metadata.resource !== `${base}/mcp`) throw new Error('MCP metadata resource is not canonical');
+const wrongAudience = await fetch(`${base}/mcp`, {
   method: 'POST',
   headers: {
-    authorization: `Bearer ${userToken}`,
+    authorization: `Bearer ${restToken}`,
     'content-type': 'application/json',
     'mcp-protocol-version': '2025-11-25',
   },
@@ -71,49 +69,67 @@ const remembered = await remember.json();
 const memoryId = remembered.operations?.[0]?.memory_ids?.[0];
 if (!memoryId) throw new Error('REST Remember returned no memory identifier');
 
-const readerClient = new Client({ name: 'memory-local-reader', version: '1.0.0' });
-const readerTransport = new StreamableHTTPClientTransport(new URL(`${base}/mcp/read`), {
-  requestInit: { headers: { authorization: `Bearer ${readerToken}` } },
-});
-const userClient = new Client({ name: 'memory-local-user', version: '1.0.0' });
-const userTransport = new StreamableHTTPClientTransport(new URL(`${base}/mcp/write`), {
-  requestInit: { headers: { authorization: `Bearer ${userToken}` } },
+const client = new Client({ name: 'memory-local-client', version: '1.0.0' });
+const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+  requestInit: { headers: { authorization: `Bearer ${mcpToken}` } },
 });
 try {
-  await Promise.all([readerClient.connect(readerTransport), userClient.connect(userTransport)]);
-  const readTools = await readerClient.listTools();
-  const writeTools = await userClient.listTools();
-  if (!readTools.tools.some((tool) => tool.name === 'recall_memories'))
-    throw new Error('Read MCP client has no Recall tool');
-  if (!writeTools.tools.some((tool) => tool.name === 'remember_memory'))
-    throw new Error('Write MCP client has no Remember tool');
-  const recall = await readerClient.callTool({
+  await client.connect(transport);
+  const tools = await client.listTools();
+  if (!tools.tools.some((tool) => tool.name === 'recall_memories'))
+    throw new Error('MCP client has no Recall tool');
+  if (!tools.tools.some((tool) => tool.name === 'remember_memory'))
+    throw new Error('MCP client has no Remember tool');
+  const recall = await client.callTool({
     name: 'recall_memories',
     arguments: { scope_id: scopeId, query: statement, mode: 'precise', limit: 5 },
   });
-  if (recall.isError) throw new Error('Reader MCP client could not recall the REST memory');
+  if (recall.isError) throw new Error('MCP client could not recall the REST memory');
   const recallJson = recall.structuredContent ?? parseToolJson(recall.content);
   if (!JSON.stringify(recallJson).includes(memoryId))
     throw new Error('MCP Recall did not return the REST memory ID');
-  if (readTools.tools.some((tool) => tool.name === 'remember_memory'))
-    throw new Error('Read-only MCP client exposes a write tool');
+  const mcpStatement = `Local OAuth/MCP write ${randomUUID()}`;
+  const rememberedThroughMcp = await client.callTool({
+    name: 'remember_memory',
+    arguments: {
+      scope_id: scopeId,
+      idempotency_key: randomUUID(),
+      memory: {
+        kind: 'fact',
+        statement: mcpStatement,
+        context: {},
+        subjects: [],
+        evidence: [
+          {
+            source: {
+              kind: 'explicit_remember',
+              external_id: `local-smoke-${randomUUID()}`,
+              revision: '1',
+              locator: 'local/smoke-mcp-write',
+            },
+            snippet: mcpStatement,
+            snippet_allowed: true,
+          },
+        ],
+      },
+    },
+  });
+  if (rememberedThroughMcp.isError) throw new Error('MCP client could not write through /mcp');
   process.stdout.write(
     `${JSON.stringify(
       {
         status: 'passed',
-        distinct_principals: 2,
         canonical_resource: metadata.resource,
         audience_confusion: 'rejected',
         rest_remember_memory_id: memoryId,
-        mcp_reader_recalled_rest_memory: true,
-        read_only_write: 'not-exposed',
+        mcp_same_connection_read_and_write: true,
       },
       null,
       2,
     )}\n`,
   );
 } finally {
-  await Promise.allSettled([readerClient.close(), userClient.close()]);
+  await client.close().catch(() => undefined);
 }
 
 function parseToolJson(content) {

@@ -76,18 +76,15 @@ const callback = `http://127.0.0.1:${callbackPort}/callback`;
 let mcpClientId;
 const resourceIds = {
   api: 'memory-api-resource',
-  read: 'memory-mcp-read-resource',
-  write: 'memory-mcp-write-resource',
+  mcp: 'memory-mcp-resource',
 };
 const resourceSecrets = {
   api: `synthetic-api-resource-${'a'.repeat(32)}`,
-  read: `synthetic-read-resource-${'r'.repeat(32)}`,
-  write: `synthetic-write-resource-${'w'.repeat(32)}`,
+  mcp: `synthetic-mcp-resource-${'m'.repeat(32)}`,
 };
 const audiences = {
   api: apiOrigin,
-  read: `${apiOrigin}/mcp/read`,
-  write: `${apiOrigin}/mcp/write`,
+  mcp: `${apiOrigin}/mcp`,
 };
 const subject = 'github:12345';
 const legacyIssuer = 'https://legacy-issuer.example.test';
@@ -129,7 +126,7 @@ let gateServer;
 let apiServer;
 let admin;
 let app;
-let mcpReadClient;
+let mcpClient;
 const created = { user: randomUUID(), scope: randomUUID(), principal: randomUUID() };
 let trustedGateAvailable = true;
 
@@ -209,8 +206,7 @@ try {
       fetch: trustedFetch,
     });
   const apiAuth = authFor('api');
-  const readAuth = authFor('read');
-  const writeAuth = authFor('write');
+  const mcpAuth = authFor('mcp');
   const cursorKey = Buffer.alloc(32, 17);
   const cursorCodec = new CursorCodec(
     'gate-integration',
@@ -222,8 +218,7 @@ try {
   const recall = new RecallService(app, core, new LocalDeterministicEmbeddingProvider());
   apiServer = createApiServer({
     auth: apiAuth,
-    mcpReadAuth: readAuth,
-    mcpWriteAuth: writeAuth,
+    mcpAuth,
     mcpAuthorizationServerUrl: issuer,
     mcpResourceBaseUrl: apiOrigin,
     mcpAllowedHosts: ['memory.example.test', '127.0.0.1'],
@@ -235,6 +230,13 @@ try {
     apiServer.listen(0, '127.0.0.1', resolveListen);
   });
   const apiPort = apiServer.address().port;
+  const resourceMetadata = await apiRequest(apiPort, '/.well-known/oauth-protected-resource/mcp', {
+    method: 'GET',
+  });
+  assert.equal(resourceMetadata.status, 200, resourceMetadata.text);
+  assert.equal(JSON.parse(resourceMetadata.text).resource, audiences.mcp);
+  assert.equal((await apiRequest(apiPort, '/mcp/read', { method: 'POST' })).status, 404);
+  assert.equal((await apiRequest(apiPort, '/mcp/write', { method: 'POST' })).status, 404);
 
   const registration = await trustedFetch(`${issuer}/reg`, {
     method: 'POST',
@@ -284,7 +286,7 @@ try {
     }),
   });
   assert.equal(cookieOnlyApi.status, 401, cookieOnlyApi.text);
-  const cookieOnlyMcp = await apiRequest(apiPort, '/mcp/read', {
+  const cookieOnlyMcp = await apiRequest(apiPort, '/mcp', {
     method: 'POST',
     headers: {
       cookie: '__Secure-gate_session=synthetic-session',
@@ -293,7 +295,7 @@ try {
     body: '{}',
   });
   assert.equal(cookieOnlyMcp.status, 401, cookieOnlyMcp.text);
-  assert.equal((await apiRequest(apiPort, '/mcp/read', { method: 'GET' })).status, 405);
+  assert.equal((await apiRequest(apiPort, '/mcp', { method: 'GET' })).status, 405);
 
   const apiToken = await acquireMcpToken(audiences.api);
   const apiActor = await apiAuth.authenticateBearer(`Bearer ${apiToken}`);
@@ -303,7 +305,8 @@ try {
     'Gate API resource token maps to the same existing user',
   );
   await apiAuth.assertCurrent(apiActor);
-  const accessToken = await acquireMcpToken(audiences.read);
+  const accessToken = await acquireMcpToken(audiences.mcp);
+  await assert.rejects(mcpAuth.authenticateBearer(`Bearer ${apiToken}`), { status: 401 });
   await assert.rejects(apiAuth.authenticateBearer(`Bearer ${accessToken}`), { status: 401 });
 
   const writeResponse = await apiRequest(apiPort, '/v1/memories:remember', {
@@ -350,23 +353,22 @@ try {
     accessToken.length > 16 && !accessToken.startsWith('eyJ'),
     'Gate access token is opaque, not a signed JWT',
   );
-  const actor = await readAuth.authenticateBearer(`Bearer ${accessToken}`);
+  const actor = await mcpAuth.authenticateBearer(`Bearer ${accessToken}`);
   assert.equal(actor.userId, created.user);
   assert.equal(actor.principalId, created.principal);
   assert.equal(actor.scopeIds[0], created.scope);
-  await readAuth.assertCurrent(actor);
-  await assert.rejects(writeAuth.authenticateBearer(`Bearer ${accessToken}`), { status: 401 });
+  await mcpAuth.assertCurrent(actor);
 
-  mcpReadClient = new McpClient({ name: 'memory-gate-integration', version: '1.0.0' });
-  await mcpReadClient.connect(
-    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${apiPort}/mcp/read`), {
+  mcpClient = new McpClient({ name: 'memory-gate-integration', version: '1.0.0' });
+  await mcpClient.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${apiPort}/mcp`), {
       authProvider: { token: async () => accessToken },
     }),
   );
-  const tools = await mcpReadClient.listTools();
+  const tools = await mcpClient.listTools();
   assert.ok(tools.tools.some((tool) => tool.name === 'recall_memories'));
-  assert.ok(!tools.tools.some((tool) => tool.name === 'remember_memory'));
-  const mcpRead = await mcpReadClient.callTool({
+  assert.ok(tools.tools.some((tool) => tool.name === 'remember_memory'));
+  const mcpRead = await mcpClient.callTool({
     name: 'recall_memories',
     arguments: { query: apiWriteStatement, scope_id: created.scope, mode: 'precise' },
   });
@@ -374,6 +376,33 @@ try {
     !mcpRead.isError && JSON.stringify(mcpRead).includes(apiWriteStatement),
     'real Gate MCP token must read the memory written through the bearer API',
   );
+  const mcpWriteStatement = `Gate MCP bearer memory ${randomUUID()}`;
+  const mcpWrite = await mcpClient.callTool({
+    name: 'remember_memory',
+    arguments: {
+      scope_id: created.scope,
+      idempotency_key: `gate-mcp-${randomUUID()}`,
+      memory: {
+        kind: 'fact',
+        statement: mcpWriteStatement,
+        context: { source: 'gate-mcp-integration' },
+        subjects: [{ name: 'Gate integration user', aliases: [] }],
+        evidence: [
+          {
+            source: {
+              kind: 'explicit_remember',
+              external_id: `gate-mcp-${randomUUID()}`,
+              revision: '1',
+              locator: 'test/mcp-memory',
+            },
+            snippet: 'Synthetic Gate MCP integration evidence',
+            snippet_allowed: true,
+          },
+        ],
+      },
+    },
+  });
+  assert.ok(!mcpWrite.isError, 'the same MCP client must also write through /mcp');
 
   trustedGateAvailable = false;
   const outage = await apiRequest(apiPort, `/v1/memories/${memoryId}?scope_id=${created.scope}`, {
@@ -399,8 +428,8 @@ try {
     true,
   );
   assert.equal(revokeGrant.status, 303, revokeGrant.text);
-  await assert.rejects(readAuth.authenticateBearer(`Bearer ${accessToken}`), { status: 401 });
-  const revokedMcpRequest = await apiRequest(apiPort, '/mcp/read', {
+  await assert.rejects(mcpAuth.authenticateBearer(`Bearer ${accessToken}`), { status: 401 });
+  const revokedMcpRequest = await apiRequest(apiPort, '/mcp', {
     method: 'POST',
     headers: {
       authorization: `Bearer ${accessToken}`,
@@ -442,7 +471,7 @@ try {
   }
   await app?.end();
   await admin?.end();
-  await mcpReadClient?.close().catch(() => undefined);
+  await mcpClient?.close().catch(() => undefined);
   if (apiServer?.listening) await new Promise((resolveClose) => apiServer.close(resolveClose));
   if (gateServer?.listening) await new Promise((resolveClose) => gateServer.close(resolveClose));
   await clearFirestoreNamespace(firestoreDb, namespace).catch(() => undefined);
@@ -450,7 +479,7 @@ try {
   await rm(temp, { recursive: true, force: true });
 }
 
-async function acquireMcpToken(resource = audiences.read) {
+async function acquireMcpToken(resource = audiences.mcp) {
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   const authorizationUrl = `${issuer}/auth?${new URLSearchParams({

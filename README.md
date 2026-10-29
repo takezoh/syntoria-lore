@@ -32,7 +32,7 @@ Lore is personal memory for your own account. It does not track tasks or the cur
 
 ## Connect an AI client
 
-Lore works through REST and Remote MCP; it has no app or sign-in page of its own. Your AI client signs you in through Gate, the shared sign-in service, and connects to Lore's read endpoint, or also to its write endpoint if it should save and correct memories. The service operator must first admit your Gate account to Lore; there is no self-service sign-up yet, and end-to-end use with a hosted AI client has not been verified. See [client access](docs/usage/sign-in.md).
+Lore works through REST and Remote MCP; it has no app or sign-in page of its own. Your AI client signs you in through Gate, the shared sign-in service, and connects to Lore's single MCP URL. Lore makes each read or write operation available according to the capabilities granted to the mapped Lore principal; clients using the same Gate account share that principal's permissions. The service operator must first admit your Gate account to Lore; there is no self-service sign-up yet, and end-to-end use with a hosted AI client has not been verified. See [client access](docs/usage/sign-in.md).
 
 ## Use cases: ask your AI
 

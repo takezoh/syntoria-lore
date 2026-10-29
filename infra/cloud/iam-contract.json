@@ -27,8 +27,7 @@
       "secrets": [
         "lore-app-database-url:1",
         "lore-gate-api-secret:1",
-        "lore-gate-mcp-read-secret:1",
-        "lore-gate-mcp-write-secret:1",
+        "lore-gate-mcp-secret:1",
         "lore-forget-hmac-key:1",
         "lore-portability-master-key:1",
         "lore-cursor-hmac-keys:1"
@@ -257,10 +256,7 @@
     "lore-gate-api-secret": [
       "api"
     ],
-    "lore-gate-mcp-read-secret": [
-      "api"
-    ],
-    "lore-gate-mcp-write-secret": [
+    "lore-gate-mcp-secret": [
       "api"
     ],
     "lore-worker-database-url": [

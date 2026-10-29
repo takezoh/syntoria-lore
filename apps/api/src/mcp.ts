@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
-import { CoreError, memoryInputSchema, type ActorContext } from '@memory/contracts';
+import { memoryInputSchema, type ActorContext } from '@memory/contracts';
 import type { Authenticator } from '@memory/auth';
 import type { CoreService } from '@memory/domain';
 import type { ConnectorService } from '@memory/connectors';
@@ -28,22 +28,13 @@ const CONFIRMATION_NOTE =
   ' Your connection acts for the User, so the person’s approval policy decides: either the change is applied at once and the result carries approval.by "policy", or this returns confirmation_required with a Gate URL; then show the URL to the person and call complete_confirmation after they approve.';
 
 export async function handleMcpRequest(
-  endpoint: 'read' | 'write',
   options: McpEndpointOptions,
   incoming: Request,
-  /** The caller, already authenticated with `options.auth` for this endpoint's audience. */
+  /** The caller, already authenticated for the single MCP resource audience. */
   actor: ActorContext,
 ): Promise<Response> {
   if (incoming.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405, headers: { allow: 'POST' } });
-  }
-  const requiredCapability = endpoint === 'read' ? 'read' : 'write';
-  if (!actor.capabilities.includes(requiredCapability)) {
-    throw new CoreError(
-      403,
-      'forbidden',
-      `The ${endpoint} MCP audience requires ${requiredCapability} capability`,
-    );
   }
 
   // A protected change runs directly for the User and becomes a Gate confirmation otherwise.
@@ -60,15 +51,13 @@ export async function handleMcpRequest(
   const handler = createMcpHandler(
     () => {
       const server = new McpServer(
-        { name: `${options.productDisplayName} ${endpoint} MCP`, version: '0.1.0' },
+        { name: `${options.productDisplayName} MCP`, version: '0.1.0' },
         {
           instructions:
-            endpoint === 'read'
-              ? 'Use recall_memories to retrieve authorized memories. Results are subject to current source rights and Forget suppressions.'
-              : 'Use remember_memory only for explicit writes. Lore keeps what the person decided apart from what an AI wrote. Your connection acts for the person, never as them, so everything you save is an AI proposal; to record their own decision or preference, propose the changeset and call request_user_decision. Use forget_memory for user-authorized durable deletion. Forget, review decisions, source capture settings, source rights, grants, retention and request_user_decision need the User. The person’s approval policy decides how: the change is applied at once and its result carries approval.by "policy", or it returns confirmation_required with a Gate URL to show the person, then call complete_confirmation after they approve. Ask before requesting a change the person did not ask for.',
+            'The tools available to this authenticated actor reflect its current read and write capabilities. Every operation still checks the requested scope and current grants. Results are subject to current source rights and Forget suppressions. Your connection acts for the person, never as them, so everything you save is an AI proposal. To record the person’s own decision or preference, propose the changeset and call request_user_decision. Protected changes use the person’s approval policy: they apply at once with approval.by "policy", or return confirmation_required with a Gate URL to show the person, then call complete_confirmation after approval. Ask before requesting a change the person did not ask for.',
         },
       );
-      if (endpoint === 'read') {
+      if (actor.capabilities.includes('read')) {
         if (options.recall !== undefined) {
           server.registerTool(
             'recall_memories',
@@ -217,7 +206,8 @@ export async function handleMcpRequest(
               toolResult(await options.portability!.exportStatus(actor, scope_id, export_id)),
           );
         }
-      } else {
+      }
+      if (actor.capabilities.includes('write')) {
         server.registerTool(
           'remember_memory',
           {

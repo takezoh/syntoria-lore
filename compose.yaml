@@ -137,14 +137,11 @@ services:
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:?configure the HTTPS API resource in .env.local}
       AUTH_API_RESOURCE_CLIENT_ID: ${AUTH_API_RESOURCE_CLIENT_ID:?configure the Gate API resource client in .env.local}
       AUTH_API_RESOURCE_CLIENT_SECRET: ${AUTH_API_RESOURCE_CLIENT_SECRET:?configure the Gate API resource secret in .env.local}
-      AUTH_MCP_READ_RESOURCE_CLIENT_ID: ${AUTH_MCP_READ_RESOURCE_CLIENT_ID:?configure the Gate MCP read resource client in .env.local}
-      AUTH_MCP_READ_RESOURCE_CLIENT_SECRET: ${AUTH_MCP_READ_RESOURCE_CLIENT_SECRET:?configure the Gate MCP read resource secret in .env.local}
-      AUTH_MCP_WRITE_RESOURCE_CLIENT_ID: ${AUTH_MCP_WRITE_RESOURCE_CLIENT_ID:?configure the Gate MCP write resource client in .env.local}
-      AUTH_MCP_WRITE_RESOURCE_CLIENT_SECRET: ${AUTH_MCP_WRITE_RESOURCE_CLIENT_SECRET:?configure the Gate MCP write resource secret in .env.local}
+      AUTH_MCP_RESOURCE_CLIENT_ID: ${AUTH_MCP_RESOURCE_CLIENT_ID:?configure the Gate MCP resource client in .env.local}
+      AUTH_MCP_RESOURCE_CLIENT_SECRET: ${AUTH_MCP_RESOURCE_CLIENT_SECRET:?configure the Gate MCP resource secret in .env.local}
       AUTH_GATE_ALLOW_LOOPBACK_HTTP: ${AUTH_GATE_ALLOW_LOOPBACK_HTTP:-0}
       API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-}
-      AUTH_MCP_READ_AUDIENCE: ${AUTH_MCP_READ_AUDIENCE:?configure the HTTPS MCP read resource in .env.local}
-      AUTH_MCP_WRITE_AUDIENCE: ${AUTH_MCP_WRITE_AUDIENCE:?configure the HTTPS MCP write resource in .env.local}
+      AUTH_MCP_AUDIENCE: ${AUTH_MCP_AUDIENCE:?configure the HTTPS MCP resource in .env.local}
       MCP_BASE_URL: ${MCP_BASE_URL:?configure the canonical HTTPS API origin in .env.local}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-memory.example.test}
       DELETION_LEDGER_DIR: /var/memory-service/deletion-ledger

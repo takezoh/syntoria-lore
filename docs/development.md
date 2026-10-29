@@ -4,7 +4,7 @@ This guide gets a contributor from a checkout to a meaningful local verification
 
 ## Start locally
 
-The repository uses Node.js 24, npm 11 and Docker Compose. Before starting the API, configure `.env.local` with the Gate issuer, HTTPS audiences and separate API, MCP-read and MCP-write resource credentials. The local stack also needs an operator-configured HTTPS proxy for its API origin. To run the smoke check, obtain short-lived Gate bearer tokens for those exact resources and export them as `LOCAL_API_BEARER_TOKEN`, `LOCAL_MCP_READ_BEARER_TOKEN` and `LOCAL_MCP_WRITE_BEARER_TOKEN`. Follow [local operations: OAuth and client boundary](technical/local-operations.md#oauth-and-client-boundary) for the full setup; this repository does not register Gate resources, issue tokens or provide the proxy.
+The repository uses Node.js 24, npm 11 and Docker Compose. Before starting the API, configure `.env.local` with the Gate issuer, HTTPS audiences, API resource credentials and one MCP resource credential for the exact `/mcp` URL. The local stack also needs an operator-configured HTTPS proxy for its API origin. To run the smoke check, obtain a short-lived API bearer and one MCP bearer whose Lore principal has both `read` and `write` capabilities. Export them as `LOCAL_API_BEARER_TOKEN` and `LOCAL_MCP_BEARER_TOKEN`. Follow [local operations: OAuth and client boundary](technical/local-operations.md#oauth-and-client-boundary) for the full setup; this repository does not register Gate resources, issue tokens or provide the proxy.
 
 After those prerequisites are ready, install dependencies and start the local PostgreSQL, API and worker stack. The smoke command requires the bearer-token environment variables above:
 

@@ -128,13 +128,9 @@
       "clientId": "memory-api-resource",
       "clientSecretSecret": "lore-gate-memory-api-resource-secret"
     },
-    "readResource": {
-      "clientId": "memory-mcp-read-resource",
-      "clientSecretSecret": "lore-gate-memory-mcp-read-resource-secret"
-    },
-    "writeResource": {
-      "clientId": "memory-mcp-write-resource",
-      "clientSecretSecret": "lore-gate-memory-mcp-write-resource-secret"
+    "mcpResource": {
+      "clientId": "memory-mcp-resource",
+      "clientSecretSecret": "lore-gate-mcp-secret"
     },
     "resourceOrigin": "https://memory.example.com"
   }

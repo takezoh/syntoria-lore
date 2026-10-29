@@ -9,21 +9,20 @@ REST and Remote MCP expose the same application services. Gate credentials estab
 | Entry point | Resource / audience | Purpose |
 | --- | --- | --- |
 | `/v1/*` | API resource | Full REST surface |
-| `POST /mcp/read` | MCP read resource | Recall, get, change feed and status tools only |
-| `POST /mcp/write` | MCP write resource | Remember, capture, change sets, review, governance and portability tools |
+| `POST /mcp` | MCP resource | Streamable HTTP MCP; read and write tools selected by current operation capabilities |
 
-Each opaque Gate bearer token is valid for exactly one configured resource: the API, `/mcp/read` or `/mcp/write`. Lore does not authenticate shared cookies or provide a login/session route. Gate introspection confirms active status, issuer, immutable subject, nonempty client ID and audience on every request. An operator-maintained binding maps that immutable issuer/subject to an existing personal-account principal, scope set and capability ceiling; those bounds intersect with live grants. Dynamically registered clients of one subject share that principal; the client ID is checked and recorded with each changeset, but it does not select a different principal or grant anything. A binding may instead name a connection principal: a non-user principal that every connection of the subject then acts as, with grants read from the user principal it acts for (see [change confirmations](#change-confirmations)). `admin` includes read and write but is an internal capability, not a separate service-administrator account. Writes require `write`. Export, download and import require the authenticated actor to be the user (`403 user_required` otherwise). Listing and reading reviews also accept a connection principal, which acts for the user without the user's authority. Enabling or disabling a source, deciding reviews, Forget, source rights, grants, retention and committing a proposal with user authority run directly for the user and return a Gate confirmation to any other actor. Invalid or revoked credentials return 401, a valid but unadmitted identity returns 403, and a Gate outage returns 503. The protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/read` and `/mcp/write` names the Gate issuer and exact resource. An unauthenticated MCP POST returns 401 and a GET returns 405.
+Each opaque Gate bearer token is valid for exactly one configured resource: the API or `/mcp`. Lore does not authenticate shared cookies or provide a login/session route. Gate introspection confirms active status, issuer, immutable subject, nonempty client ID and exact audience on every request. An operator-maintained binding maps that immutable issuer/subject to an existing personal-account principal, scope set and capability ceiling; those bounds intersect with live grants. Dynamically registered clients of one subject share that principal and its operation capabilities; the client ID is checked and recorded with each changeset, but it does not select a different principal or grant anything. A binding may instead name a connection principal: a non-user principal that every connection of the subject then acts as, with grants read from the user principal it acts for (see [change confirmations](#change-confirmations)). `admin` includes read and write but is an internal capability, not a separate service-administrator account. Read tools require `read`; write tools require `write`, and domain operations can require `admin` or a user actor as well. Export, download and import require the authenticated actor to be the user (`403 user_required` otherwise). Listing and reading reviews also accept a connection principal, which acts for the user without the user's authority. Enabling or disabling a source, deciding reviews, Forget, source rights, grants, retention and committing a proposal with user authority run directly for the user and return a Gate confirmation to any other actor. Invalid or revoked credentials return 401, a valid but unadmitted identity returns 403, and a Gate outage returns 503. The protected-resource metadata at `/.well-known/oauth-protected-resource/mcp` names the Gate issuer and exact resource. An unauthenticated MCP POST returns 401 and a GET returns 405.
 
 ## Tool and schema discovery
 
-Use MCP `initialize` followed by `tools/list` on the relevant endpoint; each tool advertises its `inputSchema`. The REST contract is served at `/openapi.json` and exported to [openapi.json](../api/openapi.json) with `npm run openapi:export`; `npm run openapi:check` fails when they diverge. Input schemas reject unknown keys. The running deployment defines the available tools; this checkout may describe a different version.
+Use MCP `initialize` followed by `tools/list` at `/mcp`; each tool advertises its `inputSchema`. Lore lists operations allowed by the authenticated principal's current `read` and `write` capabilities. The REST contract is served at `/openapi.json` and exported to [openapi.json](../api/openapi.json) with `npm run openapi:export`; `npm run openapi:check` fails when they diverge. Input schemas reject unknown keys. The running deployment defines the available tools; this checkout may describe a different version.
 
-| MCP endpoint | Tools |
+| Required operation capability | Tools available at `/mcp` |
 | --- | --- |
-| `/mcp/read` | `recall_memories`, `get_memory`, `get_changes`, `capture_status`, `forget_status`, `export_status`, `list_reviews`, `get_review`, `get_confirmation` |
-| `/mcp/write` | `remember_memory`, `configure_source`, `capture`, `propose_changeset`, `commit_changeset`, `request_user_decision`, `complete_confirmation`, `decide_review`, `forget_memory`, `change_source_rights`, `change_scope_grant`, `set_retention_policy`, `submit_feedback`, `request_export`, `import_bundle` |
+| `read` | `recall_memories`, `get_memory`, `get_changes`, `capture_status`, `forget_status`, `export_status`, `list_reviews`, `get_review`, `get_confirmation` |
+| `write` | `remember_memory`, `configure_source`, `capture`, `propose_changeset`, `commit_changeset`, `request_user_decision`, `complete_confirmation`, `decide_review`, `forget_memory`, `change_source_rights`, `change_scope_grant`, `set_retention_policy`, `submit_feedback`, `request_export`, `import_bundle` |
 
-Review tools on the read endpoint still require the user.
+An actor with both capabilities sees both groups. Review reads use `read`; review decisions use `write` and still follow user-authority and confirmation rules.
 
 ## REST operations
 
@@ -101,7 +100,7 @@ Under `gate`:
 
 1. The protected tool or route stores the exact change, renders a plain-text summary from stored data and creates a Gate confirmation. It returns `{ "status": "confirmation_required", "confirmation": { "confirmation_id", "url", "summary", … } }`, with HTTP 202 on REST. A summary over Gate's limits returns `413 summary_too_large`; split the change.
 2. Show the `url` to the person. They sign in at Gate and approve or deny. The AI cannot supply the summary or approve.
-3. Call `complete_confirmation` or `POST /v1/confirmations/{id}:complete` through the same endpoint that requested it. It returns `pending`, `denied`, `expired`, `cancelled`, `failed` or `committed` with the change's normal response, and applies the change at most once. A shown proposal or memory that changed meanwhile fails it with `confirmation_stale`.
+3. Call `complete_confirmation` or `POST /v1/confirmations/{id}:complete` through the same OAuth resource that requested it. All MCP operations share `/mcp`, so a confirmation requested by an MCP tool can be completed through that MCP resource. REST uses its separate API resource. The call returns `pending`, `denied`, `expired`, `cancelled`, `failed` or `committed` with the change's normal response, and applies the change at most once. A shown proposal or memory that changed meanwhile fails it with `confirmation_stale`.
 
 `request_user_decision` asks for a proposed change set to be committed with user authority. Use it for decisions, preferences and corrections the person actually stated; the person sees every operation before approving. Forgetting a memory cancels pending confirmations that show it.
 
@@ -121,7 +120,7 @@ Under `gate`:
 | `404 not_found` | Missing or not visible; existence of inaccessible records is not revealed |
 | `409 revision_conflict` | Re-read and reconcile, then propose against the new revision |
 | `409 idempotency_conflict`, `idempotency_key_reused` | Same key, different body or change; a caller bug |
-| `409 confirmation_endpoint_mismatch` | Complete the confirmation through the endpoint that requested it |
+| `409 confirmation_endpoint_mismatch` | Complete the confirmation through the OAuth resource that requested it; all MCP tools share `/mcp` |
 | `410 cursor_expired` | Recall afresh and restart the feed |
 | `413 payload_too_large`, `summary_too_large` | Request body over 1 MiB, or a change too large to show in full for approval; split it |
 | `429 rate_limited` | Retry after the indicated delay. Each Gate connection has its own budget; repeated failed authentications from one address also exhaust a shared budget, during which only a credential that verified recently is accepted for verification |

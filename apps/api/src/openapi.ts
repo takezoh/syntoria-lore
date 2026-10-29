@@ -881,52 +881,21 @@ const apiContract = {
         },
       },
     },
-    '/.well-known/oauth-protected-resource/mcp/read': {
+    '/.well-known/oauth-protected-resource/mcp': {
       get: {
         security: [],
-        operationId: 'readMcpProtectedResourceMetadata',
-        summary: 'Read-only MCP OAuth resource metadata',
+        operationId: 'mcpProtectedResourceMetadata',
+        summary: 'MCP OAuth resource metadata',
         responses: {
-          '200': { description: 'Protected resource metadata with memory:read scope' },
+          '200': { description: 'Protected resource metadata for the single MCP audience' },
           '403': { $ref: '#/components/responses/CoreError' },
         },
       },
     },
-    '/.well-known/oauth-protected-resource/mcp/write': {
-      get: {
-        security: [],
-        operationId: 'writeMcpProtectedResourceMetadata',
-        summary: 'Write MCP OAuth resource metadata',
-        responses: {
-          '200': {
-            description: 'Protected resource metadata with memory:write and memory:admin scopes',
-          },
-          '403': { $ref: '#/components/responses/CoreError' },
-        },
-      },
-    },
-    '/mcp/read': {
+    '/mcp': {
       post: {
-        operationId: 'mcpReadTransport',
-        summary: 'Official MCP Streamable HTTP read endpoint',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': { schema: { $ref: '#/components/schemas/McpProtocolMessage' } },
-          },
-        },
-        responses: {
-          '200': { description: 'MCP JSON or event stream' },
-          '401': { $ref: '#/components/responses/CoreError' },
-          '403': { $ref: '#/components/responses/CoreError' },
-          '503': { $ref: '#/components/responses/CoreError' },
-        },
-      },
-    },
-    '/mcp/write': {
-      post: {
-        operationId: 'mcpWriteTransport',
-        summary: 'Official MCP Streamable HTTP write endpoint with a distinct audience',
+        operationId: 'mcpTransport',
+        summary: 'Official MCP Streamable HTTP endpoint with per-operation capabilities',
         requestBody: {
           required: true,
           content: {

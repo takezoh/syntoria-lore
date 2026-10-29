@@ -4,13 +4,13 @@ Lore gives an authorized AI access to the same versioned, evidence-linked memori
 
 ## Connect with the right authority
 
-Gate owns sign-in and OAuth approval. A client needs a bearer token for the exact resource it calls: REST, `/mcp/read` or `/mcp/write`. An operator must also map the Gate issuer and immutable subject to an existing Lore user and principal; current grants further limit scopes and capabilities. Lore has no login page or public self-service registration flow. Its current access path depends on operator-configured resources and identity bindings.
+Gate owns sign-in and OAuth approval. A client needs a bearer token for the exact resource it calls: REST or the single MCP resource at `/mcp`. An operator must also map the Gate issuer and immutable subject to an existing Lore user and principal; current grants further limit scopes and capabilities. Lore has no login page or public self-service registration flow. Its current access path depends on operator-configured resources and identity bindings.
 
-Lore admits a Gate identity, not an individual OAuth client, and keeps the person apart from the AIs that act for them. Every client that signs in with that Gate account acts as one non-user connection principal that reads the user's grants; no client acts as the user. Its writes receive `ai_proposal` authority, and Lore records the introspected client ID on each changeset as provenance. User authority comes only from an approved change, which Lore then applies as the user principal: the account's approval policy approves it at once (`auto`, the default) or asks the person at Gate (`gate`). Separate clients differ only in the resource they connect to and in that recorded client ID: give a client `/mcp/read` alone to keep it read-only.
+Lore admits a Gate identity, not an individual OAuth client, and keeps the person apart from the AIs that act for them. Every client that signs in with that Gate account acts as one non-user connection principal that reads the user's grants; no client acts as the user. Its writes receive `ai_proposal` authority, and Lore records the introspected client ID on each changeset as provenance. User authority comes only from an approved change, which Lore then applies as the user principal: the account's approval policy approves it at once (`auto`, the default) or asks the person at Gate (`gate`). Clients under the same Gate subject share that principal and its operation capabilities; MCP no longer uses a different resource URL to distinguish read-only and write-capable clients.
 
 `admin` is an internal capability attached to a personal-account grant. It is not a separate service administrator account. Some operations also require the authenticated actor to be the user, even when a client has broad `admin` capability. See [client access](sign-in.md) for the user-facing prerequisites and [API authorization](../technical/mcp-api.md#entry-points-and-authorization) for the exact rules.
 
-For hosted use, ask the service operator to configure the exact resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [change confirmation release record](../eval/change-confirmation-release-20261029.md).
+For hosted use, ask the service operator to configure the exact `/mcp` resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [change confirmation release record](../eval/change-confirmation-release-20261029.md).
 
 ## Discover the available tools
 
@@ -18,12 +18,13 @@ For MCP, send `initialize` and then `tools/list` to the configured endpoint. Use
 
 | Need | Start with |
 | --- | --- |
-| Read-only workflow | `/mcp/read`: `recall_memories`, `get_memory`, `get_changes` and status tools |
-| Write-capable workflow | `/mcp/write`: `remember_memory`, `capture`, ChangeSets, confirmation tools, review decisions, Forget, source and policy changes, and feedback |
+| Read operations | Connect to `/mcp` with `read` capability: `recall_memories`, `get_memory`, `get_changes` and status tools |
+| Write operations | Connect to the same `/mcp` with `write` capability: `remember_memory`, `capture`, ChangeSets, confirmation tools, review decisions, Forget, source and policy changes, and feedback |
+| Both | A principal with both capabilities sees both operation groups on one MCP connection |
 | Operation meanings and errors | [MCP and HTTP API contract](../technical/mcp-api.md) |
 | Memory evidence, authority and retrieval bounds | [Memory system](../technical/memory-system.md) |
 
-REST and MCP use the same domain services. Do not assume that a connected client has permissions merely because its tool list contains an operation; authorization is checked on each request.
+REST and MCP use the same domain services. Lore lists MCP operations according to the authenticated principal's current capabilities and checks scope grants and domain authorization on every operation.
 
 ## Remember and capture
 

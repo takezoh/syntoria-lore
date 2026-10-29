@@ -26,7 +26,7 @@ try {
     throw new Error('Local evaluation needs six isolated capture scopes');
   userToken = required('LOCAL_API_BEARER_TOKEN');
   readerToken = required('LOCAL_API_READONLY_BEARER_TOKEN');
-  wrongAudienceToken = required('LOCAL_MCP_READ_BEARER_TOKEN');
+  wrongAudienceToken = required('LOCAL_MCP_BEARER_TOKEN');
   const temporal = await seedTemporal();
   const authority = await seedAuthority();
   const evidence = await seedEvidence();

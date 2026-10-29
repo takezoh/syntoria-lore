@@ -149,7 +149,7 @@ describe('Gate online credential verification', () => {
             sub: 'immutable-subject',
             connection_id: 'connection-1',
             client_id: 'mcp',
-            aud: [audience, 'https://mcp.example.test/mcp/read'],
+            aud: [audience, 'https://mcp.example.test/mcp'],
             exp: now / 1000 + 60,
           });
     await expect(verifier(mixedAudience).verifyToken(token)).rejects.toBeInstanceOf(
