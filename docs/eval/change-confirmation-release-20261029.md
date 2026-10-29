@@ -53,3 +53,7 @@ Public HTTPS probes on 2026-10-29:
 - **Lore `a63458f`.** Cloud Build `b9ef3eb4-6783-4717-a962-3b53a9504ba2` produced image `sha256:f5147c7ace0b3b48a21dfd66c19c08bb0dbeae6ea3540f831db62c587724f1b4`. Execution `lore-neon-migrate-74bcb` applied `0047_confirm_source_configuration.sql` (`migration_count=47`, `reapply=passed`). Revision `lore-api-split-a63458f` was probed through a no-traffic tag (readiness 200, unauthenticated `POST /v1/connectors` 401) and then received 100% traffic. Public readiness returned 200 and an unauthenticated MCP write returned 401.
 - **Not yet observed in production.** No confirmation has been created, approved or consumed, and no AI write has been checked to land as an AI proposal.
 
+## Migration credential rotation
+
+On 2026-10-29 the owner changed the Neon owner-role password and added version 2 of `lore-migration-direct-url` from their own terminal, so the value never reached the agent. `lore-neon-migrate` now references version 2. Execution `lore-neon-migrate-hzj2w` connected with it and reported `migration_count=47` and `reapply=passed` without changes. The Weave migrator (`weave-migrator-plnp6`) and backup (`weave-backup-g7pms`) jobs also succeeded afterwards, and Lore readiness, which checks its database connection, stayed 200. Version 1 holds a password that no longer authenticates.
+

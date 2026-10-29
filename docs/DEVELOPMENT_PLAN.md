@@ -4,7 +4,7 @@
 
 - Version: 1.0
 - Date: 2026-10-14
-- Status: **The sections below preserve dated local and hosted evidence. The API-only Gate authentication correction was deployed on 2026-10-19; positive hosted MCP memory retrieval with a real user and operational Release 1 acceptance remain unverified. See the current [deployment gates](technical/deployment.md) before making hosted claims.**
+- Status: **The sections below preserve dated local and hosted evidence. The API-only Gate authentication correction was deployed on 2026-10-19, followed by the DCR release on 2026-10-20 and change confirmations on 2026-10-29; positive hosted MCP memory retrieval with a real user and operational Release 1 acceptance remain unverified. See the current [deployment gates](technical/deployment.md) before making hosted claims.**
 - Infrastructure baseline: GCP Cloud Run / Cloud Tasks / Cloud Scheduler + Neon PostgreSQL
 - Architecture decision: [ADR-0001](adr/0001-gcp-cloud-run-neon.md)
 - Product requirements: [design/requirements.md](design/requirements.md)
