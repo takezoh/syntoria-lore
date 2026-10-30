@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  allCompartments,
   CoreError,
   reviewDecisionSchema,
   reviewListQuerySchema,
@@ -8,7 +9,7 @@ import {
   type EvidenceInput,
   type MemoryInput,
 } from '@memory/contracts';
-import { withTransaction, type Database } from '@memory/db';
+import { setDatabaseContext, withTransaction, type Database } from '@memory/db';
 import { CoreService, withAuthorizedActor } from '@memory/domain';
 import {
   parseCuratorResult,
@@ -333,6 +334,7 @@ export class CaptureJobProcessor {
       tokenScopeIds: preliminary.token_scope_ids.includes(claim.scope_id) ? [claim.scope_id] : [],
       capabilities,
       authEpochs: { [claim.scope_id]: Number(preliminary.auth_epochs[claim.scope_id]) },
+      compartments: allCompartments,
     };
     const data = await withAuthorizedActor(
       this.workerPool,
@@ -938,6 +940,7 @@ function actorFromJob(job: JobRuntime): ActorContext {
     tokenScopeIds: job.token_scope_ids.includes(job.scope_id) ? [job.scope_id] : [],
     capabilities: normalizeCapabilities(job.authorized_capabilities),
     authEpochs: { [job.scope_id]: Number(job.auth_epochs[job.scope_id]) },
+    compartments: allCompartments,
   };
 }
 
@@ -1097,6 +1100,5 @@ async function runWithDeadline<T>(
 }
 
 async function setJobTenant(client: PoolClient, userId: string, scopeId: string): Promise<void> {
-  await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
-  await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeId}}`]);
+  await setDatabaseContext(client, { userId, scopeIds: [scopeId], compartments: 'all' });
 }

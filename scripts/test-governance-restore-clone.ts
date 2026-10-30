@@ -80,6 +80,7 @@ try {
     tokenScopeIds: [scopeId],
     capabilities: ['read', 'write', 'admin'] as const,
     authEpochs: { [scopeId]: Number(authEpoch) },
+    compartments: { kind: 'all' as const },
   };
   const core = new CoreService(
     sourceApp,

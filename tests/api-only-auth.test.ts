@@ -14,6 +14,7 @@ const actor = {
   tokenScopeIds: [],
   capabilities: ['read', 'write'],
   authEpochs: {},
+  compartments: { kind: 'allowance', ids: [], epoch: 0 },
 } as unknown as ActorContext;
 
 afterEach(async () => {

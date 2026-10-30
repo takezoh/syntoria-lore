@@ -61,6 +61,10 @@ The resulting Context Pack contains returned memory objects, their evidence and 
 
 The field `estimated_tokens` is calculated from the UTF-8 byte length of the complete JSON-serialized Context Pack, not by a model tokenizer. That byte count is the implementation's budget measure; it is not an exact count of tokens the receiving model will use. When the pack does not fit, Lore drops lower-ranked matches while retaining the status and coverage metadata, and reports budget insufficiency.
 
+## Compartments
+
+Every memory, version, source, observation, evidence item and subject carries a compartment label, and every Gate connection receives only General rows and those within its allowance. Labels flow with the data: a version joins the labels of evidence it newly cites, a curator proposal takes the union of its observations' labels, and feed events, reviews, confirmations and stored responses carry what they contain. Recall can be narrowed to named compartments. A declassified version can cite evidence the reader cannot see; the view omits that evidence and reports how much was withheld, and rights checks still include it. The [memory compartments design](../design/memory-compartments.md) defines the rules.
+
 ## Forget and restore
 
 Forget is distinct from retracting a wrong statement. The user-authorized Forget transaction records the request, adds suppressions and a content-free change event, and makes the selected content unavailable immediately. An independent deletion ledger records the durable deletion instruction; a worker then purges memory versions, evidence and dependent data and reports progress. Protected reads fail closed while ledger state is unavailable or a restored database has not caught up with the ledger. A backup may retain deleted bytes until backup retention expires, but restore reconciliation must apply the deletion record before serving reads.

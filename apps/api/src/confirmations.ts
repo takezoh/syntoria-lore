@@ -4,6 +4,7 @@ import {
   changeSetSchema,
   connectorAuthorizationSchema,
   CoreError,
+  databaseCompartments,
   forgetRequestSchema,
   grantMutationSchema,
   retentionPolicySchema,
@@ -12,8 +13,8 @@ import {
   type ActorContext,
   type ChangeOp,
 } from '@memory/contracts';
-import { uuidArray, withTransaction } from '@memory/db';
-import { withAuthorizedActor, type CoreService } from '@memory/domain';
+import { setDatabaseContext, withTransaction } from '@memory/db';
+import { withAuthorizedActor, type CompartmentService, type CoreService } from '@memory/domain';
 import type { ConnectorService } from '@memory/connectors';
 import type { ForgetService } from '@memory/governance';
 import type { CurationReviewService } from '@memory/jobs';
@@ -43,7 +44,8 @@ export type ProtectedChange =
       readonly scopeId: string;
       readonly request: unknown;
     }
-  | { readonly operation: 'configure_source'; readonly request: unknown };
+  | { readonly operation: 'configure_source'; readonly request: unknown }
+  | { readonly operation: 'change_connection_allowance'; readonly request: unknown };
 
 type Operation = ProtectedChange['operation'];
 
@@ -59,6 +61,7 @@ export interface ChangeConfirmationOptions {
   readonly governance?: ForgetService;
   readonly reviews?: CurationReviewService;
   readonly connectors?: ConnectorService;
+  readonly compartments?: CompartmentService;
 }
 
 interface Summary {
@@ -71,6 +74,11 @@ interface PreparedChange {
   readonly payload: Record<string, unknown>;
   readonly summary: Summary;
   readonly memoryIds: readonly string[];
+  /**
+   * The union of the labels of what the summary shows, so a connection that cannot see that
+   * data cannot read the record either.
+   */
+  readonly label: readonly string[];
 }
 
 interface ConfirmationRow {
@@ -118,6 +126,9 @@ export class ChangeConfirmationService {
     requestId: string,
   ): Promise<ProtectedChangeResult> {
     if (actor.actorKind === 'user') {
+      if (change.operation === 'change_connection_allowance') {
+        throw new CoreError(400, 'connection_required', 'Only an AI connection has an allowance');
+      }
       const result = await this.apply(actor, change.operation, directPayload(change), {
         idempotencyKey,
         requestId,
@@ -198,6 +209,7 @@ export class ChangeConfirmationService {
       result = await this.apply(userActor, row.operation, row.payload!, {
         idempotencyKey: `confirmation:${row.id}`,
         requestId,
+        confirmation: { id: row.id, approval: row.approval },
       });
     } catch (error) {
       if (error instanceof CoreError && isPermanent(error)) {
@@ -226,7 +238,7 @@ export class ChangeConfirmationService {
     idempotencyKey: string | undefined,
     requestId: string,
   ): Promise<ProtectedChangeResult> {
-    const prepared = await this.prepare(actor, change);
+    const prepared = await this.prepare(actor, change, identity);
     const requestHash = sha256(
       canonical({ operation: change.operation, payload: prepared.payload }),
     );
@@ -252,9 +264,9 @@ export class ChangeConfirmationService {
         const inserted = await client.query<ConfirmationRow>(
           `INSERT INTO change_confirmations(user_id, scope_id, id, requested_by, gate_subject,
              client_id, connection_id, gate_audience, operation, payload, summary, change_hash,
-             request_hash, memory_ids, idempotency_key, approval, status, approved_at)
+             request_hash, memory_ids, idempotency_key, approval, status, approved_at, compartment_ids)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13,
-             $14::uuid[], $15, 'policy', 'approved', clock_timestamp())
+             $14::uuid[], $15, 'policy', 'approved', clock_timestamp(), $16::uuid[])
            RETURNING ${COLUMNS}`,
           [
             actor.userId,
@@ -272,6 +284,7 @@ export class ChangeConfirmationService {
             requestHash,
             prepared.memoryIds,
             key,
+            prepared.label,
           ],
         );
         return inserted.rows[0]!;
@@ -304,7 +317,7 @@ export class ChangeConfirmationService {
     change: ProtectedChange,
     idempotencyKey: string | undefined,
   ): Promise<Record<string, unknown>> {
-    const prepared = await this.prepare(actor, change);
+    const prepared = await this.prepare(actor, change, identity);
     const requestHash = sha256(
       canonical({ operation: change.operation, payload: prepared.payload }),
     );
@@ -346,9 +359,10 @@ export class ChangeConfirmationService {
           const inserted = await client.query<ConfirmationRow>(
             `INSERT INTO change_confirmations(user_id, scope_id, id, requested_by, gate_subject,
                client_id, connection_id, gate_audience, operation, payload, summary, change_hash,
-               request_hash, memory_ids, idempotency_key, gate_confirmation_id, gate_url, status)
+               request_hash, memory_ids, idempotency_key, gate_confirmation_id, gate_url, status,
+               compartment_ids)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13,
-               $14::uuid[], $15, $16, $17, 'pending')
+               $14::uuid[], $15, $16, $17, 'pending', $18::uuid[])
              RETURNING ${COLUMNS}`,
             [
               actor.userId,
@@ -368,6 +382,7 @@ export class ChangeConfirmationService {
               key,
               created.id,
               created.url,
+              prepared.label,
             ],
           );
           return inserted.rows[0]!;
@@ -453,9 +468,12 @@ export class ChangeConfirmationService {
     run: (client: PoolClient) => Promise<T>,
   ): Promise<T> {
     return withTransaction(this.options.pool, async (client) => {
-      await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-      await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray([scopeId])]);
-      await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+      await setDatabaseContext(client, {
+        userId: actor.userId,
+        principalId: actor.principalId,
+        scopeIds: [scopeId],
+        compartments: databaseCompartments(actor.compartments),
+      });
       return run(client);
     });
   }
@@ -580,7 +598,11 @@ export class ChangeConfirmationService {
     actor: ActorContext,
     operation: Operation,
     payload: Record<string, unknown>,
-    context: { readonly idempotencyKey: string | undefined; readonly requestId: string },
+    context: {
+      readonly idempotencyKey: string | undefined;
+      readonly requestId: string;
+      readonly confirmation?: { readonly id: string; readonly approval: 'person' | 'policy' };
+    },
   ): Promise<unknown> {
     const key = () => {
       if (context.idempotencyKey === undefined) {
@@ -626,10 +648,43 @@ export class ChangeConfirmationService {
         );
       case 'configure_source':
         return this.connectors().configure(actor, payload['request']);
+      case 'change_connection_allowance': {
+        if (context.confirmation === undefined) {
+          throw new CoreError(400, 'connection_required', 'Only an AI connection has an allowance');
+        }
+        const connection = payload['connection'] as Record<string, string>;
+        return this.compartmentService().widenAccess(
+          actor,
+          {
+            issuer: String(connection['issuer']),
+            subject: String(connection['subject']),
+            connectionId: String(connection['connection_id']),
+            clientId: String(connection['client_id']),
+          },
+          (payload['compartments'] as { id: string }[]).map((compartment) => compartment.id),
+          { by: context.confirmation.approval, confirmationId: context.confirmation.id },
+        );
+      }
     }
   }
 
-  private async prepare(actor: ActorContext, change: ProtectedChange): Promise<PreparedChange> {
+  private async prepare(
+    actor: ActorContext,
+    change: ProtectedChange,
+    identity: GateIdentity,
+  ): Promise<PreparedChange> {
+    const prepared = await this.prepareOperation(actor, change, identity);
+    const label = await this.read(actor, [prepared.scopeId], (client) =>
+      shownLabel(client, actor, change.operation, prepared),
+    );
+    return { ...prepared, label };
+  }
+
+  private async prepareOperation(
+    actor: ActorContext,
+    change: ProtectedChange,
+    identity: GateIdentity,
+  ): Promise<Omit<PreparedChange, 'label'>> {
     switch (change.operation) {
       case 'commit_changeset':
         return this.prepareCommit(actor, change.changesetId);
@@ -645,10 +700,55 @@ export class ChangeConfirmationService {
         return this.prepareRetention(actor, change.scopeId, change.request);
       case 'configure_source':
         return this.prepareSource(actor, change.request);
+      case 'change_connection_allowance':
+        return this.prepareAllowance(actor, identity, change.request);
     }
   }
 
-  private async prepareCommit(actor: ActorContext, changesetId: string): Promise<PreparedChange> {
+  private async prepareAllowance(
+    actor: ActorContext,
+    identity: GateIdentity,
+    raw: unknown,
+  ): Promise<Omit<PreparedChange, 'label'>> {
+    const requested = await this.compartmentService().resolveRequestedCompartments(actor, raw);
+    const current = actor.compartments.kind === 'allowance' ? actor.compartments.ids : [];
+    const added = requested
+      .filter((compartment) => !current.includes(compartment.id))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (added.length === 0) {
+      throw new CoreError(
+        409,
+        'already_allowed',
+        'This connection already receives these compartments',
+      );
+    }
+    const scopeId = [...actor.scopeIds.filter((id) => actor.tokenScopeIds.includes(id))].sort()[0];
+    if (scopeId === undefined)
+      throw new CoreError(403, 'forbidden', 'An authorized scope is required');
+    return {
+      scopeId,
+      payload: {
+        connection: {
+          issuer: identity.issuer,
+          subject: identity.subject,
+          connection_id: identity.connectionId,
+          client_id: identity.clientId,
+        },
+        compartments: added,
+      },
+      summary: checkedSummary('Let an AI connection receive more memories', [
+        ...labelled('AI client: ', identity.clientId),
+        ...labelled('Add compartments: ', added.map((compartment) => compartment.name).join(', ')),
+        'This connection will receive, and may write, memories in these compartments until it is disconnected at Gate or narrows its access.',
+      ]),
+      memoryIds: [],
+    };
+  }
+
+  private async prepareCommit(
+    actor: ActorContext,
+    changesetId: string,
+  ): Promise<Omit<PreparedChange, 'label'>> {
     if (!uuid.safeParse(changesetId).success) throw notFound('ChangeSet not found');
     return this.read(actor, actor.scopeIds, async (client) => {
       const found = await client.query<{
@@ -704,7 +804,10 @@ export class ChangeConfirmationService {
     });
   }
 
-  private async prepareForget(actor: ActorContext, raw: unknown): Promise<PreparedChange> {
+  private async prepareForget(
+    actor: ActorContext,
+    raw: unknown,
+  ): Promise<Omit<PreparedChange, 'label'>> {
     const request = parse(forgetRequestSchema, raw, 'Forget request is invalid');
     const memoryIds = request.selector.memory_ids ?? [];
     const sourceIds = request.selector.source_ids ?? [];
@@ -763,7 +866,7 @@ export class ChangeConfirmationService {
     actor: ActorContext,
     reviewId: string,
     rawDecision: unknown,
-  ): Promise<PreparedChange> {
+  ): Promise<Omit<PreparedChange, 'label'>> {
     if (!uuid.safeParse(reviewId).success) throw notFound('Review not found');
     const decision = parse(reviewDecisionSchema, rawDecision, 'Review decision is invalid');
     return this.read(actor, actor.scopeIds, async (client) => {
@@ -820,7 +923,7 @@ export class ChangeConfirmationService {
     actor: ActorContext,
     sourceId: string,
     raw: unknown,
-  ): Promise<PreparedChange> {
+  ): Promise<Omit<PreparedChange, 'label'>> {
     if (!uuid.safeParse(sourceId).success) throw notFound('Source not found');
     const request = parse(sourceRightsSchema, raw, 'Source rights are invalid');
     return this.read(actor, [request.scope_id], async (client) => {
@@ -856,7 +959,7 @@ export class ChangeConfirmationService {
     actor: ActorContext,
     scopeId: string,
     raw: unknown,
-  ): Promise<PreparedChange> {
+  ): Promise<Omit<PreparedChange, 'label'>> {
     if (!uuid.safeParse(scopeId).success) throw notFound('Scope not found');
     const request = parse(grantMutationSchema, raw, 'Grant mutation is invalid');
     return this.read(actor, [scopeId], async (client) => {
@@ -884,7 +987,7 @@ export class ChangeConfirmationService {
     actor: ActorContext,
     scopeId: string,
     raw: unknown,
-  ): Promise<PreparedChange> {
+  ): Promise<Omit<PreparedChange, 'label'>> {
     if (!uuid.safeParse(scopeId).success) throw notFound('Scope not found');
     const request = parse(retentionPolicySchema, raw, 'Retention policy is invalid');
     return this.read(actor, [scopeId], async (client) => {
@@ -905,7 +1008,10 @@ export class ChangeConfirmationService {
     });
   }
 
-  private async prepareSource(actor: ActorContext, raw: unknown): Promise<PreparedChange> {
+  private async prepareSource(
+    actor: ActorContext,
+    raw: unknown,
+  ): Promise<Omit<PreparedChange, 'label'>> {
     const request = parse(connectorAuthorizationSchema, raw, 'Connector authorization is invalid');
     return this.read(actor, [request.scope_id], async (client) => {
       const found = await client.query<{ enabled: boolean; consent: boolean }>(
@@ -961,6 +1067,13 @@ export class ChangeConfirmationService {
     return this.options.connectors;
   }
 
+  private compartmentService(): CompartmentService {
+    if (this.options.compartments === undefined) {
+      throw new CoreError(503, 'feature_unavailable', 'Compartments are not configured', true);
+    }
+    return this.options.compartments;
+  }
+
   private reviews(): CurationReviewService {
     if (this.options.reviews === undefined) {
       throw new CoreError(503, 'feature_unavailable', 'Curation review is not configured', true);
@@ -983,8 +1096,36 @@ function directPayload(change: ProtectedChange): Record<string, unknown> {
     case 'set_retention_policy':
       return { scope_id: change.scopeId, request: change.request };
     case 'configure_source':
+    case 'change_connection_allowance':
       return { request: change.request };
   }
+}
+
+/** The union of the labels of what a confirmation shows. */
+async function shownLabel(
+  client: PoolClient,
+  actor: ActorContext,
+  operation: Operation,
+  prepared: Omit<PreparedChange, 'label'>,
+): Promise<string[]> {
+  const labels = await client.query<{ label: string[] }>(
+    `SELECT compartment_ids::text[] AS label FROM memories
+     WHERE user_id = $1 AND id = ANY($2::uuid[])
+     UNION ALL
+     SELECT compartment_ids::text[] FROM changesets
+     WHERE user_id = $1 AND $3::text = 'commit_changeset' AND id::text = $4::text
+     UNION ALL
+     SELECT compartment_ids::text[] FROM curation_reviews
+     WHERE user_id = $1 AND $3::text = 'decide_review' AND id::text = $5::text`,
+    [
+      actor.userId,
+      prepared.memoryIds,
+      operation,
+      String(prepared.payload['changeset_id'] ?? ''),
+      String(prepared.payload['review_id'] ?? ''),
+    ],
+  );
+  return [...new Set(labels.rows.flatMap((row) => row.label))].sort();
 }
 
 /** Binds a confirmation's identity, scope, operation, payload and summary in one hash. */
@@ -1139,6 +1280,16 @@ function changeLines(op: ChangeOp, index: number, targets: Map<string, string>):
       ];
     case 'NO_OP':
       return labelled(`${n} No change: `, op.reason);
+    case 'RECLASSIFY':
+      return [
+        ...labelled(`${n} Change who may receive: `, target(op.memory_id, op.expected_revision)),
+        ...labelled(
+          'New compartments: ',
+          op.compartments.length === 0
+            ? 'General (every connected AI)'
+            : op.compartments.join(', '),
+        ),
+      ];
   }
 }
 

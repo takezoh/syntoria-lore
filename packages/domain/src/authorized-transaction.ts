@@ -1,10 +1,11 @@
 import {
   CoreError,
+  databaseCompartments,
   getActorAuthorizationGuard,
   type ActorContext,
   type Capability,
 } from '@memory/contracts';
-import { uuidArray, withTransaction } from '@memory/db';
+import { setDatabaseContext, withTransaction } from '@memory/db';
 import type { Pool, PoolClient } from 'pg';
 
 interface ScopeGrantRow {
@@ -36,9 +37,12 @@ export async function withAuthorizedActor<T>(
   return withTransaction(
     pool,
     async (client) => {
-      await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-      await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
-      await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+      await setDatabaseContext(client, {
+        userId: actor.userId,
+        principalId: actor.principalId,
+        scopeIds,
+        compartments: databaseCompartments(actor.compartments),
+      });
       const access = await client.query<ScopeGrantRow>(
         `SELECT scope_id, auth_epoch, capabilities
        FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,

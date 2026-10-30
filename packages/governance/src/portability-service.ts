@@ -2,6 +2,7 @@ import { encodePortableBundleV1, decodePortableBundleV1 } from './user-identity-
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
+  allCompartments,
   CoreError,
   exportRequestSchema,
   importRequestSchema,
@@ -11,9 +12,13 @@ import {
   LEGACY_PORTABILITY_PAYLOAD_FORMAT,
   LEGACY_SCOPE_WRITE_LOCK_PREFIX,
 } from '@memory/contracts';
-import { type Database, withTransaction } from '@memory/db';
+import { type Database, setDatabaseContext, withTransaction } from '@memory/db';
 import {
+  UNCLASSIFIED_COMPARTMENT_ID,
+  allowanceIds,
+  canonicalLabel,
   observationLocatorDigest,
+  resolveCompartments,
   sourceIdentityDigest,
   withAuthorizedActor,
 } from '@memory/domain';
@@ -22,9 +27,11 @@ import { type PortabilityStore, portabilityPayloadHash } from './portability-sto
 
 const read = 'read' as const;
 const admin = 'admin' as const;
+// Version 2 adds compartments and the label of every labeled row. Version 1 bundles predate
+// labels; their records import as Unclassified.
 const bundleSchema = z.strictObject({
   format: z.literal(LEGACY_PORTABILITY_PAYLOAD_FORMAT),
-  schema_version: z.literal(1),
+  schema_version: z.union([z.literal(1), z.literal(2)]),
   origin: z.strictObject({
     user_id: z.uuid(),
     scope_id: z.uuid(),
@@ -44,6 +51,17 @@ const bundleSchema = z.strictObject({
     memory_evidence: z.array(z.record(z.string(), z.unknown())).max(2_000_000),
     memory_version_evidence: z.array(z.record(z.string(), z.unknown())).max(5_000_000),
     relations: z.array(z.record(z.string(), z.unknown())).max(1_000_000),
+    compartments: z
+      .array(
+        z.strictObject({
+          id: z.uuid(),
+          name: z.string().min(1).max(100),
+          normalized_name: z.string().min(1).max(100),
+          reserved: z.boolean(),
+        }),
+      )
+      .max(10_000)
+      .optional(),
   }),
 });
 
@@ -79,7 +97,20 @@ interface ImportStatus {
 interface ImportedMemory {
   readonly id: string;
   readonly revision: number;
+  readonly label: readonly string[];
 }
+
+/** Tables whose rows carry a compartment label. */
+const labeledTables = new Set<string>([
+  'sources',
+  'observations',
+  'episodes',
+  'evidence',
+  'subjects',
+  'subject_aliases',
+  'memories',
+  'memory_versions',
+]);
 
 const tableOrder = [
   'sources',
@@ -110,6 +141,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'created_at',
     'lineage_root',
     'origin_lineage_root',
+    'compartment_ids',
   ],
   observations: [
     'id',
@@ -129,6 +161,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'source_kind',
     'prompt_generation',
     'origin_lineage_root',
+    'compartment_ids',
   ],
   episodes: [
     'id',
@@ -140,6 +173,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'occurred_at',
     'recorded_at',
     'status',
+    'compartment_ids',
   ],
   evidence: [
     'id',
@@ -161,8 +195,17 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'span_start',
     'span_end',
     'origin_lineage_root',
+    'compartment_ids',
   ],
-  subjects: ['id', 'user_id', 'scope_id', 'canonical_name', 'normalized_name', 'created_at'],
+  subjects: [
+    'id',
+    'user_id',
+    'scope_id',
+    'canonical_name',
+    'normalized_name',
+    'created_at',
+    'compartment_ids',
+  ],
   subject_aliases: [
     'id',
     'user_id',
@@ -173,6 +216,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'valid_from',
     'valid_to',
     'created_at',
+    'compartment_ids',
   ],
   memories: [
     'id',
@@ -196,6 +240,7 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'created_by',
     'updated_at',
     'import_provenance',
+    'compartment_ids',
   ],
   memory_versions: [
     'id',
@@ -219,6 +264,8 @@ const columns: Readonly<Record<TableName, readonly string[]>> = {
     'change_set_id',
     'created_at',
     'origin_provenance',
+    'compartment_ids',
+    'label_origin',
   ],
   memory_subjects: ['user_id', 'scope_id', 'memory_id', 'subject_id'],
   memory_evidence: ['user_id', 'scope_id', 'memory_id', 'evidence_id'],
@@ -483,6 +530,7 @@ export class PortabilityService {
         return response;
       }
       const idMap = buildIdMap(tableData);
+      const labelOf = await importedLabels(client, actor, payload.data.schema_version, tableData);
       await client.query('SAVEPOINT portable_import');
       try {
         const importedMemories = await insertPortableTables(
@@ -494,6 +542,7 @@ export class PortabilityService {
           tableData,
           idMap,
           parsed.data.grant_imported_sources,
+          labelOf,
         );
         const feed = await recordPortableImportChanges(
           client,
@@ -670,6 +719,23 @@ export class PortabilityService {
     const tables = {} as Record<TableName, PortableRow[]>;
     for (const table of tableOrder)
       tables[table] = await readTable(client, table, job.user_id, job.scope_id);
+    const labelIds = [
+      ...new Set(
+        tableOrder
+          .filter((table) => labeledTables.has(table))
+          .flatMap((table) => tables[table].flatMap((row) => stringArray(row['compartment_ids']))),
+      ),
+    ];
+    const compartments = await client.query<{
+      id: string;
+      name: string;
+      normalized_name: string;
+      reserved: boolean;
+    }>(
+      `SELECT id::text AS id, name, normalized_name, reserved FROM compartments
+       WHERE user_id = $1 AND id = ANY($2::uuid[]) ORDER BY id`,
+      [job.user_id, labelIds],
+    );
     const suppressions = await client.query<{
       object_kind: string;
       object_id: string | null;
@@ -773,7 +839,7 @@ export class PortabilityService {
     const includedSubjectIds = new Set(includedSubjects.map((row) => stringValue(row['id'])));
     return encodePortableBundleV1({
       format: LEGACY_PORTABILITY_PAYLOAD_FORMAT,
-      schema_version: 1,
+      schema_version: 2,
       origin: {
         user_id: job.user_id,
         scope_id: job.scope_id,
@@ -813,6 +879,7 @@ export class PortabilityService {
             allowedMemoryIds.has(stringValue(row['from_memory_id'])) &&
             allowedMemoryIds.has(stringValue(row['to_memory_id'])),
         ),
+        compartments: compartments.rows,
       },
     });
   }
@@ -925,6 +992,7 @@ async function insertPortableTables(
   tables: BundleTables,
   idMap: Record<string, string>,
   grantSources: boolean,
+  labelOf: (row: PortableRow) => string[],
 ): Promise<ImportedMemory[]> {
   const mapId = (table: TableName, value: unknown): string | null => {
     if (value === null || value === undefined) return null;
@@ -958,7 +1026,11 @@ async function insertPortableTables(
     row: PortableRow,
     overrides: PortableRow = {},
   ): Promise<void> => {
-    const values = { ...base(row, table), ...overrides };
+    const values: PortableRow = {
+      ...base(row, table),
+      ...(labeledTables.has(table) ? { compartment_ids: labelOf(row) } : {}),
+      ...overrides,
+    };
     const names = columns[table];
     const args = names.map((name) => values[name] ?? null);
     const placeholders = names.map((_, index) => `$${index + 1}`).join(', ');
@@ -1018,7 +1090,7 @@ async function insertPortableTables(
         import_id: importId,
       },
     });
-    importedMemories.push({ id: memoryId, revision });
+    importedMemories.push({ id: memoryId, revision, label: labelOf(row) });
   }
   for (const row of tables.memory_versions) {
     await insert('memory_versions', row, {
@@ -1027,6 +1099,7 @@ async function insertPortableTables(
       authority: 'third_party_claim',
       changed_by: actor.principalId,
       change_set_id: null,
+      label_origin: 'imported',
       origin_provenance: {
         origin_user_id: origin.user_id,
         origin_scope_id: origin.scope_id,
@@ -1086,8 +1159,8 @@ async function recordPortableImportChanges(
   const changeSetId = randomUUID();
   await client.query(
     `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-       response, status, committed_at, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp(), $8)`,
+       response, status, committed_at, client_id, compartment_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp(), $8, $9::uuid[])`,
     [
       actor.userId,
       scopeId,
@@ -1097,6 +1170,7 @@ async function recordPortableImportChanges(
       memories.length,
       JSON.stringify({ change_set_id: changeSetId, source: 'portable_import' }),
       actor.clientId ?? null,
+      [...new Set(memories.flatMap((memory) => memory.label))].sort(),
     ],
   );
   const result = await client.query<{ last_seq: string }>(
@@ -1127,9 +1201,9 @@ async function recordPortableImportChanges(
     );
     await client.query(
       `INSERT INTO change_log(user_id, scope_id, id, seq, change_set_id, op, memory_id,
-         memory_revision, tombstone)
-       VALUES ($1, $2, $3, $4, $5, 'IMPORT', $6, $7, false)`,
-      [actor.userId, scopeId, changeId, seq, changeSetId, memory.id, memory.revision],
+         memory_revision, tombstone, compartment_ids)
+       VALUES ($1, $2, $3, $4, $5, 'IMPORT', $6, $7, false, $8::uuid[])`,
+      [actor.userId, scopeId, changeId, seq, changeSetId, memory.id, memory.revision, memory.label],
     );
     await client.query(
       `INSERT INTO outbox(user_id, scope_id, id, event_type, aggregate_id, payload)
@@ -1152,9 +1226,12 @@ async function recordPortableImportChanges(
 
 async function loadWorkerActor(pool: Database, job: ExportJob): Promise<ActorContext | null> {
   return withTransaction(pool, async (client) => {
-    await client.query("SELECT set_config('app.user_id',$1,true)", [job.user_id]);
-    await client.query("SELECT set_config('app.scope_ids',$1,true)", [`{${job.scope_id}}`]);
-    await client.query("SELECT set_config('app.principal_id',$1,true)", [job.principal_id]);
+    await setDatabaseContext(client, {
+      userId: job.user_id,
+      principalId: job.principal_id,
+      scopeIds: [job.scope_id],
+      compartments: 'all',
+    });
     const access = await client.query<{ auth_epoch: string | number; capabilities: string[] }>(
       `SELECT auth_epoch, capabilities FROM app.lock_actor_access($1,$2,'user',ARRAY[$3::uuid])`,
       [job.user_id, job.principal_id, job.scope_id],
@@ -1169,6 +1246,7 @@ async function loadWorkerActor(pool: Database, job: ExportJob): Promise<ActorCon
       tokenScopeIds: [job.scope_id],
       capabilities: ['admin'],
       authEpochs: { [job.scope_id]: Number(current.auth_epoch) },
+      compartments: allCompartments,
     };
   });
 }
@@ -1225,4 +1303,50 @@ function stringValue(value: unknown): string {
 
 function safeErrorCode(value: string): string {
   return /^[a-zA-Z0-9_.-]{1,64}$/.test(value) ? value : 'provider_error';
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+/**
+ * How imported labels map to the importer's compartments. Version 1 records are Unclassified.
+ * Version 2 compartments map by name to compartments the importer holds; a missing or withheld
+ * one fails the import, so imported records are never more visible than in their origin.
+ */
+async function importedLabels(
+  client: PoolClient,
+  actor: ActorContext,
+  schemaVersion: 1 | 2,
+  tables: BundleTables,
+): Promise<(row: PortableRow) => string[]> {
+  if (schemaVersion === 1) return () => [UNCLASSIFIED_COMPARTMENT_ID];
+  const map = new Map<string, string>();
+  for (const compartment of tables.compartments ?? []) {
+    map.set(
+      compartment.id,
+      compartment.reserved
+        ? UNCLASSIFIED_COMPARTMENT_ID
+        : ((await resolveCompartments(client, actor, [compartment.name]))[0] ??
+            UNCLASSIFIED_COMPARTMENT_ID),
+    );
+  }
+  if (map.has(UNCLASSIFIED_COMPARTMENT_ID) && allowanceIds(actor) !== null) {
+    await resolveCompartments(client, actor, [UNCLASSIFIED_COMPARTMENT_ID]);
+  }
+  return (row) => {
+    const label = row['compartment_ids'];
+    if (!Array.isArray(label))
+      throw new CoreError(400, 'invalid_bundle', 'Portable label is missing');
+    return canonicalLabel(
+      label.map((id) => {
+        const mapped = typeof id === 'string' ? map.get(id) : undefined;
+        if (mapped === undefined)
+          throw new CoreError(400, 'invalid_bundle', 'Portable label names an unknown compartment');
+        return mapped;
+      }),
+    );
+  };
 }

@@ -427,6 +427,7 @@ async function actorFor(
     tokenScopeIds: [scopeId],
     capabilities: ['read', 'write', 'admin'],
     authEpochs: { [scopeId]: Number(epoch) },
+    compartments: { kind: 'all' },
   };
 }
 

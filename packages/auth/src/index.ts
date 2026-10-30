@@ -2,11 +2,13 @@ import {
   actorKindSchema,
   bindActorAuthorizationGuard,
   CoreError,
+  databaseCompartments,
   getActorAuthorizationGuard,
   type ActorContext,
   type Capability,
+  type CompartmentAccess,
 } from '@memory/contracts';
-import { withTransaction, uuidArray, type PoolClient } from '@memory/db';
+import { setDatabaseContext, withTransaction, type PoolClient } from '@memory/db';
 import type { Pool } from 'pg';
 import {
   createConfirmationClient,
@@ -37,6 +39,7 @@ export type ApprovalPolicy = 'auto' | 'gate';
 
 /** The Gate identity behind an actor, used to request and verify change confirmations. */
 export interface GateIdentity {
+  readonly issuer: string;
   readonly subject: string;
   readonly connectionId: string;
   readonly clientId: string;
@@ -48,6 +51,13 @@ interface GrantRow {
   readonly scope_id: string;
   readonly auth_epoch: string;
   readonly capabilities: string[];
+}
+
+interface AllowanceRow {
+  readonly epoch: string;
+  readonly compartment_ids: string[];
+  /** True when this transaction changed the allowance, after checking the actor's epoch. */
+  readonly changed_here: boolean;
 }
 
 interface ActorCredential {
@@ -91,6 +101,7 @@ export class Authenticator {
     const state = this.credentials.get(actor);
     if (state === undefined) return undefined;
     return Object.freeze({
+      issuer: state.principal.issuer,
       subject: state.principal.subject,
       connectionId: state.principal.connectionId,
       clientId: state.principal.clientId,
@@ -113,12 +124,12 @@ export class Authenticator {
     let grants: GrantRow[];
     try {
       grants = await withTransaction(this.options.pool, async (client) => {
-        await setActorDatabaseContext(
-          client,
-          binding.user_id,
-          binding.user_principal_id,
-          boundScopeIds,
-        );
+        await setDatabaseContext(client, {
+          userId: binding.user_id,
+          principalId: binding.user_principal_id,
+          scopeIds: boundScopeIds,
+          compartments: databaseCompartments(actor.compartments),
+        });
         const result = await client.query<GrantRow>(
           `SELECT scope_id, auth_epoch, capabilities
            FROM app.lock_actor_access($1, $2, 'user', $3::uuid[])`,
@@ -148,6 +159,8 @@ export class Authenticator {
       authEpochs: Object.freeze(
         Object.fromEntries(grants.map((grant) => [grant.scope_id, Number(grant.auth_epoch)])),
       ),
+      // The person's authority applies to what the requesting connection may see, never wider.
+      compartments: actor.compartments,
       clientId: state.principal.clientId,
     });
     bindActorAuthorizationGuard(userActor, (transaction) =>
@@ -217,16 +230,30 @@ export class Authenticator {
       throw new CoreError(403, 'forbidden', 'The Gate identity has no local authorization bounds');
     }
     let grants: GrantRow[];
+    let compartments: CompartmentAccess;
     try {
-      grants = await withTransaction(this.options.pool, async (client) => {
-        await setActorDatabaseContext(client, binding.user_id, binding.principal_id, boundScopeIds);
+      ({ grants, compartments } = await withTransaction(this.options.pool, async (client) => {
+        await setDatabaseContext(client, {
+          userId: binding.user_id,
+          principalId: binding.principal_id,
+          scopeIds: boundScopeIds,
+          compartments: [],
+        });
         const result = await client.query<GrantRow>(
           `SELECT scope_id, auth_epoch, capabilities
            FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,
           [binding.user_id, binding.principal_id, actorKind.data, boundScopeIds],
         );
-        return result.rows;
-      });
+        const allowance = await readAllowance(client, binding.user_id, principal);
+        return {
+          grants: result.rows,
+          compartments: Object.freeze({
+            kind: 'allowance' as const,
+            ids: Object.freeze(allowance?.compartment_ids ?? []),
+            epoch: Number(allowance?.epoch ?? 0),
+          }),
+        };
+      }));
     } catch {
       throw new CoreError(
         503,
@@ -250,6 +277,7 @@ export class Authenticator {
       authEpochs: Object.freeze(
         Object.fromEntries(grants.map((grant) => [grant.scope_id, Number(grant.auth_epoch)])),
       ),
+      compartments,
       clientId: principal.clientId,
       ...(binding.principal_id === binding.user_principal_id ? {} : { actsForUser: true }),
     });
@@ -314,6 +342,30 @@ export class Authenticator {
         true,
       );
     }
+    if (actor.compartments.kind === 'allowance') {
+      let allowance: AllowanceRow | undefined;
+      try {
+        allowance = await readAllowance(client, actor.userId, state.principal);
+      } catch {
+        throw new CoreError(
+          503,
+          'authorization_unavailable',
+          'Local authorization is unavailable',
+          true,
+        );
+      }
+      if (
+        allowance?.changed_here !== true &&
+        Number(allowance?.epoch ?? 0) !== actor.compartments.epoch
+      ) {
+        throw new CoreError(
+          403,
+          'stale_authorization',
+          "The connection's compartment allowance changed; retry with a newly verified credential",
+          true,
+        );
+      }
+    }
     let refreshed: ExternalIdentityPrincipal;
     try {
       refreshed = await this.verifier.verifyToken(state.token);
@@ -334,15 +386,22 @@ export class Authenticator {
 export { createIdentityProviderVerifier, IdentityProviderError } from './connection-verifier.js';
 export type { ExternalIdentityPrincipal, IdentityProviderConfig } from './connection-verifier.js';
 
-async function setActorDatabaseContext(
+/**
+ * The connection's recorded allowance, limited to compartments that still exist and held until
+ * commit. It is read through the lookup function, so it does not depend on the transaction's
+ * tenant context. A connection without a row has General only, at epoch 0.
+ */
+async function readAllowance(
   client: PoolClient,
   userId: string,
-  principalId: string,
-  scopeIds: readonly string[],
-): Promise<void> {
-  await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
-  await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
-  await client.query("SELECT set_config('app.principal_id', $1, true)", [principalId]);
+  principal: ExternalIdentityPrincipal,
+): Promise<AllowanceRow | undefined> {
+  const result = await client.query<AllowanceRow>(
+    `SELECT epoch::text AS epoch, compartment_ids::text[] AS compartment_ids, changed_here
+     FROM app.lock_connection_allowance($1, $2, $3, $4)`,
+    [userId, principal.issuer, principal.subject, principal.connectionId],
+  );
+  return result.rows[0];
 }
 
 function effectiveCapabilities(

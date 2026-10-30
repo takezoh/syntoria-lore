@@ -12,14 +12,20 @@ Lore admits a Gate identity, not an individual OAuth client, and keeps the perso
 
 For hosted use, ask the service operator to configure the exact `/mcp` resource, issuer/subject binding and grant, then verify the configured tool calls in that environment. A source checkout does not establish that a particular client, user or grant is connected. User-facing prerequisites are in the [client access guide](sign-in.md); dated deployment readbacks are in the [change confirmation release record](../eval/change-confirmation-release-20261029.md).
 
+## Keep contexts apart with compartments
+
+A person's memories can be private, belong to an employer or a client engagement, or both. Lore labels each memory with compartments, such as an employer or a private matter, and gives each AI connection an allowance. A connection receives General memories and those in its compartments only; a newly approved connection has General only.
+
+Call `get_access` (REST `GET /v1/access`) first: it lists the scopes and compartments the connection can use, by name, and how its writes are labeled. Name compartments in `memory.compartments` when the person tells you where a memory belongs. Without a label, a write receives the connection's compartments. A General write from a connection that holds compartments is held in them; releasing it is a relaxation the person's approval policy decides (propose a RECLASSIFY and call `request_user_decision`). When the person asks, create a compartment with `create_compartment`, give one up with `narrow_access`, or ask for more with `request_compartment_access`, which follows the approval policy. Do not request compartments the person did not ask for, and do not move content between compartments on your own judgment.
+
 ## Discover the available tools
 
 For MCP, send `initialize` and then `tools/list` to the configured endpoint. Use each advertised tool's `inputSchema`; the deployment can expose a different version from this checkout. REST request and response shapes are in the served `/openapi.json` and the checked-in [OpenAPI document](../api/openapi.json).
 
 | Need | Start with |
 | --- | --- |
-| Read operations | Connect to `/mcp` with `read` capability: `recall_memories`, `get_memory`, `get_changes` and status tools |
-| Write operations | Connect to the same `/mcp` with `write` capability: `remember_memory`, `capture`, ChangeSets, confirmation tools, review decisions, Forget, source and policy changes, and feedback |
+| Read operations | Connect to `/mcp` with `read` capability: `get_access`, `recall_memories`, `get_memory`, `get_changes` and status tools |
+| Write operations | Connect to the same `/mcp` with `write` capability: `remember_memory`, `capture`, ChangeSets, confirmation tools, review decisions, Forget, source and policy changes, compartment and allowance changes, and feedback |
 | Both | A principal with both capabilities sees both operation groups on one MCP connection |
 | Operation meanings and errors | [MCP and HTTP API contract](../technical/mcp-api.md) |
 | Memory evidence, authority and retrieval bounds | [Memory system](../technical/memory-system.md) |

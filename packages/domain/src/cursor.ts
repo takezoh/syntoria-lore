@@ -1,20 +1,27 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { CoreError, uuidSchema } from '@memory/contracts';
 
+/** The allowance a cursor was read under: a connection's epoch and compartments, or all. */
+export type CursorCompartments =
+  { readonly epoch: number; readonly ids: readonly string[] } | 'all';
+
 export interface CursorState {
   readonly user: string;
   readonly principal: string;
   readonly scopes: readonly string[];
   readonly offsets: Readonly<Record<string, string>>;
   readonly auth_epochs: Readonly<Record<string, number>>;
+  readonly compartments: CursorCompartments;
   readonly exp: number;
 }
 
-// Version 1 signed payload keys are immutable; the public model uses user.
-interface SignedCursor extends Omit<CursorState, 'user'> {
+// Signed payload keys are immutable; the public model uses user. Version 2 adds the allowance
+// binding `cmp`; a version 1 cursor reads as General only at epoch 0.
+interface SignedCursor extends Omit<CursorState, 'user' | 'compartments'> {
   readonly owner: string;
-  readonly v: 1;
+  readonly v: 1 | 2;
   readonly kid: string;
+  readonly cmp?: CursorCompartments;
 }
 
 export class CursorCodec {
@@ -52,13 +59,14 @@ export class CursorCodec {
 
   encode(state: Omit<CursorState, 'exp'>): string {
     const payload: SignedCursor = {
-      v: 1,
+      v: 2,
       kid: this.activeKeyId,
       owner: state.user,
       principal: state.principal,
       offsets: state.offsets,
       auth_epochs: state.auth_epochs,
       scopes: [...state.scopes].sort(),
+      cmp: state.compartments,
       exp: Math.floor(Date.now() / 1000) + this.lifetimeSeconds,
     };
     const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -121,6 +129,7 @@ export class CursorCodec {
       scopes: decoded.scopes,
       offsets: decoded.offsets,
       auth_epochs: decoded.auth_epochs,
+      compartments: decoded.v === 1 ? { epoch: 0, ids: [] } : decoded.cmp!,
       exp: decoded.exp,
     };
   }
@@ -130,11 +139,12 @@ function isCursorPayload(value: unknown): value is SignedCursor {
   if (value === null || typeof value !== 'object') return false;
   const payload = value as Record<string, unknown>;
   if (
-    payload['v'] !== 1 ||
+    (payload['v'] !== 1 && payload['v'] !== 2) ||
     typeof payload['kid'] !== 'string' ||
     typeof payload['owner'] !== 'string'
   )
     return false;
+  if (payload['v'] === 2 && !isCursorCompartments(payload['cmp'])) return false;
   if (typeof payload['principal'] !== 'string' || !Array.isArray(payload['scopes'])) return false;
   if (!Number.isSafeInteger(payload['exp']) || typeof payload['exp'] !== 'number') return false;
   if (
@@ -160,6 +170,18 @@ function isCursorPayload(value: unknown): value is SignedCursor {
       return false;
   }
   return true;
+}
+
+function isCursorCompartments(value: unknown): value is CursorCompartments {
+  if (value === 'all') return true;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const binding = value as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(binding['epoch']) &&
+    (binding['epoch'] as number) >= 0 &&
+    Array.isArray(binding['ids']) &&
+    binding['ids'].every((id) => typeof id === 'string' && uuidSchema.safeParse(id).success)
+  );
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

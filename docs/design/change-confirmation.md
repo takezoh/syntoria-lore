@@ -107,6 +107,7 @@ The first iteration covers:
 - Forget, by memory, source or subject selector
 - `change_source_rights`, `change_scope_grant` and `set_retention_policy`
 - `configure_source`, which enables or disables capture from a source and records the person's consent (migration 0047, added on 2026-10-29 after the switch showed that no connection could enable a source otherwise)
+- `change_connection_allowance`, which adds compartments to the requesting connection's allowance (migration 0051, added on 2026-10-30 by the [memory compartments design](memory-compartments.md)); relaxing a memory's compartments is a RECLASSIFY committed through `request_user_decision`
 
 Export and import are not offered through confirmations and keep refusing non-user actors with `user_required`. Lore runs as one shared environment, so moving data between environments through an AI is not a use case.
 

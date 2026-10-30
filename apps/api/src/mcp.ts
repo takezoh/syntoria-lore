@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
-import { memoryInputSchema, type ActorContext } from '@memory/contracts';
+import { CoreError, memoryInputSchema, type ActorContext } from '@memory/contracts';
 import type { Authenticator } from '@memory/auth';
-import type { CoreService } from '@memory/domain';
+import type { CompartmentService, CoreService } from '@memory/domain';
 import type { ConnectorService } from '@memory/connectors';
 import type { CurationReviewService } from '@memory/jobs';
 import type { ForgetService, PortabilityService } from '@memory/governance';
@@ -10,6 +10,7 @@ import type { RecallService } from '@memory/recall';
 import { reviewDecisionSchema } from '@memory/contracts';
 import { z } from 'zod';
 import type { ChangeConfirmationService, ProtectedChange } from './confirmations.js';
+import { connectionOf } from './connection.js';
 
 export interface McpEndpointOptions {
   readonly productDisplayName: string;
@@ -21,8 +22,11 @@ export interface McpEndpointOptions {
   readonly governance?: ForgetService;
   readonly portability?: PortabilityService;
   readonly confirmations?: ChangeConfirmationService;
+  readonly compartments?: CompartmentService;
   readonly maxBodyBytes: number;
 }
+
+const compartmentRefs = z.array(z.string().trim().min(1).max(100)).max(32);
 
 const CONFIRMATION_NOTE =
   ' Your connection acts for the User, so the person’s approval policy decides: either the change is applied at once and the result carries approval.by "policy", or this returns confirmation_required with a Gate URL; then show the URL to the person and call complete_confirmation after they approve.';
@@ -54,7 +58,7 @@ export async function handleMcpRequest(
         { name: `${options.productDisplayName} MCP`, version: '0.1.0' },
         {
           instructions:
-            'The tools available to this authenticated actor reflect its current read and write capabilities. Every operation still checks the requested scope and current grants. Results are subject to current source rights and Forget suppressions. Your connection acts for the person, never as them, so everything you save is an AI proposal. To record the person’s own decision or preference, propose the changeset and call request_user_decision. Protected changes use the person’s approval policy: they apply at once with approval.by "policy", or return confirmation_required with a Gate URL to show the person, then call complete_confirmation after approval. Ask before requesting a change the person did not ask for.',
+            'Call get_access first: it lists the scopes and compartments this connection can use, by name. A compartment is a confidentiality boundary such as an employer or a private matter; you receive only General memories and those in your compartments, and what you save is labeled with your compartments unless you name others. The tools available to this authenticated actor reflect its current read and write capabilities. Every operation still checks the requested scope and current grants. Results are subject to current source rights and Forget suppressions. Your connection acts for the person, never as them, so everything you save is an AI proposal. To record the person’s own decision or preference, propose the changeset and call request_user_decision. Protected changes use the person’s approval policy: they apply at once with approval.by "policy", or return confirmation_required with a Gate URL to show the person, then call complete_confirmation after approval. Ask before requesting a change the person did not ask for.',
         },
       );
       if (actor.capabilities.includes('read')) {
@@ -63,10 +67,11 @@ export async function handleMcpRequest(
             'recall_memories',
             {
               description:
-                'Retrieve memories from one authorized scope using current rights and deletion filters.',
+                'Retrieve memories using current rights and deletion filters, from every authorized scope unless scope_id names one. Name compartments to narrow the search to them and General.',
               inputSchema: {
                 query: z.string().trim().min(1).max(2000),
-                scope_id: z.uuid(),
+                scope_id: z.uuid().optional(),
+                compartments: compartmentRefs.optional(),
                 mode: z
                   .enum(['precise', 'contextual', 'historical', 'exploratory', 'changes'])
                   .optional(),
@@ -74,43 +79,71 @@ export async function handleMcpRequest(
               },
               annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
             },
-            async ({ query, scope_id, mode, limit }) =>
+            async ({ query, scope_id, compartments, mode, limit }) =>
               toolResult(
                 await options.recall!.recall(actor, {
                   query,
-                  scope_ids: [scope_id],
+                  scope_ids: scope_id === undefined ? [] : [scope_id],
+                  ...(compartments === undefined ? {} : { compartments }),
                   ...(mode === undefined ? {} : { mode }),
                   ...(limit === undefined ? {} : { limit }),
                 }),
               ),
           );
         }
+        if (options.compartments !== undefined) {
+          server.registerTool(
+            'get_access',
+            {
+              description:
+                'List the scopes and compartments this connection can use, by name and ID, how its writes are labeled by default, and the approval policy for protected changes. Call this before other tools.',
+              inputSchema: {},
+              annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+            },
+            async () =>
+              toolResult({
+                ...(await options.compartments!.getAccess(actor)),
+                approval_policy: options.auth.gateIdentity(actor)?.approvalPolicy ?? null,
+              }),
+          );
+        }
         server.registerTool(
           'get_memory',
           {
-            description: 'Read a memory and its authorized provenance in one scope.',
+            description:
+              'Read a memory and its authorized provenance. scope_id may be omitted to search every authorized scope.',
             inputSchema: {
-              scope_id: z.uuid(),
+              scope_id: z.uuid().optional(),
               memory_id: z.uuid(),
               valid_at: z.iso.datetime({ offset: true }).optional(),
               known_at: z.iso.datetime({ offset: true }).optional(),
             },
             annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
           },
-          async ({ scope_id, memory_id, valid_at, known_at }) =>
-            toolResult(
-              await options.core.getMemory(actor, scope_id, memory_id, {
-                ...(valid_at === undefined ? {} : { valid_at }),
-                ...(known_at === undefined ? {} : { known_at }),
-              }),
-            ),
+          async ({ scope_id, memory_id, valid_at, known_at }) => {
+            const query = {
+              ...(valid_at === undefined ? {} : { valid_at }),
+              ...(known_at === undefined ? {} : { known_at }),
+            };
+            if (scope_id !== undefined)
+              return toolResult(await options.core.getMemory(actor, scope_id, memory_id, query));
+            for (const scope of authorizedScopes(actor)) {
+              try {
+                return toolResult(await options.core.getMemory(actor, scope, memory_id, query));
+              } catch (error) {
+                if (!(error instanceof CoreError) || error.status !== 404) throw error;
+              }
+            }
+            throw new CoreError(404, 'not_found', 'Memory not found');
+          },
         );
         server.registerTool(
           'get_changes',
           {
-            description: 'Read the authorized changes feed for one scope.',
+            description:
+              'Read the authorized changes feed, for every authorized scope unless scope_id names one.',
             inputSchema: {
-              scope_id: z.uuid(),
+              scope_id: z.uuid().optional(),
               limit: z.number().int().min(1).max(200).optional(),
               cursor: z.string().max(4096).optional(),
             },
@@ -121,7 +154,7 @@ export async function handleMcpRequest(
               await options.core.getChanges(
                 actor,
                 {
-                  scope_ids: [scope_id],
+                  scope_ids: scope_id === undefined ? [] : [scope_id],
                   ...(limit === undefined ? {} : { limit }),
                   ...(cursor === undefined ? {} : { cursor }),
                 },
@@ -212,9 +245,9 @@ export async function handleMcpRequest(
           'remember_memory',
           {
             description:
-              'Write a memory with explicit evidence into one authorized scope. Your connection acts for the person, so the memory is saved as an AI proposal; use propose_changeset and request_user_decision to record what the person decided with their authority.',
+              'Write a memory with explicit evidence. scope_id may be omitted when this connection can write one scope. Without memory.compartments the memory is labeled with your compartments; an empty list asks for General, which is held in your compartments until a relaxation is approved when you hold any. Your connection acts for the person, so the memory is saved as an AI proposal; use propose_changeset and request_user_decision to record what the person decided with their authority.',
             inputSchema: {
-              scope_id: z.uuid(),
+              scope_id: z.uuid().optional(),
               memory: memoryInputSchema,
               idempotency_key: z.string().min(1).max(256),
             },
@@ -223,13 +256,74 @@ export async function handleMcpRequest(
           async ({ scope_id, memory, idempotency_key }) => {
             const result = await options.core.remember(
               actor,
-              { scope_id, memory },
+              { ...(scope_id === undefined ? {} : { scope_id }), memory },
               randomUUID(),
               idempotency_key,
             );
             return toolResult(result);
           },
         );
+        if (options.compartments !== undefined) {
+          server.registerTool(
+            'create_compartment',
+            {
+              description:
+                'Create a compartment, a confidentiality boundary such as an employer, client or private matter, and add it to this connection. Only connections that hold it receive memories labeled with it. Prefer neutral names: a name that already exists cannot be created again.',
+              inputSchema: { name: z.string().trim().min(1).max(100) },
+              annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+            },
+            async ({ name }) =>
+              toolResult(
+                await options.compartments!.createCompartment(
+                  actor,
+                  connectionOf(options.auth, actor),
+                  { name },
+                ),
+              ),
+          );
+          server.registerTool(
+            'narrow_access',
+            {
+              description:
+                'Stop this connection from receiving memories in the named compartments. Takes effect at once; getting them back needs request_compartment_access.',
+              inputSchema: { compartments: compartmentRefs.min(1) },
+              annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+            },
+            async ({ compartments }) =>
+              toolResult(
+                await options.compartments!.narrowAccess(actor, connectionOf(options.auth, actor), {
+                  compartments,
+                }),
+              ),
+          );
+          server.registerTool(
+            'request_compartment_access',
+            {
+              description:
+                'Ask for this connection to receive memories in more compartments, named as the person named them. Only request what the person asked for.' +
+                CONFIRMATION_NOTE,
+              inputSchema: {
+                compartments: compartmentRefs.min(1),
+                idempotency_key: z.string().min(1).max(256).optional(),
+              },
+              annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+            },
+            async ({ compartments, idempotency_key }) =>
+              toolResult(
+                await protectedChange(
+                  { operation: 'change_connection_allowance', request: { compartments } },
+                  idempotency_key,
+                  () => {
+                    throw new CoreError(
+                      400,
+                      'connection_required',
+                      'Only an AI connection has an allowance',
+                    );
+                  },
+                ),
+              ),
+          );
+        }
         if (options.governance !== undefined) {
           server.registerTool(
             'forget_memory',
@@ -273,6 +367,7 @@ export async function handleMcpRequest(
                 enabled: z.boolean(),
                 consent: z.boolean(),
                 metadata: z.record(z.string(), z.unknown()).optional(),
+                compartments: compartmentRefs.optional(),
               },
               annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
             },
@@ -579,4 +674,8 @@ function toolResult(result: unknown) {
       ? { structuredContent: result as Record<string, unknown> }
       : {}),
   };
+}
+
+function authorizedScopes(actor: ActorContext): string[] {
+  return [...new Set(actor.scopeIds.filter((id) => actor.tokenScopeIds.includes(id)))].sort();
 }

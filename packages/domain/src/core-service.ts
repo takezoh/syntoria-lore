@@ -2,6 +2,7 @@ import { encodeIdentityProvenanceV1 } from '@memory/contracts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   CoreError,
+  databaseCompartments,
   getActorAuthorizationGuard,
   changeFeedQuerySchema,
   changeSetSchema,
@@ -17,8 +18,18 @@ import {
   type EvidenceInput,
   type MemoryInput,
 } from '@memory/contracts';
-import { withTransaction, uuidArray } from '@memory/db';
+import { setDatabaseContext, withTransaction } from '@memory/db';
 import type { Pool, PoolClient } from 'pg';
+import {
+  allowanceIds,
+  canonicalLabel,
+  isSubsetLabel,
+  resolveCompartments,
+  resolveWriteLabel,
+  unionLabels,
+  type LabelOrigin,
+  type WriteLabel,
+} from './compartments.js';
 import { CursorCodec, type CursorState } from './cursor.js';
 import { observationLocatorDigest, sourceIdentityDigest } from './governance-keys.js';
 
@@ -47,6 +58,7 @@ interface MutableMemoryRow {
   revision: number;
   committed_revision: number;
   indexed_revision: number;
+  compartment_ids: string[];
 }
 
 interface EventToWrite {
@@ -54,6 +66,8 @@ interface EventToWrite {
   readonly memoryId: string | null;
   readonly revision: number | null;
   readonly tombstone: boolean;
+  /** For a narrowing, the label the memory had before, so a reader that lost it is told. */
+  readonly previousLabel?: readonly string[];
 }
 
 interface OperationResult {
@@ -61,6 +75,9 @@ interface OperationResult {
   readonly memory_ids: readonly string[];
   readonly revisions: readonly number[];
   readonly changed: boolean;
+  /** For a CREATE, the label the new memory received and whether a General write was held. */
+  readonly compartment_ids?: readonly string[];
+  readonly held?: boolean;
 }
 
 interface EvidenceRow {
@@ -90,6 +107,8 @@ interface InternalCommitOptions {
   readonly userStatement?: boolean;
   readonly anchorsByOperation?: readonly (readonly CuratedEvidenceAnchor[])[];
   readonly jobFence?: { readonly jobId: string; readonly leaseToken: string };
+  /** The label of a reviewed proposal, applied instead of the approving connection's default. */
+  readonly label?: { readonly ids: readonly string[]; readonly origin: LabelOrigin };
   readonly review?: {
     readonly id: string;
     readonly expectedRevision: number;
@@ -140,7 +159,7 @@ export class CoreService {
     return this.applyChangeSet(
       actor,
       {
-        scope_id: parsed.data.scope_id,
+        scope_id: parsed.data.scope_id ?? soleWritableScope(actor),
         operations: [{ op: 'CREATE', memory: parsed.data.memory }],
       },
       requestId,
@@ -196,7 +215,7 @@ export class CoreService {
         }
         return existing.response;
       }
-      await this.validateProposal(client, actor, changeSet);
+      const label = await this.validateProposal(client, actor, changeSet);
       const changeSetId = randomUUID();
       const response = {
         change_set_id: changeSetId,
@@ -205,8 +224,9 @@ export class CoreService {
       };
       await client.query(
         `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response, client_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb, $11)`,
+           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response, client_id,
+           compartment_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb, $11, $12::uuid[])`,
         [
           actor.userId,
           changeSet.scope_id,
@@ -219,6 +239,7 @@ export class CoreService {
           payloadHash,
           idempotencyKey,
           actor.clientId ?? null,
+          label,
         ],
       );
       await client.query(
@@ -254,11 +275,12 @@ export class CoreService {
     const proposal = await withTransaction(
       this.pool,
       async (client) => {
-        await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-        await client.query("SELECT set_config('app.scope_ids', $1, true)", [
-          uuidArray(authorizedScopes),
-        ]);
-        await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+        await setDatabaseContext(client, {
+          userId: actor.userId,
+          principalId: actor.principalId,
+          scopeIds: authorizedScopes,
+          compartments: databaseCompartments(actor.compartments),
+        });
         const result = await client.query<{
           scope_id: string;
           status: string;
@@ -311,18 +333,28 @@ export class CoreService {
     return this.applyChangeSet(actor, proposal.proposal, requestId, idempotencyKey, changeSetId);
   }
 
+  /** Validates a proposal and returns the union of the labels it would read or write. */
   private async validateProposal(
     client: PoolClient,
     actor: ActorContext,
     changeSet: ChangeSet,
-  ): Promise<void> {
+  ): Promise<string[]> {
+    const labels: (readonly string[])[] = [];
+    const writeLabel = async (refs: readonly string[] | undefined) =>
+      resolveWriteLabel(
+        actor,
+        refs === undefined ? undefined : await resolveCompartments(client, actor, refs),
+      ).ids;
     for (const operation of changeSet.operations) {
       if (operation.op === 'CREATE') {
-        await this.validateEvidenceSources(
-          client,
-          actor,
-          changeSet.scope_id,
-          operation.memory.evidence,
+        labels.push(
+          await writeLabel(operation.memory.compartments),
+          await this.validateEvidenceSources(
+            client,
+            actor,
+            changeSet.scope_id,
+            operation.memory.evidence,
+          ),
         );
         continue;
       }
@@ -335,12 +367,16 @@ export class CoreService {
         if (targets[0]?.id === targets[1]?.id)
           throw new CoreError(400, 'invalid_request', 'A memory cannot be related to itself');
         for (const target of targets)
-          await this.lockMutableMemory(
-            client,
-            actor,
-            changeSet.scope_id,
-            target.id,
-            target.revision,
+          labels.push(
+            (
+              await this.lockMutableMemory(
+                client,
+                actor,
+                changeSet.scope_id,
+                target.id,
+                target.revision,
+              )
+            ).compartment_ids,
           );
         continue;
       }
@@ -357,6 +393,11 @@ export class CoreService {
         operation.memory_id,
         operation.expected_revision,
       );
+      labels.push(memory.compartment_ids);
+      if (operation.op === 'RECLASSIFY') {
+        labels.push(await resolveCompartments(client, actor, operation.compartments));
+        continue;
+      }
       if (
         operation.op === 'REFINE' &&
         actor.actorKind !== 'user' &&
@@ -373,18 +414,24 @@ export class CoreService {
         operation.op === 'REFINE' ||
         operation.op === 'CONTEST'
       ) {
-        await this.validateEvidenceSources(client, actor, changeSet.scope_id, operation.evidence);
+        labels.push(
+          await this.validateEvidenceSources(client, actor, changeSet.scope_id, operation.evidence),
+        );
       }
       if (operation.op === 'SUPERSEDE') {
         validateMemoryTime(operation.replacement);
-        await this.validateEvidenceSources(
-          client,
-          actor,
-          changeSet.scope_id,
-          operation.replacement.evidence,
+        labels.push(
+          await writeLabel(operation.replacement.compartments),
+          await this.validateEvidenceSources(
+            client,
+            actor,
+            changeSet.scope_id,
+            operation.replacement.evidence,
+          ),
         );
       }
     }
+    return unionLabels(...labels);
   }
 
   private async validateEvidenceSources(
@@ -392,7 +439,8 @@ export class CoreService {
     actor: ActorContext,
     scopeId: string,
     evidence: readonly EvidenceInput[],
-  ): Promise<void> {
+  ): Promise<string[]> {
+    const labels: string[][] = [];
     for (const item of evidence) {
       const source = await client.query<{ id: string }>(
         `SELECT id FROM sources
@@ -409,8 +457,12 @@ export class CoreService {
         );
       }
       await this.lockSourcesForShare(client, [sourceId]);
-      const rights = await client.query<{ rights_status: string; consent: boolean }>(
-        `SELECT rights_status, consent FROM sources
+      const rights = await client.query<{
+        rights_status: string;
+        consent: boolean;
+        compartment_ids: string[];
+      }>(
+        `SELECT rights_status, consent, compartment_ids::text[] AS compartment_ids FROM sources
          WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
         [actor.userId, scopeId, sourceId],
       );
@@ -422,7 +474,9 @@ export class CoreService {
           'The source is not authorized for this proposal',
         );
       }
+      labels.push(row.compartment_ids);
     }
+    return unionLabels(...labels);
   }
 
   async applyChangeSet(
@@ -501,8 +555,8 @@ export class CoreService {
       } else {
         await client.query(
           `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-             response, status, committed_at, client_id)
-           VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, 'committed', clock_timestamp(), $7)`,
+             response, status, committed_at, client_id, compartment_ids)
+           VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, 'committed', clock_timestamp(), $7, '{}')`,
           [
             actor.userId,
             changeSet.scope_id,
@@ -595,6 +649,27 @@ export class CoreService {
         );
       }
 
+      // Each event carries the label of the version it records; the changeset and its stored
+      // response carry the union of every label it touched.
+      const eventLabels = await client.query<{
+        memory_id: string;
+        revision: number;
+        label: string[];
+      }>(
+        `SELECT memory_id::text AS memory_id, revision, compartment_ids::text[] AS label
+         FROM memory_versions
+         WHERE user_id = $1 AND scope_id = $2 AND change_set_id = $3`,
+        [actor.userId, changeSet.scope_id, changeSetId],
+      );
+      const labelOf = new Map(
+        eventLabels.rows.map((row) => [`${row.memory_id}:${row.revision}`, row.label]),
+      );
+      const versionLabel = (event: EventToWrite): string[] =>
+        labelOf.get(`${event.memoryId}:${event.revision}`) ?? [];
+      const changeSetLabel = unionLabels(
+        ...events.map(versionLabel),
+        ...operationResults.map((result) => result.compartment_ids ?? []),
+      );
       const seqResult = await client.query<{ last_seq: string }>(
         `UPDATE scope_offsets SET last_seq = last_seq + $3, updated_at = clock_timestamp()
          WHERE user_id = $1 AND scope_id = $2 RETURNING last_seq`,
@@ -608,8 +683,9 @@ export class CoreService {
         const seq = (firstSeq + BigInt(index)).toString();
         const changeId = randomUUID();
         await client.query(
-          `INSERT INTO change_log(user_id, scope_id, id, seq, change_set_id, op, memory_id, memory_revision, tombstone)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          `INSERT INTO change_log(user_id, scope_id, id, seq, change_set_id, op, memory_id, memory_revision, tombstone,
+             compartment_ids, previous_compartment_ids)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid[], $11::uuid[])`,
           [
             actor.userId,
             changeSet.scope_id,
@@ -620,6 +696,8 @@ export class CoreService {
             event.memoryId,
             event.revision,
             event.tombstone,
+            versionLabel(event),
+            event.previousLabel === undefined ? null : canonicalLabel(event.previousLabel),
           ],
         );
         await client.query(
@@ -651,12 +729,14 @@ export class CoreService {
       };
       await client.query(
         `UPDATE changesets SET response = $4::jsonb, status = 'committed', proposal = NULL,
-        committed_at = clock_timestamp() WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
-        [actor.userId, changeSet.scope_id, changeSetId, JSON.stringify(response)],
+        committed_at = clock_timestamp(), compartment_ids = $5::uuid[]
+        WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, changeSet.scope_id, changeSetId, JSON.stringify(response), changeSetLabel],
       );
       await client.query(
-        `INSERT INTO idempotency_keys(user_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+        `INSERT INTO idempotency_keys(user_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id,
+           compartment_ids)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::uuid[])`,
         [
           actor.userId,
           changeSet.scope_id,
@@ -665,6 +745,7 @@ export class CoreService {
           idempotencyPayloadHash,
           JSON.stringify(response),
           changeSetId,
+          changeSetLabel,
         ],
       );
       await client.query(
@@ -885,7 +966,7 @@ export class CoreService {
           'A curation proposal already exists for this job',
         );
       }
-      await this.validateProposal(client, actor, changeSet);
+      const label = await this.validateProposal(client, actor, changeSet);
       const changeSetId = randomUUID();
       const response = {
         change_set_id: changeSetId,
@@ -894,8 +975,9 @@ export class CoreService {
       };
       await client.query(
         `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response, client_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb, $11)`,
+           response, status, proposal, proposal_hash, proposal_idempotency_key, proposal_response, client_id,
+           compartment_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'proposed', $8::jsonb, $9, $10, $7::jsonb, $11, $12::uuid[])`,
         [
           actor.userId,
           changeSet.scope_id,
@@ -908,13 +990,14 @@ export class CoreService {
           payloadHash,
           idempotencyKey,
           actor.clientId ?? null,
+          label,
         ],
       );
       const reviewId = randomUUID();
       await client.query(
         `INSERT INTO curation_reviews(user_id, scope_id, id, job_id, change_set_id, reason_codes, rationale,
-           candidate_summary, evidence_anchors, expected_revisions)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb)`,
+           candidate_summary, evidence_anchors, expected_revisions, compartment_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::uuid[])`,
         [
           actor.userId,
           changeSet.scope_id,
@@ -926,6 +1009,7 @@ export class CoreService {
           JSON.stringify(draft.candidateSummary),
           JSON.stringify(draft.evidenceAnchors),
           JSON.stringify(draft.expectedRevisions),
+          label,
         ],
       );
       const held = await client.query(
@@ -1049,9 +1133,10 @@ export class CoreService {
           evidence_anchors: unknown;
           expected_revisions: unknown;
           candidate_summary: Record<string, unknown>;
+          compartment_ids: string[];
         }>(
           `SELECT r.scope_id, r.change_set_id, r.status, r.revision, r.job_id, c.proposal, r.evidence_anchors,
-           r.expected_revisions, r.candidate_summary
+           r.expected_revisions, r.candidate_summary, r.compartment_ids::text[] AS compartment_ids
          FROM curation_reviews r JOIN changesets c ON c.user_id = r.user_id AND c.scope_id = r.scope_id AND c.id = r.change_set_id
          WHERE r.user_id = $1 AND r.scope_id = ANY($2::uuid[]) AND r.id = $3 FOR UPDATE OF r`,
           [actor.userId, authorizedScopes, reviewId],
@@ -1146,8 +1231,9 @@ export class CoreService {
           );
           const response = { review_id: reviewId, scope_id: row.scope_id, status: 'rejected' };
           await client.query(
-            `INSERT INTO idempotency_keys(user_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id)
-             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+            `INSERT INTO idempotency_keys(user_id, scope_id, principal_id, idempotency_key, payload_hash, response, change_set_id,
+               compartment_ids)
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::uuid[])`,
             [
               actor.userId,
               row.scope_id,
@@ -1156,6 +1242,7 @@ export class CoreService {
               decisionPayloadHash,
               JSON.stringify(response),
               row.change_set_id,
+              row.compartment_ids,
             ],
           );
           return { replayedResponse: response };
@@ -1194,6 +1281,7 @@ export class CoreService {
           proposal: row.proposal,
           anchors: decodeCuratedAnchors(row.evidence_anchors),
           expectedRevisions: decodeExpectedRevisions(row.expected_revisions),
+          label: row.compartment_ids,
         };
       },
     );
@@ -1209,6 +1297,9 @@ export class CoreService {
         activate: true,
         userStatement: confirmation === 'user_statement',
         anchorsByOperation: review.anchors,
+        // The reviewed proposal keeps the label of the observations it came from, not the
+        // approving connection's default.
+        label: { ids: review.label, origin: 'derived' },
         review: {
           id: reviewId,
           expectedRevision,
@@ -1391,6 +1482,16 @@ export class CoreService {
               principal: actor.principalId,
               scopes: scopeIds,
             });
+      // A cursor is bound to the allowance it was read under; another allowance starts afresh.
+      if (!sameCompartmentBinding(cursor.compartments, cursorCompartments(actor))) {
+        throw new CoreError(
+          410,
+          'cursor_expired',
+          'The connection allowance changed; resynchronize this cursor',
+          false,
+          { resync_required: true },
+        );
+      }
       for (const scopeId of scopeIds) {
         const currentEpoch = actor.authEpochs[scopeId];
         if (currentEpoch === undefined || cursor.auth_epochs[scopeId] !== currentEpoch) {
@@ -1412,8 +1513,11 @@ export class CoreService {
         memory_revision: number | null;
         tombstone: boolean;
         created_at: Date;
+        label: string[];
+        previous: string[] | null;
       }>(
-        `SELECT id, scope_id, seq, op, memory_id, memory_revision, tombstone, created_at
+        `SELECT id, scope_id, seq, op, memory_id, memory_revision, tombstone, created_at,
+           compartment_ids::text[] AS label, previous_compartment_ids::text[] AS previous
          FROM change_log
          WHERE user_id = $1 AND scope_id = ANY($2::uuid[])
            AND seq > coalesce(($3::jsonb ->> scope_id::text)::bigint, 0)
@@ -1433,6 +1537,17 @@ export class CoreService {
         auth_epochs: Object.fromEntries(
           scopeIds.map((scopeId) => [scopeId, actor.authEpochs[scopeId]!]),
         ),
+        compartments: cursorCompartments(actor),
+      });
+      // Events outside the reader's compartments are skipped; a narrowing that took a memory
+      // out of them is reported once, without content.
+      const allowed = allowanceIds(actor);
+      const visible = page.flatMap((row) => {
+        if (allowed === null || isSubsetLabel(row.label, allowed))
+          return [{ row, withdrawn: false }];
+        if (row.previous !== null && isSubsetLabel(row.previous, allowed))
+          return [{ row, withdrawn: true }];
+        return [];
       });
       await client.query(
         `INSERT INTO audit_events(user_id, scope_id, principal_id, event_type, request_id, metadata)
@@ -1446,14 +1561,14 @@ export class CoreService {
         ],
       );
       return {
-        changes: page.map((row) => ({
+        changes: visible.map(({ row, withdrawn }) => ({
           id: row.id,
           scope_id: row.scope_id,
           sequence: row.seq,
-          operation: row.op,
+          operation: withdrawn ? 'WITHDRAWN' : row.op,
           memory_id: row.memory_id,
-          revision: row.memory_revision,
-          tombstone: row.tombstone,
+          revision: withdrawn ? null : row.memory_revision,
+          tombstone: withdrawn ? true : row.tombstone,
           occurred_at: row.created_at.toISOString(),
         })),
         next_cursor: nextCursor,
@@ -1473,21 +1588,33 @@ export class CoreService {
   ): Promise<{ events: EventToWrite[]; result: OperationResult }> {
     switch (operation.op) {
       case 'CREATE': {
-        const memoryId = await this.createMemory(
+        const label =
+          internalOptions?.label === undefined
+            ? await this.writeLabelFor(client, actor, operation.memory.compartments)
+            : { ...internalOptions.label, held: false };
+        const created = await this.createMemory(
           client,
           actor,
           scopeId,
           changeSetId,
           operation.memory,
+          label,
           internalOptions,
           operationOrdinal,
         );
-        const memory = await this.loadMemory(client, actor, scopeId, memoryId, {});
+        const memory = await this.loadMemory(client, actor, scopeId, created.id, {});
         if (memory === null)
           throw new CoreError(500, 'internal_error', 'The committed memory could not be read');
         return {
-          events: [{ op: 'CREATE', memoryId, revision: 1, tombstone: false }],
-          result: { op: operation.op, memory_ids: [memoryId], revisions: [1], changed: true },
+          events: [{ op: 'CREATE', memoryId: created.id, revision: 1, tombstone: false }],
+          result: {
+            op: operation.op,
+            memory_ids: [created.id],
+            revisions: [1],
+            changed: true,
+            compartment_ids: created.label,
+            held: label.held,
+          },
         };
       }
       case 'CORROBORATE': {
@@ -1498,19 +1625,28 @@ export class CoreService {
           operation.memory_id,
           operation.expected_revision,
         );
+        const added: (readonly string[])[] = [];
         for (let evidenceIndex = 0; evidenceIndex < operation.evidence.length; evidenceIndex += 1) {
           const evidence = operation.evidence[evidenceIndex];
           if (evidence === undefined) continue;
-          await this.attachEvidence(
+          const attached = await this.attachEvidence(
             client,
             actor,
             scopeId,
             memory.id,
             evidence,
+            memory.compartment_ids,
             internalOptions?.anchorsByOperation?.[operationOrdinal]?.[evidenceIndex],
           );
+          added.push(attached.label);
         }
-        const revision = await this.incrementRevision(client, actor, memory, changeSetId);
+        const revision = await this.incrementRevision(
+          client,
+          actor,
+          memory,
+          changeSetId,
+          unionLabels(...added),
+        );
         return {
           events: [{ op: operation.op, memoryId: memory.id, revision, tombstone: false }],
           result: {
@@ -1539,8 +1675,20 @@ export class CoreService {
             'Only the User may refine an User-attributed active memory',
           );
         }
+        const refineLabels: (readonly string[])[] = [];
         for (const evidence of operation.evidence)
-          await this.attachEvidence(client, actor, scopeId, memory.id, evidence);
+          refineLabels.push(
+            (
+              await this.attachEvidence(
+                client,
+                actor,
+                scopeId,
+                memory.id,
+                evidence,
+                memory.compartment_ids,
+              )
+            ).label,
+          );
         const lifecycle =
           actor.actorKind === 'user' && operation.epistemic_status !== 'proposed'
             ? memory.lifecycle === 'candidate'
@@ -1573,7 +1721,15 @@ export class CoreService {
             nextRevision,
           ],
         );
-        await this.writeVersion(client, actor, scopeId, memory.id, changeSetId);
+        await this.writeVersion(
+          client,
+          actor,
+          scopeId,
+          memory.id,
+          changeSetId,
+          'inherited',
+          unionLabels(...refineLabels),
+        );
         return {
           events: [
             { op: operation.op, memoryId: memory.id, revision: nextRevision, tombstone: false },
@@ -1623,13 +1779,18 @@ export class CoreService {
           );
         }
         const replacementAt = { ...replacement, valid_from: cutover.toISOString() };
-        const replacementId = await this.createMemory(
+        // A replacement is derived from what it replaces, so it keeps at least its label.
+        const replacementLabel = await this.writeLabelFor(
           client,
           actor,
-          scopeId,
-          changeSetId,
-          replacementAt,
+          operation.replacement.compartments,
         );
+        const replacementId = (
+          await this.createMemory(client, actor, scopeId, changeSetId, replacementAt, {
+            ...replacementLabel,
+            ids: unionLabels(replacementLabel.ids, oldMemory.compartment_ids),
+          })
+        ).id;
         const oldRevision = oldMemory.revision + 1;
         await client.query(
           `UPDATE memories SET lifecycle = 'superseded', superseded_at = clock_timestamp(),
@@ -1638,7 +1799,7 @@ export class CoreService {
            WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
           [actor.userId, scopeId, oldMemory.id, cutover.toISOString(), oldRevision],
         );
-        await this.writeVersion(client, actor, scopeId, oldMemory.id, changeSetId);
+        await this.writeVersion(client, actor, scopeId, oldMemory.id, changeSetId, 'inherited');
         await client.query(
           `INSERT INTO relations(user_id, scope_id, from_memory_id, to_memory_id, relation, context, created_by)
            VALUES ($1, $2, $3, $4, 'supersedes', '{}'::jsonb, $5)`,
@@ -1665,8 +1826,20 @@ export class CoreService {
           operation.memory_id,
           operation.expected_revision,
         );
+        const contestLabels: (readonly string[])[] = [];
         for (const evidence of operation.evidence)
-          await this.attachEvidence(client, actor, scopeId, memory.id, evidence);
+          contestLabels.push(
+            (
+              await this.attachEvidence(
+                client,
+                actor,
+                scopeId,
+                memory.id,
+                evidence,
+                memory.compartment_ids,
+              )
+            ).label,
+          );
         const reasons = Array.isArray(memory.context['contest_reasons'])
           ? memory.context['contest_reasons']
           : [];
@@ -1678,7 +1851,15 @@ export class CoreService {
            WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
           [actor.userId, scopeId, memory.id, JSON.stringify(context), nextRevision],
         );
-        await this.writeVersion(client, actor, scopeId, memory.id, changeSetId);
+        await this.writeVersion(
+          client,
+          actor,
+          scopeId,
+          memory.id,
+          changeSetId,
+          'inherited',
+          unionLabels(...contestLabels),
+        );
         return {
           events: [
             { op: operation.op, memoryId: memory.id, revision: nextRevision, tombstone: false },
@@ -1781,7 +1962,7 @@ export class CoreService {
            WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
           [actor.userId, scopeId, memory.id, revision],
         );
-        await this.writeVersion(client, actor, scopeId, memory.id, changeSetId);
+        await this.writeVersion(client, actor, scopeId, memory.id, changeSetId, 'inherited');
         return {
           events: [{ op: operation.op, memoryId: memory.id, revision, tombstone: true }],
           result: {
@@ -1789,6 +1970,70 @@ export class CoreService {
             memory_ids: [memory.id],
             revisions: [revision],
             changed: true,
+          },
+        };
+      }
+      case 'RECLASSIFY': {
+        const memory = await this.lockMutableMemory(
+          client,
+          actor,
+          scopeId,
+          operation.memory_id,
+          operation.expected_revision,
+        );
+        const target = await resolveCompartments(client, actor, operation.compartments);
+        const current = canonicalLabel(memory.compartment_ids);
+        const narrowing = isSubsetLabel(current, target);
+        if (narrowing && isSubsetLabel(target, current)) {
+          return {
+            events: [],
+            result: {
+              op: operation.op,
+              memory_ids: [memory.id],
+              revisions: [memory.revision],
+              changed: false,
+            },
+          };
+        }
+        // Adding a compartment only restricts; removing one widens who receives the memory.
+        if (!narrowing && actor.actorKind !== 'user') {
+          throw new CoreError(
+            403,
+            'user_confirmation_required',
+            "Removing a compartment from a memory needs the person's approval; request a user decision",
+          );
+        }
+        const nextRevision = memory.revision + 1;
+        await client.query(
+          `UPDATE memories SET compartment_ids = $4::uuid[], revision = $5, committed_revision = $5,
+             updated_at = clock_timestamp()
+           WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+          [actor.userId, scopeId, memory.id, target, nextRevision],
+        );
+        await this.writeVersion(
+          client,
+          actor,
+          scopeId,
+          memory.id,
+          changeSetId,
+          narrowing ? 'reclassified' : 'relaxed',
+        );
+        return {
+          events: [
+            {
+              op: operation.op,
+              memoryId: memory.id,
+              revision: nextRevision,
+              tombstone: false,
+              ...(narrowing ? { previousLabel: current } : {}),
+            },
+          ],
+          result: {
+            op: operation.op,
+            memory_ids: [memory.id],
+            revisions: [nextRevision],
+            changed: true,
+            compartment_ids: target,
           },
         };
       }
@@ -1800,15 +2045,33 @@ export class CoreService {
     }
   }
 
+  /** Resolves a write's requested compartments and applies the connection's labeling rules. */
+  private async writeLabelFor(
+    client: PoolClient,
+    actor: ActorContext,
+    refs: readonly string[] | undefined,
+  ): Promise<WriteLabel> {
+    return resolveWriteLabel(
+      actor,
+      refs === undefined ? undefined : await resolveCompartments(client, actor, refs),
+    );
+  }
+
+  /**
+   * Creates a memory with its requested label joined with the labels of its evidence. Subjects
+   * are attached afterwards under the final label, so a subject never reveals more than its
+   * memory.
+   */
   private async createMemory(
     client: PoolClient,
     actor: ActorContext,
     scopeId: string,
     changeSetId: string,
     input: MemoryInput,
+    label: WriteLabel,
     internalOptions?: InternalCommitOptions,
     operationOrdinal = 0,
-  ): Promise<string> {
+  ): Promise<{ readonly id: string; readonly label: string[] }> {
     validateMemoryTime(input);
     const writeActorKind = internalOptions?.writerActorKind ?? actor.actorKind;
     const epistemicStatus = internalOptions?.userStatement ? 'asserted' : input.epistemic_status;
@@ -1825,8 +2088,8 @@ export class CoreService {
           : 'candidate';
     const result = await client.query<{ id: string }>(
       `INSERT INTO memories(user_id, scope_id, kind, statement, context, actor_kind, authority,
-        epistemic_status, contested, lifecycle, valid_from, valid_to, created_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13)
+        epistemic_status, contested, lifecycle, valid_from, valid_to, created_by, compartment_ids)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, $14::uuid[])
        RETURNING id`,
       [
         actor.userId,
@@ -1842,11 +2105,31 @@ export class CoreService {
         input.valid_from,
         input.valid_to,
         actor.principalId,
+        canonicalLabel(label.ids),
       ],
     );
     const memoryId = result.rows[0]?.id;
     if (memoryId === undefined)
       throw new CoreError(500, 'internal_error', 'Memory insert did not return an identifier');
+    const anchors = internalOptions?.anchorsByOperation?.[operationOrdinal] ?? [];
+    const evidenceLabels: (readonly string[])[] = [];
+    for (let evidenceIndex = 0; evidenceIndex < input.evidence.length; evidenceIndex += 1) {
+      const evidence = input.evidence[evidenceIndex];
+      if (evidence === undefined) continue;
+      const anchor = anchors[evidenceIndex];
+      evidenceLabels.push(
+        (await this.attachEvidence(client, actor, scopeId, memoryId, evidence, label.ids, anchor))
+          .label,
+      );
+    }
+    const finalLabel = unionLabels(label.ids, ...evidenceLabels);
+    if (finalLabel.length !== label.ids.length) {
+      await client.query(
+        `UPDATE memories SET compartment_ids = $4::uuid[]
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, scopeId, memoryId, finalLabel],
+      );
+    }
     for (const subject of input.subjects) {
       const subjectId = await this.ensureSubject(
         client,
@@ -1854,12 +2137,22 @@ export class CoreService {
         scopeId,
         subject.name,
         input.valid_from,
+        finalLabel,
       );
       await client.query(
         'INSERT INTO memory_subjects(user_id, scope_id, memory_id, subject_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
         [actor.userId, scopeId, memoryId, subjectId],
       );
-      await this.ensureAlias(client, actor, scopeId, subjectId, subject.name, null, null);
+      await this.ensureAlias(
+        client,
+        actor,
+        scopeId,
+        subjectId,
+        subject.name,
+        null,
+        null,
+        finalLabel,
+      );
       for (const alias of subject.aliases) {
         await this.ensureAlias(
           client,
@@ -1869,18 +2162,12 @@ export class CoreService {
           alias.name,
           alias.valid_from,
           alias.valid_to,
+          finalLabel,
         );
       }
     }
-    const anchors = internalOptions?.anchorsByOperation?.[operationOrdinal] ?? [];
-    for (let evidenceIndex = 0; evidenceIndex < input.evidence.length; evidenceIndex += 1) {
-      const evidence = input.evidence[evidenceIndex];
-      if (evidence === undefined) continue;
-      const anchor = anchors[evidenceIndex];
-      await this.attachEvidence(client, actor, scopeId, memoryId, evidence, anchor);
-    }
-    await this.writeVersion(client, actor, scopeId, memoryId, changeSetId);
-    return memoryId;
+    await this.writeVersion(client, actor, scopeId, memoryId, changeSetId, label.origin);
+    return { id: memoryId, label: finalLabel };
   }
 
   private async ensureSubject(
@@ -1889,28 +2176,34 @@ export class CoreService {
     scopeId: string,
     name: string,
     validAt: string | null,
+    label: readonly string[],
   ): Promise<string> {
+    // Subjects are keyed by label: the same name under another label is another subject.
     const normalized = normalizeName(name);
     const at = validAt ?? new Date().toISOString();
     const existing = await client.query<{ id: string }>(
       `SELECT id FROM subjects WHERE user_id = $1 AND scope_id = $2 AND normalized_name = $3
+         AND compartment_ids = $5::uuid[]
        UNION
        SELECT subject_id AS id FROM subject_aliases
        WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3
+         AND compartment_ids = $5::uuid[]
          AND valid_from <= $4 AND (valid_to IS NULL OR valid_to > $4)
        LIMIT 1`,
-      [actor.userId, scopeId, normalized, at],
+      [actor.userId, scopeId, normalized, at, canonicalLabel(label)],
     );
     if (existing.rows[0] !== undefined) return existing.rows[0].id;
     const inserted = await client.query<{ id: string }>(
-      `INSERT INTO subjects(user_id, scope_id, canonical_name, normalized_name)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, scope_id, normalized_name) DO NOTHING RETURNING id`,
-      [actor.userId, scopeId, name.trim(), normalized],
+      `INSERT INTO subjects(user_id, scope_id, canonical_name, normalized_name, compartment_ids)
+       VALUES ($1, $2, $3, $4, $5::uuid[])
+       ON CONFLICT (user_id, scope_id, compartment_ids, normalized_name) DO NOTHING RETURNING id`,
+      [actor.userId, scopeId, name.trim(), normalized, canonicalLabel(label)],
     );
     if (inserted.rows[0] !== undefined) return inserted.rows[0].id;
     const conflict = await client.query<{ id: string }>(
-      'SELECT id FROM subjects WHERE user_id = $1 AND scope_id = $2 AND normalized_name = $3',
-      [actor.userId, scopeId, normalized],
+      `SELECT id FROM subjects WHERE user_id = $1 AND scope_id = $2 AND normalized_name = $3
+         AND compartment_ids = $4::uuid[]`,
+      [actor.userId, scopeId, normalized, canonicalLabel(label)],
     );
     if (conflict.rows[0] !== undefined) return conflict.rows[0].id;
     throw new CoreError(409, 'subject_conflict', 'The subject name overlaps an existing alias');
@@ -1924,6 +2217,7 @@ export class CoreService {
     alias: string,
     validFrom: string | null,
     validTo: string | null,
+    label: readonly string[],
   ): Promise<void> {
     if (validFrom !== null && validTo !== null && Date.parse(validTo) <= Date.parse(validFrom)) {
       throw new CoreError(
@@ -1936,9 +2230,9 @@ export class CoreService {
     const from = validFrom ?? '-infinity';
     const existing = await client.query<{ subject_id: string }>(
       `SELECT subject_id FROM subject_aliases
-       WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3
+       WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3 AND compartment_ids = $6::uuid[]
          AND valid_from = $4::timestamptz AND valid_to IS NOT DISTINCT FROM $5::timestamptz`,
-      [actor.userId, scopeId, normalized, from, validTo],
+      [actor.userId, scopeId, normalized, from, validTo, canonicalLabel(label)],
     );
     const current = existing.rows[0];
     if (current !== undefined) {
@@ -1952,11 +2246,11 @@ export class CoreService {
     }
     const overlapping = await client.query<{ subject_id: string }>(
       `SELECT subject_id FROM subject_aliases
-       WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3
+       WHERE user_id = $1 AND scope_id = $2 AND normalized_alias = $3 AND compartment_ids = $6::uuid[]
          AND tstzrange(valid_from, coalesce(valid_to, 'infinity'::timestamptz), '[)') &&
              tstzrange($4::timestamptz, coalesce($5::timestamptz, 'infinity'::timestamptz), '[)')
        LIMIT 1`,
-      [actor.userId, scopeId, normalized, from, validTo],
+      [actor.userId, scopeId, normalized, from, validTo, canonicalLabel(label)],
     );
     if (overlapping.rows[0] !== undefined)
       throw new CoreError(
@@ -1965,9 +2259,19 @@ export class CoreService {
         'The alias overlaps another subject name in time',
       );
     await client.query(
-      `INSERT INTO subject_aliases(user_id, scope_id, subject_id, alias, normalized_alias, valid_from, valid_to)
-       VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz)`,
-      [actor.userId, scopeId, subjectId, alias.trim(), normalized, from, validTo],
+      `INSERT INTO subject_aliases(user_id, scope_id, subject_id, alias, normalized_alias, valid_from, valid_to,
+         compartment_ids)
+       VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8::uuid[])`,
+      [
+        actor.userId,
+        scopeId,
+        subjectId,
+        alias.trim(),
+        normalized,
+        from,
+        validTo,
+        canonicalLabel(label),
+      ],
     );
   }
 
@@ -1977,8 +2281,11 @@ export class CoreService {
     scopeId: string,
     memoryId: string,
     evidence: EvidenceInput,
+    newSourceLabel: readonly string[],
     anchor?: CuratedEvidenceAnchor,
-  ): Promise<string> {
+  ): Promise<{ readonly id: string; readonly label: string[] }> {
+    // Evidence carries its source's label. An explicit remember creates its source under the
+    // label of the memory it supports.
     const sourceInput = evidence.source;
     const sourceDigests =
       this.forgetHmacKey === undefined
@@ -2022,37 +2329,43 @@ export class CoreService {
         this.forgetHmacKey === undefined,
       );
     }
+    interface SourceRow {
+      id: string;
+      rights_status: string;
+      consent: boolean;
+      lineage_root: string | null;
+      compartment_ids: string[];
+    }
     const sourceByIdentity = () =>
-      client.query<{
-        id: string;
-        rights_status: string;
-        consent: boolean;
-        lineage_root: string | null;
-      }>(
-        `SELECT id, rights_status, consent, lineage_root FROM sources
+      client.query<SourceRow>(
+        `SELECT id, rights_status, consent, lineage_root, compartment_ids::text[] AS compartment_ids
+         FROM sources
        WHERE user_id = $1 AND scope_id = $2 AND kind = $3 AND external_id = $4 AND revision = $5`,
         [actor.userId, scopeId, sourceInput.kind, sourceInput.external_id, sourceInput.revision],
       );
     let source = await sourceByIdentity();
     if (source.rows[0] === undefined && sourceInput.kind === 'explicit_remember') {
       await client.query(
-        `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent)
-         VALUES ($1, $2, 'explicit_remember', $3, $4, 'granted', true)
+        `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent,
+           compartment_ids)
+         VALUES ($1, $2, 'explicit_remember', $3, $4, 'granted', true, $5::uuid[])
          ON CONFLICT (user_id, scope_id, kind, external_id, revision) DO NOTHING`,
-        [actor.userId, scopeId, sourceInput.external_id, sourceInput.revision],
+        [
+          actor.userId,
+          scopeId,
+          sourceInput.external_id,
+          sourceInput.revision,
+          canonicalLabel(newSourceLabel),
+        ],
       );
       source = await sourceByIdentity();
     }
     const identifiedSource = source.rows[0];
     if (identifiedSource !== undefined) {
       await client.query('SELECT app.lock_source_for_share($1::uuid)', [identifiedSource.id]);
-      source = await client.query<{
-        id: string;
-        rights_status: string;
-        consent: boolean;
-        lineage_root: string | null;
-      }>(
-        `SELECT id, rights_status, consent, lineage_root FROM sources
+      source = await client.query<SourceRow>(
+        `SELECT id, rights_status, consent, lineage_root, compartment_ids::text[] AS compartment_ids
+         FROM sources
          WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
         [actor.userId, scopeId, identifiedSource.id],
       );
@@ -2114,9 +2427,9 @@ export class CoreService {
     const insert = await client.query<{ id: string }>(
       `INSERT INTO evidence(user_id, scope_id, source_id, source_revision, locator, span, speaker,
          captured_at, event_time, lineage_root, snippet, snippet_allowed, content_hash,
-         observation_id, span_start, span_end)
+         observation_id, span_start, span_end, compartment_ids)
        VALUES ($1, $2, $3, $4, $5, $6, $7, coalesce($8::timestamptz, clock_timestamp()), $9,
-         coalesce($10::uuid, $3::uuid), $11, $12, $13, $14, $15, $16)
+         coalesce($10::uuid, $3::uuid), $11, $12, $13, $14, $15, $16, $17::uuid[])
        ON CONFLICT (user_id, scope_id, source_id, source_revision, locator, content_hash) DO NOTHING
        RETURNING id`,
       [
@@ -2136,17 +2449,21 @@ export class CoreService {
         anchor?.observationId ?? null,
         anchor?.spanStart ?? null,
         anchor?.spanEnd ?? null,
+        sourceRow.compartment_ids,
       ],
     );
     let evidenceId = insert.rows[0]?.id;
+    let evidenceLabel = sourceRow.compartment_ids;
     if (evidenceId === undefined) {
       const found = await client.query<{
         id: string;
         observation_id: string | null;
         span_start: number | null;
         span_end: number | null;
+        compartment_ids: string[];
       }>(
-        `SELECT id, observation_id, span_start, span_end FROM evidence WHERE user_id = $1 AND scope_id = $2 AND source_id = $3
+        `SELECT id, observation_id, span_start, span_end, compartment_ids::text[] AS compartment_ids
+         FROM evidence WHERE user_id = $1 AND scope_id = $2 AND source_id = $3
            AND source_revision = $4 AND locator = $5 AND content_hash = $6`,
         [
           actor.userId,
@@ -2171,6 +2488,7 @@ export class CoreService {
         );
       }
       evidenceId = existingEvidence?.id;
+      evidenceLabel = existingEvidence?.compartment_ids ?? evidenceLabel;
     }
     if (evidenceId === undefined)
       throw new CoreError(500, 'internal_error', 'Evidence insert did not return an identifier');
@@ -2179,7 +2497,7 @@ export class CoreService {
        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
       [actor.userId, scopeId, memoryId, evidenceId],
     );
-    return evidenceId;
+    return { id: evidenceId, label: canonicalLabel(evidenceLabel) };
   }
 
   private async lockMutableMemory(
@@ -2288,6 +2606,7 @@ export class CoreService {
     actor: ActorContext,
     memory: MutableMemoryRow,
     changeSetId: string,
+    addedLabel: readonly string[] = [],
   ): Promise<number> {
     const revision = memory.revision + 1;
     await client.query(
@@ -2295,7 +2614,15 @@ export class CoreService {
        WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
       [actor.userId, memory.scope_id, memory.id, revision],
     );
-    await this.writeVersion(client, actor, memory.scope_id, memory.id, changeSetId);
+    await this.writeVersion(
+      client,
+      actor,
+      memory.scope_id,
+      memory.id,
+      changeSetId,
+      'inherited',
+      addedLabel,
+    );
     return revision;
   }
 
@@ -2305,15 +2632,28 @@ export class CoreService {
     scopeId: string,
     memoryId: string,
     changeSetId: string,
+    origin: LabelOrigin,
+    addedLabel: readonly string[] = [],
   ): Promise<void> {
+    // A version keeps the memory's label joined with the labels of evidence added by this
+    // change. Only an approved relaxation lowers a label, by setting it before this call.
+    if (addedLabel.length > 0) {
+      await client.query(
+        `UPDATE memories SET compartment_ids = ARRAY(
+           SELECT DISTINCT item FROM unnest(compartment_ids || $4::uuid[]) AS item ORDER BY item)
+         WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
+        [actor.userId, scopeId, memoryId, canonicalLabel(addedLabel)],
+      );
+    }
     await client.query(
       `INSERT INTO memory_versions(user_id, scope_id, memory_id, revision, kind, statement, context,
          actor_kind, authority, epistemic_status, contested, lifecycle, valid_from, valid_to,
-         recorded_at, superseded_at, changed_by, change_set_id)
+         recorded_at, superseded_at, changed_by, change_set_id, compartment_ids, label_origin)
        SELECT user_id, scope_id, id, revision, kind, statement, context, actor_kind, authority,
-         epistemic_status, contested, lifecycle, valid_from, valid_to, clock_timestamp(), superseded_at, $4, $5
+         epistemic_status, contested, lifecycle, valid_from, valid_to, clock_timestamp(), superseded_at, $4, $5,
+         compartment_ids, $6
        FROM memories WHERE user_id = $1 AND scope_id = $2 AND id = $3`,
-      [actor.userId, scopeId, memoryId, actor.principalId, changeSetId],
+      [actor.userId, scopeId, memoryId, actor.principalId, changeSetId, origin],
     );
     await client.query(
       `INSERT INTO memory_version_evidence(user_id, scope_id, memory_id, revision, evidence_id)
@@ -2340,7 +2680,8 @@ export class CoreService {
         `SELECT m.id, m.user_id, m.scope_id, m.kind, m.statement, m.context,
            m.actor_kind, m.authority, m.epistemic_status, m.contested, m.lifecycle,
            m.valid_from, m.valid_to, coalesce(v.recorded_at, m.recorded_at) AS recorded_at,
-           m.superseded_at, m.revision, m.committed_revision, m.indexed_revision
+           m.superseded_at, m.revision, m.committed_revision, m.indexed_revision,
+           m.compartment_ids::text[] AS compartment_ids
          FROM memories AS m
          LEFT JOIN memory_versions AS v ON v.user_id = m.user_id AND v.scope_id = m.scope_id
            AND v.memory_id = m.id AND v.revision = m.revision
@@ -2373,7 +2714,7 @@ export class CoreService {
            latest.actor_kind, latest.authority, latest.epistemic_status, latest.contested,
            latest.lifecycle, latest.valid_from, latest.valid_to, latest.recorded_at,
            latest.superseded_at, latest.revision, latest.revision AS committed_revision,
-           0 AS indexed_revision
+           0 AS indexed_revision, latest.compartment_ids::text[] AS compartment_ids
          FROM latest JOIN memories AS m
            ON m.user_id = latest.user_id AND m.scope_id = latest.scope_id AND m.id = latest.memory_id
          WHERE ($5::timestamptz IS NULL OR latest.valid_from IS NULL OR latest.valid_from <= $5)
@@ -2442,6 +2783,24 @@ export class CoreService {
     ) {
       throw new CoreError(404, 'not_found', 'Memory not found');
     }
+    // Evidence withheld from this reader still counts: a declassified memory disappears when a
+    // source it was derived from is revoked or forgotten.
+    const denied = await client.query<{ denied: boolean; withheld: number; names: string[] }>(
+      `SELECT app.version_rights_denied($1, $2, $3, $4) AS denied,
+         (SELECT count(*)::int FROM memory_version_evidence AS mve
+          WHERE mve.user_id = $1 AND mve.scope_id = $2 AND mve.memory_id = $3 AND mve.revision = $4
+            AND NOT EXISTS (SELECT 1 FROM evidence AS e WHERE e.user_id = mve.user_id
+              AND e.scope_id = mve.scope_id AND e.id = mve.evidence_id)) AS withheld,
+         ARRAY(SELECT c.id::text || ':' || c.name FROM compartments AS c
+               WHERE c.user_id = $1 AND c.id = ANY($5::uuid[]) ORDER BY c.normalized_name) AS names`,
+      [row.user_id, row.scope_id, row.id, row.revision, row.compartment_ids ?? []],
+    );
+    if (denied.rows[0]?.denied === true) throw new CoreError(404, 'not_found', 'Memory not found');
+    const withheldEvidence = denied.rows[0]?.withheld ?? 0;
+    const compartments = (denied.rows[0]?.names ?? []).map((entry) => {
+      const separator = entry.indexOf(':');
+      return { id: entry.slice(0, separator), name: entry.slice(separator + 1) };
+    });
     const [subjectRows, evidenceRows] = await Promise.all([
       client.query<{
         id: string;
@@ -2526,8 +2885,10 @@ export class CoreService {
       epistemic: { status: row.epistemic_status, contested: row.contested },
       lifecycle: row.lifecycle,
       revision: row.revision,
+      compartments,
       evidence_ids: evidence.map((item) => item.id),
       evidence,
+      ...(withheldEvidence === 0 ? {} : { withheld_evidence: withheldEvidence }),
       index: { committed_revision: row.committed_revision, indexed_revision: row.indexed_revision },
     };
   }
@@ -2557,9 +2918,12 @@ export class CoreService {
     return withTransaction(
       this.pool,
       async (client) => {
-        await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-        await client.query("SELECT set_config('app.scope_ids', $1, true)", [uuidArray(scopeIds)]);
-        await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+        await setDatabaseContext(client, {
+          userId: actor.userId,
+          principalId: actor.principalId,
+          scopeIds,
+          compartments: databaseCompartments(actor.compartments),
+        });
         const access = await client.query<ScopeAccessRow>(
           `SELECT scope_id AS id, auth_epoch, capabilities
          FROM app.lock_actor_access($1, $2, $3, $4::uuid[])`,
@@ -2689,6 +3053,21 @@ function deriveAuthority(
   return 'user_assertion';
 }
 
+/** The only scope an actor can use, for a write that does not name one. */
+function soleWritableScope(actor: ActorContext): string {
+  const scopes = normalizeScopes(
+    actor.scopeIds.filter((scopeId) => actor.tokenScopeIds.includes(scopeId)),
+  );
+  if (scopes.length === 1) return scopes[0]!;
+  throw new CoreError(
+    400,
+    'scope_required',
+    'Name the scope to write; this connection can use several',
+    false,
+    { scope_ids: scopes },
+  );
+}
+
 function normalizeScopes(scopeIds: readonly string[]): string[] {
   const scopes = [...new Set(scopeIds)];
   for (const scopeId of scopes) validateUuid(scopeId, 'scope_id');
@@ -2812,6 +3191,25 @@ function isCapability(value: string): value is Capability {
   return value === 'read' || value === 'write' || value === 'admin';
 }
 
+/** The allowance a change cursor is bound to. */
+function cursorCompartments(actor: ActorContext): CursorState['compartments'] {
+  return actor.compartments.kind === 'all'
+    ? 'all'
+    : { epoch: actor.compartments.epoch, ids: canonicalLabel(actor.compartments.ids) };
+}
+
+function sameCompartmentBinding(
+  left: CursorState['compartments'],
+  right: CursorState['compartments'],
+): boolean {
+  if (left === 'all' || right === 'all') return left === right;
+  return (
+    left.epoch === right.epoch &&
+    left.ids.length === right.ids.length &&
+    left.ids.every((id, index) => id === right.ids[index])
+  );
+}
+
 function initialCursor(actor: ActorContext, scopeIds: readonly string[]): CursorState {
   return {
     user: actor.userId,
@@ -2821,6 +3219,7 @@ function initialCursor(actor: ActorContext, scopeIds: readonly string[]): Cursor
     auth_epochs: Object.fromEntries(
       scopeIds.map((scopeId) => [scopeId, actor.authEpochs[scopeId] ?? 0]),
     ),
+    compartments: cursorCompartments(actor),
     exp: Number.MAX_SAFE_INTEGER,
   };
 }

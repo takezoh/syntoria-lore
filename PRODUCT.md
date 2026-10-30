@@ -27,11 +27,13 @@ A user's memories stay within that user's account. Lore is not a complete or aut
 | Reuse a lesson where it applies | An experience keeps the condition, action and outcome together |
 | Capture without retyping | A source is enabled only after you approve it; curator proposals are checked against the cited source text; only uncontested facts are saved automatically and the rest wait for review |
 | Forget | Once approved, by your policy or by you at Gate, forgotten content stops being returned immediately, a content-free deletion record is kept, and a background process purges the content and its dependent data |
+| Keep contexts apart | Memories carry compartments such as an employer, a client or a private matter; each connected AI receives general memories and only the compartments it was given, a new one starts with general memories only, and derived data keeps its sources' restrictions |
 
 ## What Lore does not promise
 
 - Lore does not verify that a memory is true. Attribution records who made a statement.
-- With automatic approval, the default, a change an AI asks for on your behalf takes effect without asking you; Lore records that your policy approved it, not you.
+- With automatic approval, the default, a change an AI asks for on your behalf takes effect without asking you; Lore records that your policy approved it, not you. This includes an AI asking to receive another compartment or to make a memory general, so compartments stop a misled AI only when you approve each change at Gate.
+- A memory an AI already received stays with that AI, including in its own memory feature, after its access is narrowed.
 - When you approve each change at Gate, Lore knows that you approved it, not that you read it carefully. It also cannot tell an AI that controls your signed-in browser from you.
 - Export and import are not available to connected AIs.
 - Recall is bounded and can miss relevant memories. An empty result does not prove that nothing was said.
@@ -80,7 +82,7 @@ Recall combines the question with permitted scope, source rights, memory lifecyc
 
 ## Access
 
-AI clients connect through REST and Remote MCP; Lore has no sign-in page or memory browser of its own. Gate handles sign-in and approval, and the service operator must admit your Gate account to Lore before a client can read or write memories. MCP has one connection URL; Lore makes read and write operations available from the mapped principal's current capabilities. Every client you approve with the same Gate account acts for you with the same memories and permissions, but its changes stay its own until you approve them. See [client access](docs/usage/sign-in.md).
+AI clients connect through REST and Remote MCP; Lore has no sign-in page or memory browser of its own. Gate handles sign-in and approval, and the service operator must admit your Gate account to Lore before a client can read or write memories. MCP has one connection URL; Lore makes read and write operations available from the mapped principal's current capabilities, and each connection receives only general memories and the compartments it was given. Every client you approve with the same Gate account acts for you with the same memories and permissions, but its changes stay its own until you approve them. See [client access](docs/usage/sign-in.md).
 
 ## Scope and evidence
 

@@ -265,6 +265,46 @@ export function uuidArray(values: readonly string[]): string {
   return `{${values.join(',')}}`;
 }
 
+export interface DatabaseContext {
+  readonly userId: string;
+  readonly scopeIds: readonly string[];
+  readonly principalId?: string;
+  /** The compartments the transaction may read, or every compartment of the user. */
+  readonly compartments: readonly string[] | 'all';
+}
+
+/**
+ * Sets the transaction-local user, scope, principal and compartment context that row-level
+ * security reads. Every transaction that sets this context goes through here. `'all'` is
+ * resolved to the user's explicit compartment list, so the database never receives an
+ * unrestricted value. Returns the compartment list that was set.
+ */
+export async function setDatabaseContext(
+  client: PoolClient,
+  context: DatabaseContext,
+): Promise<readonly string[]> {
+  await client.query("SELECT set_config('app.user_id', $1, true)", [context.userId]);
+  await client.query("SELECT set_config('app.scope_ids', $1, true)", [
+    uuidArray([...new Set(context.scopeIds)].sort()),
+  ]);
+  if (context.principalId !== undefined) {
+    await client.query("SELECT set_config('app.principal_id', $1, true)", [context.principalId]);
+  }
+  const compartmentIds =
+    context.compartments === 'all'
+      ? ((
+          await client.query<{ ids: string[] }>(
+            'SELECT app.user_compartment_ids($1)::text[] AS ids',
+            [context.userId],
+          )
+        ).rows[0]?.ids ?? [])
+      : [...new Set(context.compartments)].sort();
+  await client.query("SELECT set_config('app.compartment_ids', $1, true)", [
+    uuidArray(compartmentIds),
+  ]);
+  return compartmentIds;
+}
+
 export function rowValue<T extends QueryResultRow, K extends keyof T>(
   row: T | undefined,
   key: K,

@@ -24,6 +24,10 @@ Plans change and mistakes happen, and Lore records them differently. When a poli
 
 Lore keeps what you and your AIs send it. Background capture from a conversation or document source starts only after you approve that source; Lore does not fetch your chat history on its own. Proposed memories that need your judgment, such as preferences, decisions and conflicts, wait for your review. Ask to forget something and approve it, and it stops being returned right away, then is deleted from Lore's records in the background.
 
+## Keep work and private life apart
+
+Your memories can belong to private life, an employer, a client or several businesses at once. Put them in compartments, and each AI you connect receives only general memories and the compartments you give it. A newly connected AI starts with general memories only. Anything derived from a memory keeps its restrictions, and moving a memory to where more AIs can see it is a change your approval policy decides.
+
 ## Who it is for
 
 If you use more than one AI assistant and keep explaining the same background, decisions and preferences, Lore lets you say them once. If you make lasting decisions in conversation and later need to know who said what and why, Lore keeps the reason with the memory. If you build your own agents or workflows, they can remember and recall through the same REST and Remote MCP tools.

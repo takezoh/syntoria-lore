@@ -27,6 +27,18 @@ Each changeset written over a Gate connection records the verified Gate `client_
 
 `valid_from`/`valid_to` record when an assertion holds; `recorded_at`/`superseded_at` record when Lore learned or replaced it. Unknown times are null or ranges. SUPERSEDE sets the prior revision's `valid_to` to the replacement's `valid_from` (or the transaction's cutover time when omitted), keeping half-open, non-overlapping intervals. A historical read selects the greatest revision recorded by `known_at`, then applies `valid_at`; it never falls back to an older, wider interval. Current source rights and suppressions still apply to historical reads.
 
+### Compartments
+
+A compartment is one of the user's confidentiality obligations. Content rows carry `compartment_ids`, a canonical (sorted, distinct) label; a recipient needs every compartment in it, and the empty label is General. Records created before migration 0049 carry the reserved Unclassified compartment. Labels are set by the write path, never by default:
+
+- An explicit remember's source, evidence and memory take the write's label: the requested compartments within the connection's allowance, the allowance by default, or the allowance when a General write is held.
+- A configured source's label applies to the observations captured from it; evidence copies its source's label; a curator proposal and the memory it creates take the union of the cited observations' labels.
+- A new version joins the labels of evidence it newly cites and of its previous version. `RECLASSIFY` writes a version with another label: adding compartments narrows, removing one is a relaxation that only the user may apply, so a connection reaches it only through an approved protected change. `memory_versions.label_origin` records how each label was set.
+- Subjects and aliases are unique per scope, label and name; the same person can exist under General and under a compartment.
+- Changesets, feed events, reviews, confirmations and stored idempotent responses carry the union of the labels of what they contain. A narrowing feed event also keeps the label it narrowed from in `previous_compartment_ids`.
+
+`connection_allowances` holds each Gate connection's allowance and epoch; `connection_allowance_events` records every change append-only with the requesting connection and approval. See the [memory compartments design](../design/memory-compartments.md).
+
 ## Change operations
 
 A change set contains 1–64 operations on one scope. Each operation that targets an existing memory carries its `expected_revision`.
@@ -41,6 +53,7 @@ A change set contains 1–64 operations on one scope. Each operation that target
 | RELATE | Adds a typed relation between two memories at their expected revisions |
 | RETRACT | Withdraws a memory as wrong, with a reason |
 | NO_OP | Records a deliberate non-change with a reason |
+| RECLASSIFY | New revision with the same content and another compartment label; removing a compartment needs the user |
 
 Forget is not a change operation; it has its own authorized flow.
 
@@ -62,11 +75,12 @@ Every tenant row carries `user_id` and `scope_id`, protected by forced row-level
 | `deletion_requests`, `suppressions`, `deletion_targets`, `deletion_ledger_checkpoint`, `deletion_ledger_visibility_items` | Immediate denial, purge work and database visibility against the external ledger | Highly restricted and content-free where possible |
 | `export_jobs`, `portability_imports`, `governance_file_deletions` | Encrypted bundle jobs, imports and artifact cleanup claims | Encrypted artifacts plus metadata; rights and Forget invalidate exports |
 | `scope_retention_policies`, `feedback_reassessments`, `audit_events` | User retention bounds, reassessment queue and content-free audit | Policy and operational data |
+| `compartments`, `connection_allowances`, `connection_allowance_events` | The user's confidentiality compartments, each Gate connection's allowance and its append-only change history ([ADR 0006](../adr/0006-enforce-disclosure-with-compartments-and-connection-allowances.md)) | Restricted security data. Authentication reads a connection's allowance through a lookup function and rejects a commit after it changes. Compartment names are visible only within the reader's compartments |
 | `schema_migrations` | Applied versions and checksums | Operational; no tenant content |
 
 ## Roles and row-level security
 
-The API connects as `memory_app`; the worker connects through a separate login that is a member of `memory_worker`. Both are non-superuser and `NOBYPASSRLS`, and the bootstrap checks this before serving. Each operation sets its user, principal and authorized scope context with `SET LOCAL` inside the transaction; session-level settings are never used, so a pooled connection cannot carry one request's scope into another. The runtime role has no `UPDATE` or `DELETE` privilege on `memory_versions`, and the version trigger does not accept caller-settable settings as purge authority. Physical purge runs through a narrowly privileged, receipt-verified governance routine.
+The API connects as `memory_app`; the worker connects through a separate login that is a member of `memory_worker`. Both are non-superuser and `NOBYPASSRLS`, and the bootstrap checks this before serving. Each operation sets its user, principal, authorized scope and compartment context with transaction-local settings through one helper, `setDatabaseContext` in `packages/db`; session-level settings are never used, so a pooled connection cannot carry one request's scope into another. A Gate connection's compartment context is its allowance, narrowed by a request that names compartments; worker and system work receive the user's explicit compartment list. Restrictive `compartment_visibility` policies (migration 0052) let `memory_app` and `memory_worker` read or write a labeled row only when its label is within that context, and derived rows only when the rows they connect are visible; an unset context exposes General rows only. Purge, maintenance, export-executor and lookup roles keep their own policies. The runtime role has no `UPDATE` or `DELETE` privilege on `memory_versions`, and the version trigger does not accept caller-settable settings as purge authority. Physical purge runs through a narrowly privileged, receipt-verified governance routine.
 
 Source rows are locked `FOR SHARE` while evidence is validated and while evidence-backed memories are read or changed, so a concurrent revocation either wins before authorization or waits for the authorized transaction.
 

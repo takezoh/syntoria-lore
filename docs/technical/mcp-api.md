@@ -19,15 +19,17 @@ Use MCP `initialize` followed by `tools/list` at `/mcp`; each tool advertises it
 
 | Required operation capability | Tools available at `/mcp` |
 | --- | --- |
-| `read` | `recall_memories`, `get_memory`, `get_changes`, `capture_status`, `forget_status`, `export_status`, `list_reviews`, `get_review`, `get_confirmation` |
-| `write` | `remember_memory`, `configure_source`, `capture`, `propose_changeset`, `commit_changeset`, `request_user_decision`, `complete_confirmation`, `decide_review`, `forget_memory`, `change_source_rights`, `change_scope_grant`, `set_retention_policy`, `submit_feedback`, `request_export`, `import_bundle` |
+| `read` | `get_access`, `recall_memories`, `get_memory`, `get_changes`, `capture_status`, `forget_status`, `export_status`, `list_reviews`, `get_review`, `get_confirmation` |
+| `write` | `remember_memory`, `configure_source`, `capture`, `propose_changeset`, `commit_changeset`, `request_user_decision`, `complete_confirmation`, `decide_review`, `forget_memory`, `change_source_rights`, `change_scope_grant`, `set_retention_policy`, `submit_feedback`, `request_export`, `import_bundle`, `create_compartment`, `narrow_access`, `request_compartment_access` |
 
-An actor with both capabilities sees both groups. Review reads use `read`; review decisions use `write` and still follow user-authority and confirmation rules.
+An actor with both capabilities sees both groups. Review reads use `read`; review decisions use `write` and still follow user-authority and confirmation rules. `recall_memories`, `get_memory`, `get_changes` and `remember_memory` accept an omitted `scope_id`: reads then use every authorized scope, and a write uses the only writable scope or fails with `400 scope_required` listing the choices.
 
 ## REST operations
 
 | Operation | Endpoint | Notes |
 | --- | --- | --- |
+| Access | `GET /v1/access` | The connection's scopes, compartments, write default and approval policy |
+| Compartments | `POST /v1/compartments`, `POST /v1/access:narrow`, `POST /v1/access:request` | Create a compartment for this connection; narrow its allowance at once; request a wider allowance under the approval policy (202 with a confirmation under `gate`) |
 | Remember | `POST /v1/memories:remember` | Synchronous commit of one memory with evidence |
 | Get memory | `GET /v1/memories/{id}` | Current or historical (`valid_at`, `known_at`) revision with evidence and relations |
 | Feedback | `POST /v1/memories/{id}:feedback` | `useful`, `incorrect`, `stale` or `not_relevant`; queued for reassessment |
@@ -50,11 +52,25 @@ An actor with both capabilities sees both groups. Review reads use `read`; revie
 
 `/v1/capture`, `/v1/jobs/{id}` and `/v1/reviews` remain as aliases. Every response carries `request_id` and `trace_id`.
 
+## Compartments and allowances
+
+A compartment is one of the user's confidentiality obligations, such as an employer, a client engagement or a private matter. Each memory version, source, observation, evidence item and subject carries a label: a set of compartments, all of which a recipient needs. The empty label is General. Each Gate connection has an allowance, keyed by issuer, subject and `connection_id`; a connection without one receives General only. The [memory compartments design](../design/memory-compartments.md) defines the rules; [ADR 0006](../adr/0006-enforce-disclosure-with-compartments-and-connection-allowances.md) records the decision.
+
+- `get_access` / `GET /v1/access` lists the connection's scopes and compartments by name and ID, the label its writes receive by default, whether a General write would be held, and the binding's approval policy. Compartments outside the allowance are not listed.
+- `create_compartment` / `POST /v1/compartments` creates a compartment and adds it to the calling connection's allowance. A name that exists returns `409 compartment_exists`, which reveals that the name exists.
+- `narrow_access` / `POST /v1/access:narrow` removes compartments from the calling connection's allowance at once.
+- `request_compartment_access` / `POST /v1/access:request` asks for more compartments, named by the caller. It is a protected change (`change_connection_allowance`): under `auto` it applies at once with `approval.by: "policy"`; under `gate` it returns `confirmation_required`. A name that does not exist and one that cannot be granted return the same `403 compartment_not_available`.
+- Every allowance change advances the allowance epoch and is recorded with the requesting connection and its approval. A commit after the connection's allowance changed fails with `403 stale_authorization`; a change cursor bound to the old allowance returns `410 cursor_expired`.
+
+A connection can manage only its own allowance. Revoking it at Gate ends it; a new approval starts from General.
+
 ## Remember and change sets
 
 `remember_memory` commits one memory—kind, statement, structured context, subjects, valid-time interval, epistemic status and 1–64 evidence items—synchronously and returns its revision. Authority and lifecycle derive from the authenticated actor, kind and epistemic status; the request cannot set authority. Every client admitted under one Gate subject shares that principal's actor kind, so a client acting as the user must send `epistemic_status: "proposed"` for its own suggestions; otherwise the write becomes active with `user_decision`, `user_preference` or `user_assertion` authority. A non-user principal's explicit write starts as a candidate. A separate internal capture path may activate a fact only when it passes the worker's automatic-capture policy. Use this tool for an explicit user request, and do not relabel model inference as the user's words.
 
-A change set holds 1–64 operations (CREATE, CORROBORATE, REFINE, SUPERSEDE, CONTEST, RELATE, RETRACT, NO_OP) for one scope, each with the target's `expected_revision`. Proposal and commit are separate; a commit is all-or-nothing and returns `409 revision_conflict` when any target moved. Replaying a committed proposal returns its stored response only to the proposing principal or the user.
+`memory.compartments` names the label by ID or name. Omitted, a connection's write receives its allowance's compartments, or General when it has none. An explicit label must be within the allowance (`403 compartment_not_available` otherwise). A General label from a connection whose allowance has compartments is held: the memory is stored with the allowance's compartments and the operation result carries `held: true`; releasing it to General is a relaxation. Every new version also carries the labels of its newly cited evidence and of its previous version, and a SUPERSEDE replacement keeps the label of what it replaces. Operation results for CREATE and RECLASSIFY carry the resulting `compartment_ids`.
+
+A change set holds 1–64 operations (CREATE, CORROBORATE, REFINE, SUPERSEDE, CONTEST, RELATE, RETRACT, NO_OP, RECLASSIFY) for one scope, each with the target's `expected_revision`. Proposal and commit are separate; a commit is all-or-nothing and returns `409 revision_conflict` when any target moved. RECLASSIFY sets a memory's label as a new revision with the same statement and evidence. Adding compartments within the allowance commits directly and hides the memory's whole history from connections without them. Removing a compartment is a relaxation: a direct commit by a connection returns `403 user_confirmation_required`, so propose it and call `request_user_decision`. A relaxed version can cite evidence the reader cannot see; the memory view then omits that evidence and reports `withheld_evidence` with its count. Replaying a committed proposal returns its stored response only to the proposing principal or the user.
 
 ## Capture and review
 
@@ -66,7 +82,7 @@ Review decisions (`approve` or `reject`) require the current `expected_revision`
 
 ## Recall
 
-`recall_memories` / `POST /v1/recall` accepts `query`, `scope_ids`, optional `subject_ids` and `memory_ids`, `mode`, `token_budget` (64–32,000, default 4,000), `valid_at`, `known_at` and `limit` (1–100, default 20).
+`recall_memories` / `POST /v1/recall` accepts `query`, `scope_ids`, optional `subject_ids` and `memory_ids`, `mode`, `token_budget` (64–32,000, default 4,000), `valid_at`, `known_at`, `limit` (1–100, default 20) and `compartments`, which narrows the search to those compartments of the allowance plus General.
 
 | Mode | Contract |
 | --- | --- |
@@ -76,13 +92,13 @@ Review decisions (`approve` or `reject`) require the current `expected_revision`
 | `exploratory` | Related memories, including candidates, through bounded exact, lexical, semantic and relation search |
 | `changes` | Changed records matching the query; it uses a change-oriented candidate path rather than semantic search. Use `get_changes` for the ordered change feed |
 
-Candidates are filtered by scope access, current source rights and Forget suppression before ranking, then by valid time, lifecycle and evidence. The response contains `matches`, a `context_pack`, `coverage`, `insufficiencies`, `unknown` and `estimated_tokens`. Search is bounded: by default each candidate source is limited to `min(200, limit * 8)`, and relation expansion starts from at most 50 supported roots for at most two hops. Contextual, historical and exploratory ranking uses weighted reciprocal-rank fusion; exact, lexical, semantic and related candidates have weights 4, 1.5, 1.5 and 0.45. The precise mode omits lexical, semantic and relation candidates. These limits mean recall is not an exhaustive scan.
+Candidates are filtered by scope access, the connection's compartments, current source rights and Forget suppression before ranking, then by valid time, lifecycle and evidence. The response contains `matches`, a `context_pack`, `coverage`, `insufficiencies`, `unknown` and `estimated_tokens`. Search is bounded: by default each candidate source is limited to `min(200, limit * 8)`, and relation expansion starts from at most 50 supported roots for at most two hops. Contextual, historical and exploratory ranking uses weighted reciprocal-rank fusion; exact, lexical, semantic and related candidates have weights 4, 1.5, 1.5 and 0.45. The precise mode omits lexical, semantic and relation candidates. These limits mean recall is not an exhaustive scan.
 
 The complete serialized Context Pack, including evidence and uncertainty metadata, must fit the budget. `estimated_tokens` is the UTF-8 byte length of its JSON serialization, not an exact tokenizer count. The `conflicts` field lists returned memories already marked contested; it does not discover every contradictory pair. `coverage.complete` reflects embedding provider/index coverage, not exhaustive search or complete knowledge. `unknown` means no supported candidate was returned under this query and its bounds. Exact and lexical searches can surface an unindexed committed record; a semantically related query may miss that record until indexing catches up. If semantic search is unavailable, the response reports that insufficiency and uses the available signals. See [retrieval and Context Packs](memory-system.md#retrieval-and-context-packs) for the implemented details.
 
 ## Changes and cursors
 
-`get_changes` / `GET /v1/changes` returns committed changes in per-scope commit order with `next_cursor` and `has_more`. Start without a cursor and keep the returned cursor with your own state; advance only after applying a page. The cursor is signed and bound to the principal, scope set and authorization epochs: a tampered or mismatched cursor is rejected, an authorization change requires a fresh start, and an expired cursor returns `410 cursor_expired`. Forgotten memories appear as tombstones with ID and last revision only; imported memories appear as content-free `IMPORT` events. Reading the feed does not mark anything as read or confirmed.
+`get_changes` / `GET /v1/changes` returns committed changes in per-scope commit order with `next_cursor` and `has_more`. Events outside the connection's compartments are omitted; when a RECLASSIFY narrows a memory out of them, the event is returned once as a content-free `WITHDRAWN` with the memory ID and no revision. Start without a cursor and keep the returned cursor with your own state; advance only after applying a page. The cursor is signed and bound to the principal, scope set, authorization epochs and the connection's allowance epoch and compartments (payload version 2; a version 1 cursor reads as General only at epoch 0): a tampered or mismatched cursor is rejected, an authorization change requires a fresh start, and an expired cursor returns `410 cursor_expired`. Forgotten memories appear as tombstones with ID and last revision only; imported memories appear as content-free `IMPORT` events. Reading the feed does not mark anything as read or confirmed.
 
 ## Forget, source rights and retention
 
@@ -106,9 +122,9 @@ Under `gate`:
 
 ## Export and import
 
-`request_export` creates an idempotent asynchronous job for a complete scope. Status and download require current authorization, matching deletion and authorization epochs, a ready artifact and an unexpired job. Expired artifacts receive durable cleanup tombstones and are removed; claim tokens fence stale workers.
+`request_export` creates an idempotent asynchronous job for a complete scope, including every compartment in it; export is available only to the user principal acting directly, which no Gate connection can be. Payload version 2 carries the compartments used and every row's label. Status and download require current authorization, matching deletion and authorization epochs, a ready artifact and an unexpired job. Expired artifacts receive durable cleanup tombstones and are removed; claim tokens fence stale workers.
 
-`import_bundle` authenticates the encrypted bundle, validates its schema, remaps entity and lineage IDs and commits records and change events atomically. Each version's original `recorded_at` is preserved; the change event uses the import time. An authenticated bundle proves origin and integrity, not ownership: the importer becomes `created_by`, current attribution becomes connector `third_party_claim`, and the previous user's authority is kept only as provenance. Imported sources are not readable in the destination unless `grant_imported_sources` is set. Reusing a key with a different bundle or option is a conflict.
+`import_bundle` authenticates the encrypted bundle, validates its schema, remaps entity and lineage IDs and commits records and change events atomically. Each version's original `recorded_at` is preserved; the change event uses the import time. An authenticated bundle proves origin and integrity, not ownership: the importer becomes `created_by`, current attribution becomes connector `third_party_claim`, and the previous user's authority is kept only as provenance. Imported sources are not readable in the destination unless `grant_imported_sources` is set. Version 2 labels map by compartment name to compartments the importer holds; a missing one fails with `403 compartment_not_available`, and version 1 records import as Unclassified, which the importer must hold. Reusing a key with a different bundle or option is a conflict.
 
 ## Responses and recovery
 
@@ -117,6 +133,9 @@ Under `gate`:
 | `400 invalid_request`, `invalid_cursor`, `invalid_evidence_anchor` | Fix the request; do not retry unchanged |
 | `401 unauthorized` | Obtain a token for this exact resource |
 | `403 forbidden`, `user_required`, `source_not_authorized` | Outside the principal's grant or source rights |
+| `403 compartment_not_available` | A named compartment does not exist or is outside this connection's allowance |
+| `400 scope_required`, `connection_required` | Name the scope; the operation needs an AI connection's allowance |
+| `409 compartment_exists`, `already_allowed` | The compartment name exists; the connection already has these compartments |
 | `404 not_found` | Missing or not visible; existence of inaccessible records is not revealed |
 | `409 revision_conflict` | Re-read and reconcile, then propose against the new revision |
 | `409 idempotency_conflict`, `idempotency_key_reused` | Same key, different body or change; a caller bug |

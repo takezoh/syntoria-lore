@@ -61,6 +61,10 @@ export const evidenceInputSchema = z.strictObject({
   snippet_allowed: z.boolean().default(false),
 });
 
+/** A compartment named by its ID or by its name. */
+export const compartmentRefSchema = nonBlank(100);
+const compartmentRefs = z.array(compartmentRefSchema).max(32);
+
 export const memoryInputSchema = z.strictObject({
   kind: memoryKindSchema,
   statement: nonBlank(10000),
@@ -71,6 +75,8 @@ export const memoryInputSchema = z.strictObject({
   epistemic_status: epistemicStatusSchema.default('asserted'),
   contested: z.boolean().default(false),
   evidence: z.array(evidenceInputSchema).min(1).max(64),
+  /** The label to apply; omitted means the connection's default. An empty list means General. */
+  compartments: compartmentRefs.optional(),
 });
 
 const memoryTarget = z.strictObject({
@@ -125,6 +131,11 @@ export const changeOpSchema = z.discriminatedUnion('op', [
     reason: nonBlank(4000),
   }),
   z.strictObject({ op: z.literal('NO_OP'), reason: nonBlank(4000) }),
+  z.strictObject({
+    op: z.literal('RECLASSIFY'),
+    ...memoryTarget.shape,
+    compartments: compartmentRefs,
+  }),
 ]);
 
 export const changeSetSchema = z.strictObject({
@@ -133,7 +144,8 @@ export const changeSetSchema = z.strictObject({
 });
 
 export const rememberRequestSchema = z.strictObject({
-  scope_id: uuidSchema,
+  /** Omitted when the connection can write exactly one scope. */
+  scope_id: uuidSchema.optional(),
   memory: memoryInputSchema,
 });
 export const changeFeedQuerySchema = z.strictObject({
@@ -153,6 +165,8 @@ export const recallQuerySchema = z.strictObject({
   valid_at: timestampSchema.optional(),
   known_at: timestampSchema.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  /** Narrows the search to these compartments of the connection's allowance, plus General. */
+  compartments: compartmentRefs.optional(),
 });
 
 export const captureRequestSchema = z.strictObject({
@@ -185,11 +199,19 @@ export const connectorAuthorizationSchema = z
     enabled: z.boolean(),
     consent: z.boolean(),
     metadata: z.record(z.string(), z.unknown()).default({}),
+    /** The label observations from this source receive; omitted means the default. */
+    compartments: compartmentRefs.optional(),
   })
   .refine((value) => !value.enabled || value.consent, {
     message: 'An enabled connector requires explicit consent',
     path: ['consent'],
   });
+
+export const createCompartmentSchema = z.strictObject({ name: nonBlank(100) });
+export const narrowAccessSchema = z.strictObject({ compartments: compartmentRefs.min(1) });
+export const compartmentAccessRequestSchema = z.strictObject({
+  compartments: compartmentRefs.min(1),
+});
 
 export const reviewListQuerySchema = z.strictObject({
   scope_id: uuidSchema,
@@ -282,6 +304,23 @@ export type ChangeSet = z.infer<typeof changeSetSchema>;
 export type EvidenceInput = z.infer<typeof evidenceInputSchema>;
 export type SubjectInput = z.infer<typeof subjectInputSchema>;
 
+/**
+ * The compartments an actor may receive and write. A Gate connection carries its allowance: an
+ * explicit, possibly empty list (empty means General only) and the epoch it was read at. Worker
+ * and system actors carry every compartment of the user; the database still receives an
+ * explicit list, never an unrestricted value.
+ */
+export type CompartmentAccess =
+  | { readonly kind: 'allowance'; readonly ids: readonly string[]; readonly epoch: number }
+  | { readonly kind: 'all' };
+
+export const allCompartments: CompartmentAccess = Object.freeze({ kind: 'all' });
+
+/** The compartment list, or `'all'`, that an actor's database context must be given. */
+export function databaseCompartments(access: CompartmentAccess): readonly string[] | 'all' {
+  return access.kind === 'all' ? 'all' : access.ids;
+}
+
 export interface ActorContext {
   readonly userId: string;
   readonly principalId: string;
@@ -290,6 +329,7 @@ export interface ActorContext {
   readonly tokenScopeIds: readonly string[];
   readonly capabilities: readonly Capability[];
   readonly authEpochs: Readonly<Record<string, number>>;
+  readonly compartments: CompartmentAccess;
   /** The verified Gate client registration, recorded as provenance only. */
   readonly clientId?: string;
   /**

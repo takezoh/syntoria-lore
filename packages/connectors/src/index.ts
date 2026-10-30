@@ -9,7 +9,11 @@ import {
 } from '@memory/contracts';
 import type { Database } from '@memory/db';
 import {
+  allowanceIds,
+  isSubsetLabel,
   observationLocatorDigest,
+  resolveCompartments,
+  resolveWriteLabel,
   sourceIdentityDigest,
   withAuthorizedActor,
 } from '@memory/domain';
@@ -21,6 +25,7 @@ interface ConnectorRow {
   readonly enabled: boolean;
   readonly consent: boolean;
   readonly metadata: Record<string, unknown>;
+  readonly compartment_ids: string[];
 }
 
 export interface ConnectorServiceOptions {
@@ -64,14 +69,23 @@ export class ConnectorService {
         "SELECT pg_advisory_xact_lock(hashtextextended($1 || $2 || ':' || $3, 0))",
         [LEGACY_SCOPE_WRITE_LOCK_PREFIX, actor.userId, value.scope_id],
       );
+      // Observations captured from this source receive this label. Configuring a source is
+      // approved like any protected change, so its label may differ from an earlier one; earlier
+      // observations keep theirs.
+      const label = resolveWriteLabel(
+        actor,
+        value.compartments === undefined
+          ? undefined
+          : await resolveCompartments(client, actor, value.compartments),
+      );
       const result = await client.query<{ id: string; enabled: boolean; consent: boolean }>(
         `INSERT INTO connector_authorizations(user_id, scope_id, source_kind, external_id,
-           enabled, consent, rights_status, metadata, created_by, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, clock_timestamp())
+           enabled, consent, rights_status, metadata, created_by, updated_at, compartment_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, clock_timestamp(), $10::uuid[])
          ON CONFLICT (user_id, scope_id, source_kind, external_id) DO UPDATE
            SET enabled = EXCLUDED.enabled, consent = EXCLUDED.consent,
                rights_status = EXCLUDED.rights_status, metadata = EXCLUDED.metadata,
-               updated_at = clock_timestamp()
+               compartment_ids = EXCLUDED.compartment_ids, updated_at = clock_timestamp()
          RETURNING id, enabled, consent`,
         [
           actor.userId,
@@ -83,6 +97,7 @@ export class ConnectorService {
           rightsStatus,
           JSON.stringify(value.metadata),
           actor.principalId,
+          label.ids,
         ],
       );
       await client.query(
@@ -107,6 +122,7 @@ export class ConnectorService {
         scope_id: value.scope_id,
         source_kind: value.source_kind,
         external_id: value.external_id,
+        compartment_ids: label.ids,
         enabled: row.enabled,
         consent: row.consent,
         rights_status: rightsStatus,
@@ -221,7 +237,7 @@ export class ConnectorService {
       }
 
       const connector = await client.query<ConnectorRow>(
-        `SELECT enabled, consent, rights_status, metadata
+        `SELECT enabled, consent, rights_status, metadata, compartment_ids::text[] AS compartment_ids
          FROM connector_authorizations
          WHERE user_id = $1 AND scope_id = $2 AND source_kind = $3 AND external_id = $4
          FOR UPDATE`,
@@ -240,10 +256,20 @@ export class ConnectorService {
           'The User has not enabled this source with consent',
         );
       }
+      // A connection may only add observations under compartments it holds.
+      const allowed = allowanceIds(actor);
+      if (allowed !== null && !isSubsetLabel(authorization.compartment_ids, allowed)) {
+        throw new CoreError(
+          403,
+          'source_forbidden',
+          'This source is not available to this connection',
+        );
+      }
 
       const sourceResult = await client.query<{ id: string }>(
-        `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent, metadata)
-         VALUES ($1, $2, $3, $4, $5, 'granted', true, $6::jsonb)
+        `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent, metadata,
+           compartment_ids)
+         VALUES ($1, $2, $3, $4, $5, 'granted', true, $6::jsonb, $7::uuid[])
          ON CONFLICT (user_id, scope_id, kind, external_id, revision) DO UPDATE
            SET rights_status = CASE WHEN sources.rights_status = 'granted' AND sources.consent THEN 'granted' ELSE 'revoked' END
          RETURNING id`,
@@ -254,15 +280,22 @@ export class ConnectorService {
           capture.source.external_id,
           capture.source.revision,
           JSON.stringify(authorization.metadata),
+          authorization.compartment_ids,
         ],
       );
       const sourceId = sourceResult.rows[0]?.id;
       if (sourceId === undefined)
         throw new CoreError(500, 'internal_error', 'Capture source was not stored', true);
-      const sourceRights = await client.query<{ rights_status: string; consent: boolean }>(
-        'SELECT rights_status, consent FROM sources WHERE user_id = $1 AND scope_id = $2 AND id = $3 FOR SHARE',
+      const sourceRights = await client.query<{
+        rights_status: string;
+        consent: boolean;
+        compartment_ids: string[];
+      }>(
+        `SELECT rights_status, consent, compartment_ids::text[] AS compartment_ids
+         FROM sources WHERE user_id = $1 AND scope_id = $2 AND id = $3 FOR SHARE`,
         [actor.userId, capture.scope_id, sourceId],
       );
+      const sourceLabel = sourceRights.rows[0]?.compartment_ids ?? authorization.compartment_ids;
       if (sourceRights.rows[0]?.rights_status !== 'granted' || !sourceRights.rows[0]?.consent) {
         throw new CoreError(403, 'source_forbidden', 'Source rights were revoked');
       }
@@ -273,8 +306,9 @@ export class ConnectorService {
         const contentHash = hash(observation.content.normalize('NFKC'));
         const inserted = await client.query<{ id: string }>(
           `INSERT INTO observations(user_id, scope_id, source_id, source_revision, speaker,
-             event_time, locator, canonical_locator, source_kind, content, content_hash, lineage_root)
-           VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11, $12::uuid)
+             event_time, locator, canonical_locator, source_kind, content, content_hash, lineage_root,
+             compartment_ids)
+           VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11, $12::uuid, $13::uuid[])
            ON CONFLICT (user_id, scope_id, source_id, source_revision, canonical_locator, content_hash)
            DO NOTHING RETURNING id`,
           [
@@ -290,6 +324,7 @@ export class ConnectorService {
             observation.content,
             contentHash,
             observation.lineage_root ?? null,
+            sourceLabel,
           ],
         );
         let observationId = inserted.rows[0]?.id;

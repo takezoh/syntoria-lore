@@ -1,7 +1,9 @@
 import { encodeIdentityProvenanceV1 } from '@memory/contracts';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  allCompartments,
   CoreError,
+  databaseCompartments,
   forgetRequestSchema,
   grantMutationSchema,
   memoryFeedbackSchema,
@@ -10,7 +12,7 @@ import {
   LEGACY_SCOPE_WRITE_LOCK_PREFIX,
   type ActorContext,
 } from '@memory/contracts';
-import { type Database, withTransaction } from '@memory/db';
+import { type Database, setDatabaseContext, withTransaction } from '@memory/db';
 import {
   observationLocatorDigest,
   sourceIdentityDigest,
@@ -738,6 +740,7 @@ export class ForgetService {
           tokenScopeIds: [row.scope_id],
           capabilities: ['read', 'write', 'admin'],
           authEpochs: { [row.scope_id]: Number(row.auth_epoch) },
+          compartments: allCompartments,
         };
         try {
           const indexed = await reindex(actor, row.scope_id, reindexItemLimit);
@@ -1007,11 +1010,15 @@ async function recordForgottenMemories(
   memoryIds: readonly string[],
 ): Promise<void> {
   if (memoryIds.length === 0) return;
-  const memories = await client.query<{ id: string; revision: number }>(
-    `SELECT id, coalesce(nullif(committed_revision, 0), revision) AS revision
+  // Each tombstone keeps the label of the memory it replaces, so the content-free event reaches
+  // only connections that could see that memory.
+  const memories = await client.query<{ id: string; revision: number; label: string[] }>(
+    `SELECT id, coalesce(nullif(committed_revision, 0), revision) AS revision,
+       compartment_ids::text[] AS label
      FROM memories WHERE user_id=$1 AND scope_id=$2 AND id=ANY($3::uuid[]) ORDER BY id`,
     [actor.userId, scopeId, memoryIds],
   );
+  const changeSetLabel = [...new Set(memories.rows.flatMap((memory) => memory.label))].sort();
   if (memories.rows.length === 0) return;
   await client.query(
     'INSERT INTO scope_offsets(user_id, scope_id) VALUES ($1, $2) ON CONFLICT (user_id, scope_id) DO NOTHING',
@@ -1024,8 +1031,8 @@ async function recordForgottenMemories(
   const changeSetId = randomUUID();
   await client.query(
     `INSERT INTO changesets(user_id, scope_id, id, principal_id, request_id, operation_count,
-       response, status, committed_at, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp(), $8)`,
+       response, status, committed_at, client_id, compartment_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'committed', clock_timestamp(), $8, $9::uuid[])`,
     [
       actor.userId,
       scopeId,
@@ -1035,6 +1042,7 @@ async function recordForgottenMemories(
       memories.rows.length,
       JSON.stringify({ change_set_id: changeSetId, source: 'forget' }),
       actor.clientId ?? null,
+      changeSetLabel,
     ],
   );
   const result = await client.query<{ last_seq: string }>(
@@ -1065,9 +1073,18 @@ async function recordForgottenMemories(
     );
     await client.query(
       `INSERT INTO change_log(user_id, scope_id, id, seq, change_set_id, op, memory_id,
-         memory_revision, tombstone)
-       VALUES ($1, $2, $3, $4, $5, 'RETRACT', $6, $7, true)`,
-      [actor.userId, scopeId, changeId, sequence, changeSetId, memory.id, memory.revision],
+         memory_revision, tombstone, compartment_ids)
+       VALUES ($1, $2, $3, $4, $5, 'RETRACT', $6, $7, true, $8::uuid[])`,
+      [
+        actor.userId,
+        scopeId,
+        changeId,
+        sequence,
+        changeSetId,
+        memory.id,
+        memory.revision,
+        memory.label,
+      ],
     );
     await client.query(
       `INSERT INTO outbox(user_id, scope_id, id, event_type, aggregate_id, payload)
@@ -1096,9 +1113,12 @@ async function setActorContext(
   actor: ActorContext,
   scopeIds: readonly string[],
 ): Promise<void> {
-  await client.query("SELECT set_config('app.user_id', $1, true)", [actor.userId]);
-  await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeIds.join(',')}}`]);
-  await client.query("SELECT set_config('app.principal_id', $1, true)", [actor.principalId]);
+  await setDatabaseContext(client, {
+    userId: actor.userId,
+    principalId: actor.principalId,
+    scopeIds,
+    compartments: databaseCompartments(actor.compartments),
+  });
 }
 
 async function recordVisibilityItem(
@@ -1131,9 +1151,12 @@ async function setActorContextForWorker(
   scopeId: string,
   principalId: string,
 ): Promise<void> {
-  await client.query("SELECT set_config('app.user_id', $1, true)", [userId]);
-  await client.query("SELECT set_config('app.scope_ids', $1, true)", [`{${scopeId}}`]);
-  await client.query("SELECT set_config('app.principal_id', $1, true)", [principalId]);
+  await setDatabaseContext(client, {
+    userId,
+    principalId,
+    scopeIds: [scopeId],
+    compartments: 'all',
+  });
 }
 
 function sorted(values: readonly string[]): string[] {

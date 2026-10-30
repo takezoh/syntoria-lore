@@ -117,6 +117,7 @@ try {
     scopes: [scope],
     offsets: { [scope]: '0' },
     auth_epochs: { [scope]: Number(epoch.rows[0]!.auth_epoch) },
+    compartments: { epoch: 0, ids: [] },
   });
   assert.equal(JSON.parse(Buffer.from(cursor.split('.')[0]!, 'base64url').toString()).owner, user);
   const oid = await admin.query<{ oid: number }>("SELECT 'owners'::regclass::oid AS oid");
@@ -235,6 +236,14 @@ try {
     await client.query('BEGIN');
     await client.query("SELECT set_config('app.user_id',$1,true)", [user]);
     await client.query("SELECT set_config('app.scope_ids',$1,true)", [`{${scope}}`]);
+    // Rows that predate compartments are Unclassified: visible only within that compartment.
+    assert.equal(
+      (await client.query('SELECT * FROM idempotency_keys WHERE user_id=$1', [user])).rowCount,
+      0,
+    );
+    await client.query("SELECT set_config('app.compartment_ids',$1,true)", [
+      '{00000000-0000-4000-8000-000000000001}',
+    ]);
     assert.equal(
       (await client.query('SELECT * FROM idempotency_keys WHERE user_id=$1', [user])).rowCount,
       1,

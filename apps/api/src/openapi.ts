@@ -526,6 +526,140 @@ const apiContract = {
         },
       },
     },
+    '/v1/access': {
+      get: {
+        operationId: 'getAccess',
+        summary: 'The scopes and compartments this connection can use',
+        responses: {
+          '200': {
+            description: 'Access of this connection',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/AccessView' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/compartments': {
+      post: {
+        operationId: 'createCompartment',
+        summary: 'Create a compartment and add it to this connection',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['name'],
+                properties: { name: { type: 'string', minLength: 1, maxLength: 100 } },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': {
+            description: 'Created compartment and the new allowance',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/AllowanceResult' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/access:narrow': {
+      post: {
+        operationId: 'narrowAccess',
+        summary: "Remove compartments from this connection's allowance",
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CompartmentRefs' } },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'The new allowance',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/AllowanceResult' } },
+            },
+          },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
+    '/v1/access:request': {
+      post: {
+        operationId: 'requestCompartmentAccess',
+        summary: 'Ask for more compartments, approved by the binding approval policy',
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            required: false,
+            schema: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CompartmentRefs' } },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'The new allowance, approved by policy',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/AllowanceResult' } },
+            },
+          },
+          '202': { $ref: '#/components/responses/ConfirmationRequired' },
+          '400': { $ref: '#/components/responses/CoreError' },
+          '401': { $ref: '#/components/responses/CoreError' },
+          '403': { $ref: '#/components/responses/CoreError' },
+          '409': { $ref: '#/components/responses/CoreError' },
+          '429': { $ref: '#/components/responses/CoreError' },
+          default: {
+            description: 'Request failed',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+        },
+      },
+    },
     '/v1/changes': {
       get: {
         operationId: 'getChanges',
@@ -1226,6 +1360,12 @@ const apiContract = {
           enabled: { type: 'boolean' },
           consent: { type: 'boolean' },
           metadata: { type: 'object', additionalProperties: true, default: {} },
+          compartments: {
+            type: 'array',
+            maxItems: 32,
+            items: { type: 'string', minLength: 1, maxLength: 100 },
+            description: 'Compartment IDs or names',
+          },
         },
       },
       ConnectorAuthorizationResult: {
@@ -1249,6 +1389,7 @@ const apiContract = {
           enabled: { type: 'boolean' },
           consent: { type: 'boolean' },
           rights_status: { enum: ['granted', 'revoked'] },
+          compartment_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
           request_id: { type: 'string', format: 'uuid' },
           trace_id: { type: 'string', format: 'uuid' },
         },
@@ -1328,7 +1469,7 @@ const apiContract = {
       RememberRequest: {
         type: 'object',
         additionalProperties: false,
-        required: ['scope_id', 'memory'],
+        required: ['memory'],
         properties: {
           scope_id: { type: 'string', format: 'uuid' },
           memory: { $ref: '#/components/schemas/MemoryInput' },
@@ -1379,6 +1520,12 @@ const apiContract = {
             minItems: 1,
             maxItems: 64,
             items: { $ref: '#/components/schemas/EvidenceInput' },
+          },
+          compartments: {
+            type: 'array',
+            maxItems: 32,
+            items: { type: 'string', minLength: 1, maxLength: 100 },
+            description: 'Compartment IDs or names',
           },
         },
       },
@@ -1542,6 +1689,21 @@ const apiContract = {
                     reason: { type: 'string', minLength: 1, maxLength: 4000 },
                   },
                 },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['op', 'memory_id', 'expected_revision', 'compartments'],
+                  properties: {
+                    op: { const: 'RECLASSIFY' },
+                    memory_id: { type: 'string', format: 'uuid' },
+                    expected_revision: { type: 'integer', minimum: 1 },
+                    compartments: {
+                      type: 'array',
+                      maxItems: 32,
+                      items: { type: 'string', minLength: 1, maxLength: 100 },
+                    },
+                  },
+                },
               ],
             },
           },
@@ -1566,6 +1728,12 @@ const apiContract = {
           valid_at: { type: 'string', format: 'date-time' },
           known_at: { type: 'string', format: 'date-time' },
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          compartments: {
+            type: 'array',
+            maxItems: 32,
+            items: { type: 'string', minLength: 1, maxLength: 100 },
+            description: 'Compartment IDs or names',
+          },
         },
       },
       RequestMetadata: {
@@ -1601,11 +1769,14 @@ const apiContract = {
               'RELATE',
               'RETRACT',
               'NO_OP',
+              'RECLASSIFY',
             ],
           },
           memory_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
           revisions: { type: 'array', items: { type: 'integer', minimum: 1 } },
           changed: { type: 'boolean' },
+          compartment_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+          held: { type: 'boolean' },
         },
       },
       CommittedChangeSet: {
@@ -1715,8 +1886,14 @@ const apiContract = {
           },
           lifecycle: { enum: ['candidate', 'active', 'superseded', 'retracted', 'forgotten'] },
           revision: { type: 'integer', minimum: 1 },
+          compartments: { type: 'array', items: { $ref: '#/components/schemas/Compartment' } },
           evidence_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
           evidence: { type: 'array', items: { $ref: '#/components/schemas/EvidenceView' } },
+          withheld_evidence: {
+            type: 'integer',
+            minimum: 1,
+            description: 'Evidence of a declassified memory that this connection may not see',
+          },
           index: {
             type: 'object',
             required: ['committed_revision', 'indexed_revision'],
@@ -1828,6 +2005,68 @@ const apiContract = {
           },
           next_cursor: { type: 'string' },
           has_more: { type: 'boolean' },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      Compartment: {
+        type: 'object',
+        required: ['id', 'name'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          name: { type: 'string' },
+        },
+      },
+      CompartmentRefs: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['compartments'],
+        properties: {
+          compartments: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 32,
+            items: { type: 'string', minLength: 1, maxLength: 100 },
+          },
+        },
+      },
+      AccessView: {
+        type: 'object',
+        required: [
+          'scopes',
+          'capabilities',
+          'compartments',
+          'write_default',
+          'general_write_held',
+          'request_id',
+          'trace_id',
+        ],
+        properties: {
+          scopes: { type: 'array', items: { $ref: '#/components/schemas/Compartment' } },
+          capabilities: { type: 'array', items: { enum: ['read', 'write', 'admin'] } },
+          compartments: { type: 'array', items: { $ref: '#/components/schemas/Compartment' } },
+          general_visible: { type: 'boolean' },
+          write_default: { type: 'array', items: { $ref: '#/components/schemas/Compartment' } },
+          general_write_held: { type: 'boolean' },
+          allowance_epoch: { type: ['integer', 'null'], minimum: 0 },
+          approval_policy: { enum: ['auto', 'gate', null] },
+          request_id: { type: 'string', format: 'uuid' },
+          trace_id: { type: 'string', format: 'uuid' },
+        },
+      },
+      AllowanceResult: {
+        type: 'object',
+        required: ['allowance', 'request_id', 'trace_id'],
+        properties: {
+          compartment: { $ref: '#/components/schemas/Compartment' },
+          allowance: {
+            type: 'object',
+            required: ['compartment_ids', 'epoch'],
+            properties: {
+              compartment_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+              epoch: { type: 'integer', minimum: 1 },
+            },
+          },
           request_id: { type: 'string', format: 'uuid' },
           trace_id: { type: 'string', format: 'uuid' },
         },

@@ -1,7 +1,7 @@
 import { createGovernanceStorage, getProductDisplayName, parsePort } from '@memory/runtime';
 import { Authenticator } from '@memory/auth';
 import { createDatabase, assertNobypassRls, pingDatabase } from '@memory/db';
-import { CoreService, CursorCodec } from '@memory/domain';
+import { CompartmentService, CoreService, CursorCodec } from '@memory/domain';
 import { ConnectorService } from '@memory/connectors';
 import { createConfiguredCuratorProviders } from '@memory/curator';
 import { RecallService } from '@memory/recall';
@@ -63,16 +63,19 @@ const governance = new ForgetService(pool, governanceStorage.deletionLedger);
 const portability = new PortabilityService(pool, governanceStorage.portabilityStore, {
   hmacKey: requiredEnvironment('FORGET_HMAC_KEY'),
 });
+const compartments = new CompartmentService(pool);
 const confirmations = new ChangeConfirmationService({
   pool,
   core,
   governance,
   reviews,
   connectors,
+  compartments,
 });
 const server = createApiServer({
   productDisplayName,
   auth,
+  compartments,
   mcpAuth,
   mcpAuthorizationServerUrl: issuer,
   mcpResourceBaseUrl: mcpBaseUrl,

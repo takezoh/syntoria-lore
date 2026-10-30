@@ -4,19 +4,20 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { Client as McpClient, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Authenticator } from '@memory/auth';
 import { LEGACY_PORTABILITY_MIME_TYPE } from '@memory/contracts';
 import {
   assertNobypassRls,
   assertWorkerMember,
   provisionWorkerRole,
+  setDatabaseContext,
   withTemporarySuperuserAuthorization,
   withTransaction,
 } from '@memory/db';
-import { CoreService, CursorCodec } from '@memory/domain';
+import { CompartmentService, CoreService, CursorCodec } from '@memory/domain';
 import { ConnectorService } from '@memory/connectors';
 import {
   LocalDeterministicCuratorProvider,
@@ -421,7 +422,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
         governance,
         reviews: reviewService,
         connectors: connectorService,
+        compartments: new CompartmentService(app),
       }),
+      compartments: new CompartmentService(app),
       ready: () => governance.verifyLedgerReadiness(),
       rateLimit: 10_000,
     });
@@ -1249,8 +1252,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   it('rolls back every commit write when a later source loses permission', async () => {
     const writer = await token([scopeB], 'memory:read memory:write');
     const source = await admin.query<{ id: string }>(
-      `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent)
-       VALUES ($1, $2, 'document', $3, '1', 'granted', true) RETURNING id`,
+      `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent,
+         compartment_ids)
+       VALUES ($1, $2, 'document', $3, '1', 'granted', true, '{}') RETURNING id`,
       [userId, scopeB, `rollback-${randomUUID()}`],
     );
     const targetResponse = await post(
@@ -1264,8 +1268,9 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
     const targetId = target.operations[0]!.memory_ids[0]!;
     const documentId = `rollback-${randomUUID()}`;
     const documentSource = await admin.query<{ id: string }>(
-      `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent)
-       VALUES ($1, $2, 'document', $3, '1', 'granted', true) RETURNING id`,
+      `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent,
+         compartment_ids)
+       VALUES ($1, $2, 'document', $3, '1', 'granted', true, '{}') RETURNING id`,
       [userId, scopeB, documentId],
     );
     expect(source.rows[0]).toBeDefined();
@@ -2997,8 +3002,8 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       );
       await admin.query(
         `INSERT INTO curation_reviews(id, user_id, scope_id, job_id, change_set_id,
-           rationale, candidate_summary, evidence_anchors)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, '[]'::jsonb)`,
+           rationale, candidate_summary, evidence_anchors, compartment_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, '[]'::jsonb, '{}')`,
         [
           reviewId,
           userId,
@@ -3438,6 +3443,243 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
       ['idempotency-key', randomUUID()],
     ]);
     expect(duplicateCookie.status).toBe(400);
+  });
+
+  it('resolves each connection allowance and rejects a commit after it changes', async () => {
+    const bearer = await token([scopeB], 'memory:read memory:write');
+    const gateSubject = gateTokens.get(bearer)!.sub as string;
+    const connection = connectionToken(gateSubject);
+    const connectionId = gateTokens.get(connection)!.connection_id as string;
+    const before = await authenticator.authenticate(`Bearer ${connection}`);
+    expect(before.compartments).toEqual({ kind: 'allowance', ids: [], epoch: 0 });
+
+    const compartment = await admin.query<{ id: string }>(
+      `INSERT INTO compartments (user_id, name, normalized_name) VALUES ($1, $2, $2) RETURNING id`,
+      [userId, `allowance-${randomUUID()}`],
+    );
+    const compartmentId = compartment.rows[0]!.id;
+    await admin.query(
+      `INSERT INTO connection_allowances
+         (user_id, external_issuer, external_subject, connection_id, compartment_ids, epoch)
+       VALUES ($1, $2, $3, $4, $5::uuid[], 3)`,
+      [userId, gateIssuer, gateSubject, connectionId, [compartmentId, randomUUID()].sort()],
+    );
+    await expect(authenticator.assertCurrent(before)).rejects.toMatchObject({
+      status: 403,
+      code: 'stale_authorization',
+    });
+
+    const after = await authenticator.authenticate(`Bearer ${connection}`);
+    expect(after.compartments).toEqual({ kind: 'allowance', ids: [compartmentId], epoch: 3 });
+    await expect(authenticator.assertCurrent(after)).resolves.toBeUndefined();
+    const person = await authenticator.userActorFor(after);
+    expect(person.compartments).toEqual(after.compartments);
+
+    const sibling = connectionToken(gateSubject);
+    const siblingActor = await authenticator.authenticate(`Bearer ${sibling}`);
+    expect(siblingActor.compartments).toEqual({ kind: 'allowance', ids: [], epoch: 0 });
+  });
+
+  it('labels, hides, widens, narrows and declassifies memories by compartment', async () => {
+    // A scope of its own, so its labeled memories do not reach other tests' exports.
+    const scope = randomUUID();
+    await admin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+      userId,
+      scope,
+      'compartments',
+    ]);
+    await admin.query(
+      `INSERT INTO grants(user_id, scope_id, principal_id, capabilities)
+       VALUES ($1, $2, $3, ARRAY['read', 'write', 'admin'])`,
+      [userId, scope, principalId],
+    );
+    const { gateSubject } = await connectionSubject([scope], 'auto');
+    const holder = connectionToken(gateSubject, 'client-holder');
+    const general = connectionToken(gateSubject, 'client-general');
+    const reader = connectionToken(gateSubject, 'client-reader');
+    const getJson = async (path: string, bearer: string) => {
+      const response = await fetch(`${baseUrl}${path}`, {
+        headers: { authorization: `Bearer ${bearer}` },
+      });
+      return { status: response.status, body: (await response.json()) as TestBody };
+    };
+    const postJson = async (path: string, bearer: string, body: unknown) => {
+      const response = await post(path, bearer, body, `${path}-${randomUUID()}`);
+      return { status: response.status, body: (await response.json()) as TestBody };
+    };
+    const remember = (bearer: string, memory: Record<string, unknown>) =>
+      postJson('/v1/memories:remember', bearer, { memory });
+    const memoryPath = (id: string) => `/v1/memories/${id}?scope_id=${scope}`;
+
+    // A new connection sees General only and can write without naming a scope.
+    const access = await getJson('/v1/access', general);
+    expect(access.status).toBe(200);
+    expect(access.body).toMatchObject({
+      compartments: [],
+      write_default: [],
+      general_write_held: false,
+      approval_policy: 'auto',
+    });
+    const name = `Acme ${randomUUID()}`;
+    const created = await postJson('/v1/compartments', holder, { name });
+    expect(created.status).toBe(201);
+    const acme = created.body.compartment!.id;
+    expect((await getJson('/v1/access', holder)).body.compartments).toEqual([{ id: acme, name }]);
+
+    // A holder's writes default to its compartments; a General write is held in them.
+    const secretStatement = `Acme decided ${randomUUID()}`;
+    const defaulted = await remember(holder, { ...isolatedMemory(), statement: secretStatement });
+    expect(defaulted.status).toBe(200);
+    expect(defaulted.body.operations![0]).toMatchObject({ compartment_ids: [acme], held: false });
+    const secretId = defaulted.body.operations![0]!.memory_ids[0]!;
+    const held = await remember(holder, { ...isolatedMemory(), compartments: [] });
+    expect(held.body.operations![0]).toMatchObject({ compartment_ids: [acme], held: true });
+    const heldId = held.body.operations![0]!.memory_ids[0]!;
+
+    // A connection without the compartment cannot read, find or write into it.
+    expect((await getJson(memoryPath(secretId), general)).status).toBe(404);
+    expect((await getJson(memoryPath(secretId), holder)).body.compartments).toEqual([
+      { id: acme, name },
+    ]);
+    const generalRecall = await postJson('/v1/recall', general, {
+      query: secretStatement,
+      mode: 'exploratory',
+    });
+    expect(JSON.stringify(generalRecall.body)).not.toContain(secretId);
+    const holderRecall = await postJson('/v1/recall', holder, {
+      query: secretStatement,
+      mode: 'exploratory',
+    });
+    expect(JSON.stringify(holderRecall.body)).toContain(secretId);
+    const denied = await remember(general, { ...isolatedMemory(), compartments: [name] });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error!.code).toBe('compartment_not_available');
+
+    // Subjects are keyed by label, so the same name in General reveals nothing.
+    const person = `Tanaka ${randomUUID()}`;
+    await remember(holder, { ...isolatedMemory(), subjects: [{ name: person }] });
+    await remember(general, { ...isolatedMemory(), subjects: [{ name: person }] });
+    const subjects = await admin.query<{ label: string[] }>(
+      'SELECT compartment_ids::text[] AS label FROM subjects WHERE user_id = $1 AND canonical_name = $2 ORDER BY cardinality(compartment_ids)',
+      [userId, person],
+    );
+    expect(subjects.rows.map((row) => row.label)).toEqual([[], [acme]]);
+
+    // Widening follows the auto approval policy and is recorded; narrowing applies at once.
+    const widened = await postJson('/v1/access:request', general, { compartments: [name] });
+    expect(widened.status).toBe(200);
+    expect(widened.body).toMatchObject({ approval: { by: 'policy' } });
+    expect((await getJson(memoryPath(secretId), general)).status).toBe(200);
+    const recorded = await admin.query<{ approval: string }>(
+      `SELECT approval FROM connection_allowance_events
+       WHERE user_id = $1 AND connection_id = $2 AND change = 'widen'`,
+      [userId, gateTokens.get(general)!.connection_id],
+    );
+    expect(recorded.rows).toEqual([{ approval: 'policy' }]);
+    expect((await postJson('/v1/access:narrow', general, { compartments: [name] })).status).toBe(
+      200,
+    );
+    expect((await getJson(memoryPath(secretId), general)).status).toBe(404);
+
+    // The database refuses a labeled row outside the context even when a query forgets the label.
+    const asApp = async <T>(compartments: string[], work: (client: PoolClient) => Promise<T>) => {
+      const client = await app.connect();
+      try {
+        await client.query('BEGIN');
+        await setDatabaseContext(client, { userId, scopeIds: [scope], compartments });
+        return await work(client);
+      } finally {
+        await client.query('ROLLBACK');
+        client.release();
+      }
+    };
+    const count = (compartments: string[]) =>
+      asApp(compartments, async (client) =>
+        Number(
+          (
+            await client.query<{ count: string }>(
+              'SELECT count(*)::text AS count FROM memories WHERE id = $1',
+              [heldId],
+            )
+          ).rows[0]!.count,
+        ),
+      );
+    expect(await count([])).toBe(0);
+    expect(await count([acme])).toBe(1);
+    await expect(
+      asApp([acme], (client) =>
+        client.query('UPDATE memories SET compartment_ids = ARRAY[$2]::uuid[] WHERE id = $1', [
+          heldId,
+          randomUUID(),
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
+
+    // Relaxing needs the person's approval; the policy approves it and evidence stays withheld.
+    const beforeRelaxation = new Date().toISOString();
+    const proposal = await postJson('/v1/changesets', holder, {
+      scope_id: scope,
+      operations: [
+        { op: 'RECLASSIFY', memory_id: secretId, expected_revision: 1, compartments: [] },
+      ],
+    });
+    expect(proposal.status).toBe(200);
+    const relaxId = proposal.body.change_set_id!;
+    const direct = await postJson(`/v1/changesets/${relaxId}:commit`, holder, {});
+    expect(direct.status).toBe(403);
+    expect(direct.body.error!.code).toBe('user_confirmation_required');
+    const relaxed = await postJson(`/v1/changesets/${relaxId}:request-user-decision`, holder, {});
+    expect(relaxed.status).toBe(200);
+    const declassified = await getJson(memoryPath(secretId), reader);
+    expect(declassified.status).toBe(200);
+    expect(declassified.body).toMatchObject({
+      compartments: [],
+      evidence: [],
+      withheld_evidence: 1,
+      revision: 2,
+    });
+    // The version before the relaxation keeps its label, so only a holder can read it.
+    const historicalPath = `${memoryPath(secretId)}&known_at=${encodeURIComponent(beforeRelaxation)}`;
+    expect((await getJson(historicalPath, reader)).status).toBe(404);
+    const historical = await getJson(historicalPath, holder);
+    expect(historical.status).toBe(200);
+    expect(historical.body).toMatchObject({ revision: 1, compartments: [{ id: acme, name }] });
+
+    // A narrowing tells a reader that lost a memory, without content, and the cursor survives.
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await getJson(
+        `/v1/changes?scope_ids=${scope}&limit=200${cursor === undefined ? '' : `&cursor=${encodeURIComponent(cursor)}`}`,
+        reader,
+      );
+      expect(page.status).toBe(200);
+      cursor = page.body.next_cursor!;
+      if (page.body.has_more !== true) break;
+    }
+    const shared = await remember(reader, isolatedMemory());
+    const sharedId = shared.body.operations![0]!.memory_ids[0]!;
+    const narrow = await postJson('/v1/changesets', holder, {
+      scope_id: scope,
+      operations: [
+        { op: 'RECLASSIFY', memory_id: sharedId, expected_revision: 1, compartments: [name] },
+      ],
+    });
+    expect(
+      (await postJson(`/v1/changesets/${narrow.body.change_set_id!}:commit`, holder, {})).status,
+    ).toBe(200);
+    const after = await getJson(
+      `/v1/changes?scope_ids=${scope}&limit=200&cursor=${encodeURIComponent(cursor!)}`,
+      reader,
+    );
+    expect(
+      after.body
+        .changes!.filter((change) => change.memory_id === sharedId)
+        .map((change) => [change.operation, change.revision]),
+    ).toEqual([
+      ['CREATE', 1],
+      ['WITHDRAWN', null],
+    ]);
+    expect((await getJson(memoryPath(sharedId), reader)).status).toBe(404);
   });
 
   it('admits dynamic clients by subject and locks revoked admission without widening capabilities', async () => {
@@ -5121,6 +5363,246 @@ describe.skipIf(!runPostgresTests)('PostgreSQL contract core', () => {
   }
 });
 
+describe.skipIf(!runPostgresTests)('PostgreSQL memory compartment schema', () => {
+  const unclassified = '00000000-0000-4000-8000-000000000001';
+  const userA = randomUUID();
+  const userB = randomUUID();
+  let admin: Pool;
+  let app: Pool;
+
+  /** Runs `work` as the application role with only the given user context, then rolls back. */
+  async function asApp<T>(
+    userId: string | null,
+    work: (client: PoolClient) => Promise<T>,
+    compartments?: readonly string[],
+  ): Promise<T> {
+    const client = await app.connect();
+    try {
+      await client.query('BEGIN');
+      if (userId !== null) {
+        await setDatabaseContext(client, {
+          userId,
+          scopeIds: [],
+          compartments: compartments ?? [],
+        });
+      }
+      return await work(client);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  }
+
+  async function sqlState(work: Promise<unknown>): Promise<string | undefined> {
+    try {
+      await work;
+      return undefined;
+    } catch (error) {
+      return (error as { code?: string }).code;
+    }
+  }
+
+  beforeAll(async () => {
+    admin = new Pool({ connectionString: adminUrl, max: 2 });
+    app = new Pool({ connectionString: appUrl, max: 2 });
+    await admin.query('INSERT INTO users(id) VALUES ($1), ($2)', [userA, userB]);
+  });
+
+  afterAll(async () => {
+    await app?.end();
+    await admin?.end();
+  });
+
+  it('gives every new user the reserved Unclassified compartment and restores the context', async () => {
+    const reserved = await admin.query<{ user_id: string; name: string; reserved: boolean }>(
+      `SELECT user_id, name, reserved FROM compartments WHERE id = $1 AND user_id = ANY($2::uuid[])
+       ORDER BY user_id`,
+      [unclassified, [userA, userB]],
+    );
+    expect(reserved.rows).toEqual(
+      [userA, userB]
+        .sort()
+        .map((userId) => ({ user_id: userId, name: 'Unclassified', reserved: true })),
+    );
+
+    const client = await admin.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.user_id', $1, true)", [userA]);
+      await client.query('INSERT INTO users(id) VALUES ($1)', [randomUUID()]);
+      const context = await client.query<{ value: string }>(
+        "SELECT current_setting('app.user_id', true) AS value",
+      );
+      expect(context.rows[0]!.value).toBe(userA);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
+  it('requires an explicit label on every new labeled row', async () => {
+    const scope = randomUUID();
+    await admin.query('INSERT INTO scopes(user_id, id, name) VALUES ($1, $2, $3)', [
+      userA,
+      scope,
+      'labels',
+    ]);
+    expect(
+      await sqlState(
+        admin.query(
+          `INSERT INTO sources(user_id, scope_id, kind, external_id, revision, rights_status, consent)
+           VALUES ($1, $2, 'document', 'unlabeled', '1', 'granted', true)`,
+          [userA, scope],
+        ),
+      ),
+    ).toBe('23502');
+  });
+
+  it('accepts only canonical labels', async () => {
+    const [low, high] = [randomUUID(), randomUUID()].sort();
+    const insertAllowance = (label: (string | null)[]) =>
+      asApp(userA, (client) =>
+        client.query(
+          `INSERT INTO connection_allowances
+             (user_id, external_issuer, external_subject, connection_id, compartment_ids)
+           VALUES ($1, 'https://gate.integration.test', 'subject', $2, $3::uuid[])`,
+          [userA, randomUUID(), label],
+        ),
+      );
+    expect(await sqlState(insertAllowance([]))).toBeUndefined();
+    expect(await sqlState(insertAllowance([low!, high!]))).toBeUndefined();
+    expect(await sqlState(insertAllowance([high!, low!]))).toBe('23514');
+    expect(await sqlState(insertAllowance([low!, low!]))).toBe('23514');
+    expect(await sqlState(insertAllowance([low!, null]))).toBe('23514');
+  });
+
+  it('keeps compartment names unique and the reserved compartment fixed', async () => {
+    await asApp(userA, async (client) => {
+      await client.query(
+        `INSERT INTO compartments (user_id, name, normalized_name) VALUES ($1, 'Acme', 'acme')`,
+        [userA],
+      );
+      expect(
+        await sqlState(
+          client.query(
+            `INSERT INTO compartments (user_id, name, normalized_name) VALUES ($1, 'ACME', 'acme')`,
+            [userA],
+          ),
+        ),
+      ).toBe('23505');
+    });
+    expect(
+      await sqlState(
+        asApp(userA, (client) =>
+          client.query(
+            `INSERT INTO compartments (user_id, name, normalized_name, reserved)
+             VALUES ($1, 'Private', 'private', true)`,
+            [userA],
+          ),
+        ),
+      ),
+    ).toBe('23514');
+  });
+
+  it('isolates compartments and allowances by user and fails closed without context', async () => {
+    const visible = (userId: string | null, compartments?: readonly string[]) =>
+      asApp(
+        userId,
+        async (client) => {
+          const rows = await client.query<{ user_id: string }>(
+            'SELECT user_id FROM compartments WHERE user_id = ANY($1::uuid[])',
+            [[userA, userB]],
+          );
+          return rows.rows.map((row) => row.user_id);
+        },
+        compartments,
+      );
+    expect(await visible(userA, [unclassified])).toEqual([userA]);
+    expect(await visible(userA)).toEqual([]);
+    expect(await visible(null)).toEqual([]);
+    expect(
+      await sqlState(
+        asApp(userA, (client) =>
+          client.query(
+            `INSERT INTO compartments (user_id, name, normalized_name) VALUES ($1, 'Other', 'other')`,
+            [userB],
+          ),
+        ),
+      ),
+    ).toBe('42501');
+  });
+
+  it('sets an explicit compartment context and resolves all to the user list', async () => {
+    const client = await app.connect();
+    try {
+      await client.query('BEGIN');
+      const setting = async () =>
+        (
+          await client.query<{ compartments: string; principal: string | null }>(
+            `SELECT current_setting('app.compartment_ids', true) AS compartments,
+               nullif(current_setting('app.principal_id', true), '') AS principal`,
+          )
+        ).rows[0]!;
+      const all = await setDatabaseContext(client, {
+        userId: userA,
+        scopeIds: [],
+        compartments: 'all',
+      });
+      expect(all).toEqual([unclassified]);
+      expect(await setting()).toEqual({ compartments: `{${unclassified}}`, principal: null });
+      const [low, high] = [randomUUID(), randomUUID()].sort();
+      const explicit = await setDatabaseContext(client, {
+        userId: userA,
+        scopeIds: [],
+        compartments: [high!, low!, high!],
+      });
+      expect(explicit).toEqual([low, high]);
+      expect((await setting()).compartments).toBe(`{${low},${high}}`);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
+  it('keeps allowance history append-only and ties approvals to widening', async () => {
+    const principal = await admin.query<{ id: string }>(
+      `INSERT INTO principals(user_id, issuer, subject, actor_kind)
+       VALUES ($1, 'https://gate.integration.test', $2, 'client') RETURNING id`,
+      [userA, `compartment-client-${randomUUID()}`],
+    );
+    const insertEvent = (client: PoolClient, change: string, approval: string) =>
+      client.query(
+        `INSERT INTO connection_allowance_events
+           (user_id, external_issuer, external_subject, connection_id, change,
+            previous_compartment_ids, compartment_ids, epoch, requested_by, client_id, approval,
+            confirmation_id)
+         VALUES ($1, 'https://gate.integration.test', 'subject', 'connection', $2, '{}', '{}', 1,
+                 $3, 'client', $4, $5)`,
+        [userA, change, principal.rows[0]!.id, approval, approval === 'none' ? null : randomUUID()],
+      );
+    await asApp(userA, async (client) => {
+      await insertEvent(client, 'narrow', 'none');
+      await insertEvent(client, 'widen', 'policy');
+    });
+    expect(await sqlState(asApp(userA, (client) => insertEvent(client, 'widen', 'none')))).toBe(
+      '23514',
+    );
+    expect(await sqlState(asApp(userA, (client) => insertEvent(client, 'narrow', 'policy')))).toBe(
+      '23514',
+    );
+    expect(
+      await sqlState(
+        asApp(userA, (client) => client.query('UPDATE connection_allowance_events SET epoch = 2')),
+      ),
+    ).toBe('42501');
+    expect(
+      await sqlState(
+        asApp(userA, (client) => client.query('DELETE FROM connection_allowance_events')),
+      ),
+    ).toBe('42501');
+  });
+});
+
 /** A sample memory with its own evidence source, so another test's Forget cannot suppress it. */
 function isolatedMemory() {
   return { ...sampleMemory(), evidence: [evidence(`isolated-${randomUUID()}`)] };
@@ -5194,4 +5676,25 @@ function connectionUrlForRole(base: string, username: string, password: string):
   url.username = username;
   url.password = password;
   return url.toString();
+}
+
+/** The fields the compartment test reads from JSON responses. */
+interface TestBody {
+  readonly error?: { readonly code: string };
+  readonly operations?: readonly {
+    readonly memory_ids: readonly string[];
+    readonly compartment_ids?: readonly string[];
+    readonly held?: boolean;
+  }[];
+  readonly compartment?: { readonly id: string };
+  readonly compartments?: unknown;
+  readonly change_set_id?: string;
+  readonly next_cursor?: string;
+  readonly has_more?: boolean;
+  readonly changes?: readonly {
+    readonly memory_id: string;
+    readonly operation: string;
+    readonly revision: unknown;
+  }[];
+  readonly [key: string]: unknown;
 }

@@ -157,6 +157,7 @@ async function prepare(): Promise<void> {
     tokenScopeIds: [scopeId],
     capabilities: ['read', 'write', 'admin'] as const,
     authEpochs: { [scopeId]: Number(authEpoch) },
+    compartments: { kind: 'all' as const },
   };
   const core = new CoreService(
     sourceApp,
@@ -391,6 +392,7 @@ async function userActor(pool: Pool, value: Marker) {
     tokenScopeIds: [value.scope_id],
     capabilities: ['read', 'write', 'admin'] as const,
     authEpochs: { [value.scope_id]: Number(authEpoch) },
+    compartments: { kind: 'all' as const },
   };
 }
 

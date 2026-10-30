@@ -1,6 +1,6 @@
 import { CoreError, recallQuerySchema, type ActorContext } from '@memory/contracts';
 import type { Database } from '@memory/db';
-import { CoreService, withAuthorizedActor } from '@memory/domain';
+import { CoreService, narrowActor, resolveCompartments, withAuthorizedActor } from '@memory/domain';
 import type { EmbeddingProvider } from '@memory/curator';
 import type { PoolClient } from 'pg';
 
@@ -49,7 +49,7 @@ export class RecallService {
     }
   }
 
-  async recall(actor: ActorContext, rawQuery: unknown): Promise<Record<string, unknown>> {
+  async recall(caller: ActorContext, rawQuery: unknown): Promise<Record<string, unknown>> {
     const parsed = recallQuerySchema.safeParse(rawQuery);
     if (!parsed.success)
       throw new CoreError(
@@ -61,9 +61,24 @@ export class RecallService {
       );
     const query = parsed.data;
     const requestedScopes = [
-      ...new Set(query.scope_ids.length === 0 ? actor.scopeIds : query.scope_ids),
+      ...new Set(
+        query.scope_ids.length === 0
+          ? caller.scopeIds.filter((scopeId) => caller.tokenScopeIds.includes(scopeId))
+          : query.scope_ids,
+      ),
     ].sort();
-    await withAuthorizedActor(this.pool, actor, requestedScopes, read, async () => undefined);
+    // Naming compartments narrows this search to them, plus General; it never widens it.
+    const narrowing = await withAuthorizedActor(
+      this.pool,
+      caller,
+      requestedScopes,
+      read,
+      async (client) =>
+        query.compartments === undefined
+          ? undefined
+          : resolveCompartments(client, caller, query.compartments),
+    );
+    const actor = narrowing === undefined ? caller : narrowActor(caller, narrowing);
 
     let queryVector: readonly number[] | undefined;
     let semanticUnavailable =
@@ -212,7 +227,9 @@ export class RecallService {
            FROM jsonb_to_recordset($3::jsonb) AS item(id uuid, scope_id uuid, revision integer)
          )
          SELECT requested.id, requested.scope_id FROM requested
-         WHERE requested.scope_id = ANY($2::uuid[]) AND EXISTS (
+         WHERE requested.scope_id = ANY($2::uuid[])
+         AND NOT app.version_rights_denied($1, requested.scope_id, requested.id, requested.revision)
+         AND EXISTS (
            SELECT 1 FROM memory_versions v WHERE v.user_id = $1 AND v.scope_id = requested.scope_id
              AND v.memory_id = requested.id AND v.revision = requested.revision
          )

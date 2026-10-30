@@ -9,13 +9,14 @@ import {
 import { getProductDisplayName } from '@memory/runtime';
 import type { Authenticator } from '@memory/auth';
 import type { ActorContext } from '@memory/contracts';
-import type { CoreService } from '@memory/domain';
+import type { CompartmentService, CoreService } from '@memory/domain';
 import type { ConnectorService } from '@memory/connectors';
 import type { RecallService } from '@memory/recall';
 import type { CurationReviewService } from '@memory/jobs';
 import type { ForgetService } from '@memory/governance';
 import type { PortabilityService } from '@memory/governance';
 import type { ChangeConfirmationService, ProtectedChange } from './confirmations.js';
+import { connectionOf } from './connection.js';
 import { handleMcpRequest } from './mcp.js';
 import { createOpenApiDocument } from './openapi.js';
 import { RequestLimits } from './request-limits.js';
@@ -33,6 +34,7 @@ export interface ApiServerOptions {
   readonly governance?: ForgetService;
   readonly portability?: PortabilityService;
   readonly confirmations?: ChangeConfirmationService;
+  readonly compartments?: CompartmentService;
   readonly mcpAuth?: Authenticator;
   readonly mcpAuthorizationServerUrl?: string;
   readonly mcpResourceBaseUrl?: string;
@@ -263,6 +265,7 @@ async function handleRequest(
           ...(options.governance === undefined ? {} : { governance: options.governance }),
           ...(options.portability === undefined ? {} : { portability: options.portability }),
           ...(options.confirmations === undefined ? {} : { confirmations: options.confirmations }),
+          ...(options.compartments === undefined ? {} : { compartments: options.compartments }),
           maxBodyBytes: options.maxBodyBytes ?? maxBodyBytes,
         },
         webRequest,
@@ -563,6 +566,40 @@ async function handleRequest(
         ...(validAt === undefined ? {} : { valid_at: validAt }),
         ...(knownAt === undefined ? {} : { known_at: knownAt }),
       });
+    } else if (request.method === 'GET' && url.pathname === '/v1/access') {
+      if (options.compartments === undefined) throw unavailableFeature('Compartments');
+      result = {
+        ...(await options.compartments.getAccess(actor)),
+        approval_policy: options.auth.gateIdentity(actor)?.approvalPolicy ?? null,
+      };
+    } else if (request.method === 'POST' && url.pathname === '/v1/compartments') {
+      if (options.compartments === undefined) throw unavailableFeature('Compartments');
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      result = await options.compartments.createCompartment(
+        actor,
+        connectionOf(options.auth, actor),
+        body,
+      );
+      responseStatus = 201;
+    } else if (request.method === 'POST' && url.pathname === '/v1/access:narrow') {
+      if (options.compartments === undefined) throw unavailableFeature('Compartments');
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      result = await options.compartments.narrowAccess(
+        actor,
+        connectionOf(options.auth, actor),
+        body,
+      );
+    } else if (request.method === 'POST' && url.pathname === '/v1/access:request') {
+      if (options.compartments === undefined) throw unavailableFeature('Compartments');
+      const body = await readJson(request, options.maxBodyBytes ?? maxBodyBytes);
+      const idempotencyKey = request.headers['idempotency-key'];
+      await protectedChange(
+        { operation: 'change_connection_allowance', request: body },
+        typeof idempotencyKey === 'string' ? idempotencyKey : undefined,
+        () => {
+          throw new CoreError(400, 'connection_required', 'Only an AI connection has an allowance');
+        },
+      );
     } else if (request.method === 'GET' && url.pathname === '/v1/changes') {
       const scopeIds = url.searchParams.getAll('scope_ids');
       const limit = url.searchParams.get('limit');
