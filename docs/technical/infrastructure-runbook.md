@@ -2,7 +2,7 @@
 
 This runbook describes code-level and local verification for the Gate cutover; it does not authorize hosted changes. The Gate-only API and worker rollout, the 2026-10-19 API-only authentication correction, the 2026-10-20 DCR release and the 2026-10-29 change confirmation release are deployed. The latest API and Gate revisions are Ready at 100% traffic, and the connection-principal switch is set for the production binding; the API's approved public invoker binding and public HTTPS certificate remain active, and the worker remains private with unchanged IAM. The checked-in `infra/cloud/deployment.json` is a synthetic example; the production profile stays in the ignored `.local/cloud/deployment.json`. Production negative-authentication probes passed; positive hosted MCP data access remains unverified.
 
-The source contract now requires one Gate MCP resource at the exact `/mcp` audience. That change has not been deployed. Before a rollout, update the ignored deployment profile and Secret Manager reference, register the matching Gate resource and reconnect MCP clients; this runbook does not authorize those hosted changes.
+The service uses one Gate MCP resource at the exact `/mcp` audience, deployed on 2026-10-29. A change to that resource needs the ignored deployment profile, the Secret Manager reference and the Gate registration to change together, and MCP clients to reconnect; this runbook does not authorize those hosted changes.
 
 ## Verify the implementation locally
 
