@@ -30,7 +30,7 @@ On 2026-10-30 the owner decided the following, after a design discussion recorde
 
 Scopes remain as they are: storage, grant, retention, export and change-feed partitions. The [memory compartments design](../design/memory-compartments.md) turns this decision into requirements and implementation units.
 
-The owner accepted the recommended answer to every open question in the design on 2026-10-30. The implementation was completed and verified locally the same day ([U3 to U8 record](../eval/memory-compartments-enforcement-20261030.md)); it has not been deployed.
+The owner accepted the recommended answer to every open question in the design on 2026-10-30. The implementation was completed and verified locally the same day ([U3 to U8 record](../eval/memory-compartments-enforcement-20261030.md)) and deployed to production the same day ([release record](../eval/memory-compartments-release-20261030.md)).
 
 ## Requirements and rationale
 
