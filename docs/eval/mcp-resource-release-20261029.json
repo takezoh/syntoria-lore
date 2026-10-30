@@ -2,7 +2,7 @@
   "date": "2026-10-29",
   "change": "Single MCP resource production rollout",
   "status": "deployed",
-  "source_commit": "8a0441feaea3a0e59e565a05b777389257f2d894",
+  "source_commit": "534c58a386c945b7b09a086da4e1387519f67d33",
   "api_image_digest": "sha256:8dcfe857705d81959618cb9f0a4754de4c22855241003dde5d30312e22ecd4ad",
   "gate_image_digest": "sha256:7fa131c1e1e3b8d356f4ffcf1dbfdb7a344584b434e925d6834503db23909862",
   "deployment": {

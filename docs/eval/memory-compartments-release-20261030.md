@@ -8,11 +8,12 @@ On 2026-10-30, migrations 0049 to 0052 were applied, and Lore API revision `lore
 
 | Component | Source commit | Active revision or execution | Image digest |
 | --- | --- | --- | --- |
-| API | `57b7e6e` | `lore-api-cmp-57b7e6e` | `sha256:60f493b4ddabf73008fa85b729ef9c124ae29d8c7734d3801bcd16e8c530af31` |
-| Worker | `57b7e6e` | `lore-worker-cmp-57b7e6e` | same image |
-| Migration job | `57b7e6e` | `lore-neon-migrate-l7dt7` | same image |
-| Ledger reconcile job | `57b7e6e` | not executed | same image |
+| API | `b66aea9` | `lore-api-cmp-57b7e6e` | `sha256:60f493b4ddabf73008fa85b729ef9c124ae29d8c7734d3801bcd16e8c530af31` |
+| Worker | `b66aea9` | `lore-worker-cmp-57b7e6e` | same image |
+| Migration job | `b66aea9` | `lore-neon-migrate-l7dt7` | same image |
+| Ledger reconcile job | `b66aea9` | not executed | same image |
 
+- Revision names keep the abbreviated hash the source commit had before the [history rewrite](../technical/deployment.md#release-and-recovery) later the same day.
 - Cloud Build `7f090b0a-da04-488a-be38-4d72310dd243` built the image from an immutable source snapshot of 208 allowlisted files with manifest SHA-256 `49b3dc23565df69f41f39b51a3b27edceeed9271940f61f43da1e1dd0d76c6c2`.
 - The worker had run the 2026-10-18 image; this release moves it to the current source together with the API, because migration 0051 removes the label defaults that an older image relies on.
 

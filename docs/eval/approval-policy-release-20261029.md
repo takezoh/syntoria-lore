@@ -8,11 +8,11 @@ On 2026-10-29, Lore API revision `lore-api-policy-36b3225` began serving 100% of
 
 | Component | Source commit | Active revision or execution | Image digest |
 | --- | --- | --- | --- |
-| API | `36b3225` | `lore-api-policy-36b3225` | `sha256:d84fea48481fe10561ab8b91607f5891982633aed93fe19aed33f457aacaafc9` |
-| Migration job | `36b3225` | `lore-neon-migrate-pbt7h` | same image |
+| API | `59e4282` | `lore-api-policy-36b3225` | `sha256:d84fea48481fe10561ab8b91607f5891982633aed93fe19aed33f457aacaafc9` |
+| Migration job | `59e4282` | `lore-neon-migrate-pbt7h` | same image |
 
 - The image was built by Cloud Build `5e1fe25a-53b2-4b1a-b4cd-425b80743983`.
-- The release carries `1c25e89` (approval policy and migration 0048), `1eb7fb1` (request budgets and HSTS), `ee54b40` and `36b3225` (synthetic tracked deployment files).
+- The release carries `51a8997` (approval policy and migration 0048), `f3fac9f` (request budgets and HSTS), `10d0db8` and `59e4282` (synthetic tracked deployment files). The revision name keeps the abbreviated hash the source commit had before the [2026-10-30 history rewrite](../technical/deployment.md#release-and-recovery).
 - Shared Gate was released the same day as revision `gate-api-signout-d843db2`; its record is kept in the Gate repository.
 
 ## Configuration and migrations
