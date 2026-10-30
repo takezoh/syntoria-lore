@@ -11,7 +11,7 @@ On 2026-10-30, migrations 0049 to 0052 were applied, and Lore API revision `lore
 | API | `b66aea9` | `lore-api-cmp-57b7e6e` | `sha256:60f493b4ddabf73008fa85b729ef9c124ae29d8c7734d3801bcd16e8c530af31` |
 | Worker | `b66aea9` | `lore-worker-cmp-57b7e6e` | same image |
 | Migration job | `b66aea9` | `lore-neon-migrate-l7dt7` | same image |
-| Ledger reconcile job | `b66aea9` | not executed | same image |
+| Ledger reconcile job | `b66aea9` | `lore-ledger-reconcile-4pkkh` | same image |
 
 - Revision names keep the abbreviated hash the source commit had before the [history rewrite](../technical/deployment.md#release-and-recovery) later the same day.
 - Cloud Build `7f090b0a-da04-488a-be38-4d72310dd243` built the image from an immutable source snapshot of 208 allowlisted files with manifest SHA-256 `49b3dc23565df69f41f39b51a3b27edceeed9271940f61f43da1e1dd0d76c6c2`.
@@ -37,12 +37,12 @@ On the public origin after traffic moved, at 14:09 UTC:
 - `/openapi.json` 200 and lists `/v1/access`, `/v1/compartments`, `/v1/access:narrow` and `/v1/access:request`.
 - Anonymous worker request 403.
 - A Scheduler sweep at 14:09:03 UTC returned 200 from the new worker revision. Warnings logged by the new revisions up to the check were only the probes above.
+- Ledger reconcile execution `lore-ledger-reconcile-4pkkh` (15:09:52 to 15:10:10 UTC) reported `status=already-current`, `replayed=0`, `purged=0` and `readiness=ready` against the migrated database. It also logged repeated Node.js `MaxListenersExceededWarning` messages for storage-client streams, like those the [earlier storage smoke](cloud-deploy.md) recorded.
 
 ## Limits
 
 - These probes establish readiness, the new routes and negative authentication only. No authenticated hosted operation ran: creating a compartment, a labeled write, a widening by policy, a narrowing and the hiding of other connections' records are verified only against local PostgreSQL ([verification record](memory-compartments-enforcement-20261030.md)).
 - Allowances, labels and the Unclassified compartment were not read back from the production database; the migration credential stays with the owner.
-- The ledger reconcile job was moved to the new image but not executed; running it was not permitted in this session. The new worker's readiness probe checks deletion-ledger readiness.
 - The policy overhead requirement NFR-1 has not been measured.
 
 ## Rollback
