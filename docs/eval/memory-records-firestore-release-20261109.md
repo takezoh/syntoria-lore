@@ -6,7 +6,8 @@ The first Firestore version of Lore, `apps/api` with Remote MCP over `packages/m
 
 ## Source and artifacts
 
-- The source was the uncommitted working tree of 2026-11-09: the PostgreSQL implementation removed, `packages/memory-records`, `apps/api` and `scripts/admit-subject.mjs` added. No commit existed for it at deployment.
+- The source was the working tree of 2026-11-09, committed after deployment as `f480e2f`: the PostgreSQL implementation removed, `packages/memory-records`, `apps/api` and `scripts/admit-subject.mjs` added. The uploaded build source matches the build-context files of `f480e2f` except the generated `cloudbuild.yaml` and an empty local `.claude` directory that held no files; build contexts now exclude such directories.
+- The image lacks the Apache License copy and notice for the adapted Gate verifier, which `c560816` restored in `apps/api`; the next image includes them.
 - Before the build, `npm run verify:local` passed on a clean copy of that tree: unit tests (4 files, 28 tests), the Firestore emulator suite (3 files, 57 tests), secret scan and dependency audit with 15 moderate and no high advisories. The first emulator run hit a 5-second timeout in the existing stale compare-and-set test; three reruns passed.
 - Cloud Build `d9907f4e-7012-4a23-bb1a-ffc24bb09b40` built the image from an allowlisted context of 28 files (package manifests, TypeScript configuration, Dockerfile, `apps/` and `packages/`), digest `sha256:786430b31e2ccc855a67a440626980adbb006cebba98382976baf3adf2e3ca26`. The image runs as the non-root `node` user without development dependencies.
 
