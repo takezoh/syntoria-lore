@@ -1,4 +1,4 @@
-import type { MemoryRecord } from './index.js';
+import { deriveAuthority, type MemoryRecord } from './index.js';
 import type {
   FirestoreMemoryRecordRepository,
   IndexJob,
@@ -22,12 +22,14 @@ export interface RecallQuery {
   readonly aliases?: readonly string[];
   readonly validAt: string;
   readonly knownAt?: string;
+  readonly includeProposals?: boolean;
   readonly byteBudget: number;
   readonly limit?: number;
 }
 
 export interface RecallItem {
   readonly record: MemoryRecord;
+  readonly authority: 'user' | 'proposal';
   readonly score: number;
   readonly freshness: 'current' | 'recent-overlay' | 'stale-index';
 }
@@ -185,6 +187,7 @@ export class MemoryRecallService {
       ...(embedding === undefined ? {} : { embedding }),
       validAt: query.validAt,
       knownAt: query.knownAt ?? new Date().toISOString(),
+      ...(query.includeProposals === undefined ? {} : { includeProposals: query.includeProposals }),
       limit: query.limit ?? 10,
     });
     const insufficiencies = new Set(result.insufficiencies);
@@ -192,6 +195,11 @@ export class MemoryRecallService {
     for (const item of result.items) {
       const candidate = {
         record: item.record,
+        authority: deriveAuthority({
+          writer: item.record.revision.writer,
+          protectedChange: item.record.revision.approval.status === 'approved',
+          approval: item.record.revision.approval,
+        }),
         score: item.score,
         freshness: item.freshness,
       } satisfies RecallItem;

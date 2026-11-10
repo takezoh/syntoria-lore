@@ -5,6 +5,7 @@ import {
   deriveAuthority,
   indexEntryFor,
   isMemoryRecord,
+  isSourceReference,
   selectCurrentView,
   selectHistoricalView,
   tokenizeSearchText,
@@ -85,6 +86,32 @@ describe('Memory Record value model', () => {
   });
   it('validates the current record shape and excludes source bodies', () => {
     expect(isMemoryRecord(record())).toBe(true);
+    expect(
+      isSourceReference({ provider: 'chat', accountOrTenant: 'tenant-1', resourceId: 'message-1' }),
+    ).toBe(true);
+    expect(
+      isSourceReference({
+        provider: 'web',
+        accountOrTenant: 'example.test',
+        resourceId: 'https://example.test/doc',
+        uri: 'https://example.test/doc',
+        title: 'Reference title',
+      }),
+    ).toBe(true);
+    const longSourceTitle = {
+      provider: 'web',
+      accountOrTenant: 'example.test',
+      resourceId: 'https://example.test/doc',
+      uri: 'https://example.test/doc',
+      title: 'x'.repeat(201),
+    };
+    expect(isSourceReference(longSourceTitle)).toBe(false);
+    expect(
+      isMemoryRecord({
+        ...record(),
+        revision: { ...record().revision, sourceReferences: [longSourceTitle] },
+      }),
+    ).toBe(false);
     expect(isMemoryRecord({ ...record(), originalBody: 'original source text' })).toBe(false);
     expect(
       isMemoryRecord({
@@ -264,7 +291,7 @@ describe('Memory Record value model', () => {
     ).toBeNull();
   });
 
-  it('never selects an unapproved candidate from current or historical views', () => {
+  it('keeps proposal selection opt-in for generic views and supports recall selectors', () => {
     const candidate = record({
       lifecycle: 'candidate',
       attribution: { speaker: null, role: 'ai' },
@@ -277,6 +304,41 @@ describe('Memory Record value model', () => {
     expect(selectCurrentView([candidate], '2026-03-01T00:00:00.000Z')).toBeNull();
     expect(
       selectHistoricalView([candidate], '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z'),
+    ).toBeNull();
+    expect(
+      selectCurrentView([candidate], '2026-03-01T00:00:00.000Z', { includeProposals: true }),
+    ).toEqual(candidate);
+    expect(
+      selectHistoricalView([candidate], '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', {
+        includeProposals: true,
+      }),
+    ).toEqual(candidate);
+  });
+
+  it('makes the explicit proposal opt-out match derived authority on active AI records', () => {
+    const activeProposal = record({
+      lifecycle: 'active',
+      attribution: { speaker: null, role: 'ai' },
+      revision: {
+        ...record().revision,
+        writer: { kind: 'ai', id: 'assistant-1', connectionId: 'connection-1' },
+        approval: { status: 'none' },
+      },
+    });
+    expect(
+      selectHistoricalView(
+        [activeProposal],
+        '2026-03-01T00:00:00.000Z',
+        '2026-03-01T00:00:00.000Z',
+      ),
+    ).toEqual(activeProposal);
+    expect(
+      selectHistoricalView(
+        [activeProposal],
+        '2026-03-01T00:00:00.000Z',
+        '2026-03-01T00:00:00.000Z',
+        { includeProposals: false },
+      ),
     ).toBeNull();
   });
 

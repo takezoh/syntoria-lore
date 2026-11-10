@@ -839,6 +839,153 @@ describe('Firestore Memory Record repository', () => {
     expect(await repository.getCurrent(actor, 'scope-demo', proposal.id)).toBeNull();
   });
 
+  it('recalls indexed proposals only when selected and still enforces rights, allowance, and suppression', async () => {
+    const { actor, repository, projectId, deletionLedger } = await context(
+      ['work'],
+      1,
+      'connection',
+    );
+    const proposal = record({
+      id: 'proposal-work',
+      title: 'Private editor theme',
+      statement: 'The private editor theme follows a confidential source',
+      kind: 'fact',
+      details: {
+        kind: 'fact',
+        subject: 'editor',
+        claim: 'The private editor theme follows a confidential source',
+      },
+      lifecycle: 'candidate',
+      compartmentIds: ['work'],
+      attribution: { speaker: null, role: 'ai' },
+      revision: {
+        ...record().revision,
+        writer: { kind: 'ai', id: 'assistant-demo', connectionId: actor.connectionId },
+        approval: { status: 'none' },
+        sourceReferences: [
+          {
+            provider: 'docs',
+            accountOrTenant: 'private.example.test',
+            resourceId: 'private-guide',
+            uri: 'https://private.example.test/guide',
+            rights: ['confidential'],
+          },
+        ],
+      },
+    });
+    const suppressedProposal = record({
+      id: 'proposal-suppressed',
+      title: 'Suppressed editor theme',
+      statement: 'A suppressed editor theme proposal',
+      kind: 'fact',
+      details: { kind: 'fact', subject: 'editor', claim: 'A suppressed editor theme proposal' },
+      lifecycle: 'candidate',
+      compartmentIds: [],
+      attribution: { speaker: null, role: 'ai' },
+      revision: {
+        ...record().revision,
+        writer: { kind: 'ai', id: 'assistant-demo', connectionId: actor.connectionId },
+        approval: { status: 'none' },
+      },
+    });
+    await repository.commit(actor, {
+      scopeId: 'scope-demo',
+      idempotencyKey: 'proposal-recall',
+      changes: [
+        { kind: 'create', record: proposal },
+        { kind: 'create', record: suppressedProposal },
+      ],
+    });
+
+    const workerActor = {
+      ...actor,
+      actorKind: 'worker',
+      principalId: 'worker-demo',
+    } as unknown as VerifiedActorCapability;
+    await seedAuthorization(projectId, workerActor, []);
+    const workerRepository = createFirestoreMemoryRecordRepository({
+      projectId,
+      cursorSecret: secret,
+      deletionLedger,
+    });
+    repositories.push(workerRepository);
+    const worker = new MemoryIndexWorker(workerRepository, {
+      async embed(text) {
+        return { modelId: 'candidate-test', dimension: 1, values: [text.length] };
+      },
+    });
+    expect(await worker.runPending(workerActor, 'scope-demo')).toMatchObject({
+      completed: 1,
+      failed: 0,
+    });
+
+    const recall = new MemoryRecallService(repository, {
+      async embed(text) {
+        return { modelId: 'candidate-test', dimension: 1, values: [text.length] };
+      },
+    });
+    const recallInput = {
+      validAt: '2026-03-01T00:00:00.000Z',
+      knownAt: '2026-03-01T00:00:00.000Z',
+      byteBudget: 10_000,
+    };
+    expect(
+      (
+        await recall.recall(actor, 'scope-demo', {
+          ...recallInput,
+          recordId: proposal.id,
+        })
+      ).items,
+    ).toEqual([]);
+    const included = await recall.recall(actor, 'scope-demo', {
+      ...recallInput,
+      recordId: proposal.id,
+      includeProposals: true,
+    });
+    expect(included.items.map((item) => item.record.id)).toEqual(['proposal-work']);
+    expect(included.items[0]?.record.revision.sourceReferences[0]?.rights).toEqual([
+      'confidential',
+    ]);
+    expect(included.byteLength).toBe(Buffer.byteLength(JSON.stringify(included), 'utf8'));
+
+    const restrictedActor = {
+      ...actor,
+      principalId: 'connection-limited',
+      connectionId: 'connection-limited',
+      compartmentAllowance: [],
+    } as unknown as VerifiedActorCapability;
+    await seedAuthorization(projectId, restrictedActor, []);
+    expect(
+      (
+        await recall.recall(restrictedActor, 'scope-demo', {
+          ...recallInput,
+          recordId: proposal.id,
+          includeProposals: true,
+        })
+      ).items,
+    ).toEqual([]);
+
+    await seedSuppression(projectId, actor, suppressedProposal.id);
+    expect(
+      (
+        await recall.recall(actor, 'scope-demo', {
+          ...recallInput,
+          recordId: suppressedProposal.id,
+          includeProposals: true,
+        })
+      ).items,
+    ).toEqual([]);
+
+    await revokeSources(projectId, actor, ['docs\u0000private.example.test\u0000private-guide']);
+    const afterRevocation = await recall.recall(actor, 'scope-demo', {
+      ...recallInput,
+      recordId: proposal.id,
+      includeProposals: true,
+    });
+    expect(afterRevocation.items).toEqual([]);
+    expect(afterRevocation.insufficiencies).toContain('rights-withheld');
+  });
+
   it('allows AI corroboration only when it preserves the memory and adds a new source', async () => {
     const { actor: person, repository, projectId } = await context();
     await repository.commit(person, {

@@ -7,6 +7,7 @@ import {
 } from '@google-cloud/firestore';
 import { createFirestoreClient } from './firestore-client.js';
 import {
+  deriveAuthority,
   isSourceReference,
   isMemoryRecord,
   selectCurrentView,
@@ -164,6 +165,7 @@ export interface RecallCandidateQuery {
   };
   readonly validAt: string;
   readonly knownAt: string;
+  readonly includeProposals?: boolean;
   readonly limit: number;
 }
 
@@ -1018,7 +1020,12 @@ export class FirestoreMemoryRecordRepository {
           insufficiencies.add('invalid-history');
           return;
         }
-        const record = selectHistoricalView(revisions, query.knownAt, query.validAt);
+        const record = selectHistoricalView(
+          revisions,
+          query.knownAt,
+          query.validAt,
+          query.includeProposals === undefined ? {} : { includeProposals: query.includeProposals },
+        );
         if (!record || !containsOnly(record.compartmentIds, actor.compartmentAllowance)) return;
         if (this.hasRevokedSource(record, authorization)) {
           insufficiencies.add('rights-withheld');
@@ -1062,7 +1069,10 @@ export class FirestoreMemoryRecordRepository {
       return results;
     });
     visible.sort(
-      (left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id),
+      (left, right) =>
+        right.score - left.score ||
+        authorityRank(right.record) - authorityRank(left.record) ||
+        left.record.id.localeCompare(right.record.id),
     );
     return {
       items: visible.slice(0, query.limit),
@@ -2674,6 +2684,16 @@ export class FirestoreMemoryRecordRepository {
 
 function sourceReferenceKey(source: import('./index.js').SourceReference): string {
   return `${source.provider}\u0000${source.accountOrTenant}\u0000${source.resourceId}`;
+}
+
+function authorityRank(record: MemoryRecord): number {
+  return deriveAuthority({
+    writer: record.revision.writer,
+    protectedChange: record.revision.approval.status === 'approved',
+    approval: record.revision.approval,
+  }) === 'user'
+    ? 1
+    : 0;
 }
 
 export function createFirestoreMemoryRecordRepository(options: {

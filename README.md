@@ -8,7 +8,7 @@ Syntoria Lore is Syntoria's Memory Service: long-term memory with evidence for t
 
 Tell one AI, “We'll choose the database only after the product requirements are settled.” Next month, ask a different AI what the project decided. It can answer with your decision, when you made it and the conversation it came from—and keep it apart from the database it had suggested before.
 
-> **Status on 2026-11-09:** Lore was rebuilt on Firestore Memory Records and its first version is deployed with Remote MCP only. Remembering and recalling through a real AI client has not been verified yet, and some features described here are not available in this version; the [architecture](ARCHITECTURE.md) describes what exists today.
+> **Status on 2026-11-10:** Lore was rebuilt on Firestore Memory Records and its first version is deployed with Remote MCP only. Remembering and recalling through a real AI client have not been verified. Proposal recall and structured MCP source references are implemented in the current repository but have not been checked against the hosted deployment; the [architecture](ARCHITECTURE.md) describes the current source behavior.
 
 ## Explain it once
 
@@ -59,9 +59,9 @@ See [use cases and example prompts](docs/usage/use-cases.md) for continuing in a
 
 Lore stores memories and their evidence; your AI decides when to remember or recall and what a result means for the task at hand. An explicit request to remember is saved immediately. When a connected source sends conversations or documents, Lore's background curator proposes memories, checks each one against the cited source text and existing memories, and saves only uncontested facts automatically. The rest wait for your review.
 
-Lore tells what you decided apart from what an AI wrote. Every AI you connect acts for you but not as you: what it saves is kept as an AI proposal, together with which AI saved it. When an AI asks to record a decision, preference or correction as yours, or to Forget or change what Lore keeps, your approval policy decides. With automatic approval, the default, Lore applies it at once and records that your policy approved it, not you, and which AI asked. If you choose to approve each change yourself, your AI shows you a link to Gate, the shared sign-in service; you sign in, read the change as Lore describes it and approve or deny it. Attribution says who said something, not whether it is true.
+Lore tells what you decided apart from what an AI wrote. Every AI you connect acts for you but not as you: what it saves is kept as an AI proposal, together with which AI saved it. Matching records with proposal authority are included in recall by default; a client can limit recall to user authority with `include_proposals: false`. They do not become user memories without the controlled approval path. When an AI asks to record a decision, preference or correction as yours, or to Forget or change what Lore keeps, your approval policy decides. With automatic approval, the default, Lore applies it at once and records that your policy approved it, not you, and which AI asked. If you choose to approve each change yourself, your AI shows you a link to Gate, the shared sign-in service; you sign in, read the change as Lore describes it and approve or deny it. Attribution says who said something, not whether it is true.
 
-Recall returns a bounded set of matching memories with their evidence and uncertainty. It can miss things, and an empty answer does not prove that nothing was said. Forgotten content stops being returned immediately; backups may hold it until they expire, and a restored service applies the deletion before serving memories again.
+Recall returns a bounded set of matching memories with their authority, lifecycle, writer attribution, source references and uncertainty. It can miss things, and an empty answer does not prove that nothing was said. Forgotten content stops being returned immediately; backups may hold it until they expire, and a restored service applies the deletion before serving memories again.
 
 ## What a memory contains
 

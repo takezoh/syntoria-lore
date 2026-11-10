@@ -2,7 +2,7 @@
 
 This document turns [ADR 0007](../adr/0007-store-memories-as-firestore-memory-records.md) and [ADR 0008](../adr/0008-keep-a-generative-baseline-and-enable-decision-models-per-point.md) into contracts. It is for the people who implement and review the move to Memory Records in Firestore and the evaluation of decision models. It is step 1 of the owner's Memory Records plan v2.0 (contracts and evaluation conditions) and lists the step 2 units. It was produced on 2026-11-08 by the dev-skills design loop. An independent review found that a Forget could be lost across a restore, and the design was revised. The caller then found gaps in the requirement mapping and the evaluation contract, and a second revision closed them. A second independent review approved the result the same day, with one minor finding about duplicated evaluation text that this document resolves by stating the evaluation once. The owner fixed the [evaluation values](#decisions) the same day and accepted both ADRs on 2026-11-09.
 
-These are logical contracts. Collection names, document paths and API names are left to the implementation units. Nothing here describes the running service, which still uses PostgreSQL as described in the [data model](../technical/data-model.md); current-behavior references change only when an implementation changes behavior.
+These are logical contracts and an implementation plan written on 2026-11-08. The PostgreSQL service described by the then-current [data model](../technical/data-model.md) was removed on 2026-11-09. The current Firestore implementation and deployed service status are described in the [architecture](../../ARCHITECTURE.md) and the [2026-11-09 release record](../eval/memory-records-firestore-release-20261109.md). This page's S2 verification summary below describes the package-only state at that time; it does not describe the current service or hosted status of changes made after that record.
 
 ## Outcome
 
@@ -14,7 +14,7 @@ Several AIs create, use and correct the same memories without Lore copying the o
 | --- | --- |
 | Memory Record | One reusable memory: its current state is one document, each revision another |
 | Revision | An immutable state of a record with its own number, change kind, reason, writer, approval and source references |
-| Source reference | Provider, account or tenant, resource ID, URI, locator and available version of an original kept in its own service, with speaker, times, rights and lineage |
+| Source reference | Provider, account or tenant, resource ID, URI, optional title, locator and available version of an original kept in its own service, with speaker, times, rights and lineage |
 | Baseline A | The path where a generative LLM proposes memories and labels and code validates and commits; always available |
 | Decision model | A model or API that returns a typed label, a true-or-false judgment or a score for one bounded question; not a decision record or ADR |
 | Decision point | A place in capture or recall where a decision model may replace a bounded judgment of A |
@@ -58,6 +58,8 @@ One record holds one reusable content: not a whole meeting or project, and not s
 The schema separates required, optional and system-set fields. Unknown times and speakers stay unknown instead of being filled in. Model output never sets IDs, authority, approval, labels or recorded time.
 
 **Forgotten.** The current model has a `forgotten` lifecycle value; here Forget is a suppression that applies whatever the lifecycle is, so a forgotten candidate and a forgotten active record are treated alike. The observable rule is unchanged: suppressed content is never returned by a current or historical read, and prior lifecycle metadata is kept only without the forgotten content.
+
+MCP clients may attach up to ten declared HTTPS source references with a provider and optional title, locator, version and sensitivity. Lore stores their metadata on the revision and does not fetch the URI. `confidential` is a descriptive rights marker, not an access grant or a substitute for compartment allowances and source-revocation checks.
 
 ### Operations
 
@@ -150,8 +152,8 @@ Every functional requirement and acceptance contract in the [product requirement
 | FR-CUR-06 | Kept | Reprocessing goes through the normal checks and cannot reverse a current explicit decision |
 | FR-REC-01 | Kept | All five intents remain; term matching is bounded and is not full-text search |
 | FR-REC-02 | Changed | Structured, bounded term and vector candidates with the direct references that are needed; graph expansion is no longer the center of retrieval |
-| FR-REC-03 | Kept | Context Packs keep budget, priority, evidence, freshness and uncertainty |
-| FR-REC-04 | Kept | Committed records and the recent-change overlay keep new remembers visible during index lag |
+| FR-REC-03 | Kept | Context Packs keep budget, priority, evidence, authority, lifecycle, writer attribution, freshness and uncertainty; recall includes proposals by default and supports an explicit opt-out |
+| FR-REC-04 | Kept | Committed records, including candidates, and the recent-change overlay keep new remembers visible during index lag |
 | FR-REC-05 | Kept | Missing information, contradictions and staleness are reported; nothing is invented |
 | FR-REC-06 | Kept | The repository boundary checks rights from candidate selection onward |
 | FR-LIFE-01 | Kept | Supersede, retract and Forget stay distinct operations |
@@ -285,20 +287,20 @@ Each contract has a discriminating witness. Pure value-model checks run as unit 
 
 ## Implementation units
 
-Ordered by dependency. They were built beside the PostgreSQL implementation, which the owner later removed (see [Decisions](#decisions)).
+Ordered by dependency. This table records the original step 2 plan, whose first units were built beside the PostgreSQL implementation that the owner later removed (see [Decisions](#decisions)). Its unit boundaries and prerequisites describe that plan, not a current inventory; see the [architecture](../../ARCHITECTURE.md) for current component ownership and remaining work.
 
 | Unit | Content | Depends on | Prerequisites |
 | --- | --- | --- | --- |
 | S1 Contracts | This design and ADRs 0007 and 0008 | — | Documentation checks |
-| S2-1 Value model | A new isolated package with Memory Record types, validation of the current shape, and deterministic lifecycle, approval and time selectors: a proposal is never a decision, supersede and retract stay distinct and need the person as writer with an approved protected change, valid-at and known-at are selected independently. No Firestore client, provider API, REST or MCP wiring, migration or deployed state | S1 | Build, typecheck, lint, format and unit tests; the PostgreSQL integration suite is not affected and cannot run without `TEST_ADMIN_URL` and `TEST_APP_URL` |
+| S2-1 Value model | A new isolated package with Memory Record types, validation of the current shape, and deterministic lifecycle, approval and time selectors: a proposal is never a decision, supersede and retract stay distinct and need the person as writer with an approved protected change, valid-at and known-at are selected independently. This planned unit adds no Firestore client, provider API, REST or MCP wiring, migration or deployed state | S1 | Build, typecheck, lint, format and unit tests; the PostgreSQL integration suite was not affected and could not run without `TEST_ADMIN_URL` and `TEST_APP_URL` |
 | S2-2a Firestore repository: commits and reads | The repository boundary with transactions, idempotency, per-scope sequence and signed cursors, conflicting-decision checks and a lint rule against direct client use. Revisions record the requesting connection and Gate client next to the approval, because S2-1 applies an approved protected change as the person and has no field for which AI asked. The Firestore SDK is added here | S2-1 | Java 25 and the Firestore emulator; a real project later for IAM, managed transactions and restore |
-| S2-2b Forget, restore and rights | Forget with suppression, a content-free deletion intent and an independent deletion-ledger port; purge; the restore checkpoint; source-rights revocation on every read surface; writes authorized against the stored record (label, identity, and for connections only their own unapproved candidates); relaxation only through an approved protected change | S2-2a | A production ledger adapter and application or worker wiring are later work |
+| S2-2b Forget, restore and rights | Forget with suppression, a content-free deletion intent and an independent deletion-ledger port; purge; the restore checkpoint; source-rights revocation on every read surface; writes authorized against the stored record (label, identity, and for connections only their own unapproved candidates); relaxation only through an approved protected change | S2-2a | At the time of the plan, a production ledger adapter and application or worker wiring remained later work |
 | S2-3a Baseline A capture | Explicit remember and background capture through an extractor port and an authorized source-fetcher port (test doubles), with labels and attribution taken from trusted source metadata, durable capture jobs, held results for failures and malformed output, consent rechecked on retry, and no persisted source text | S2-2b | Real models and source providers later; automatic activation of facts is not implemented, so AI proposals stay held candidates |
 | S2-3b Derived recall | Revision-fenced term and embedding entries per revision, recall from ID, subject, alias, term and vector candidates plus an unindexed-change overlay, every result rechecked against the committed record, and a byte-bounded Context Pack with insufficiency notes | S2-3a | Real embeddings and search-quality measurements later; candidate retrieval scans at most 1,000 index entries and computes vector similarity in memory, which is not Firestore vector search |
 
-S2-1 to S2-3b were implemented and verified locally on 2026-11-08 and 2026-11-09 ([local record](../eval/memory-records-s2-local-20261109.md)). None of them is wired into REST, MCP or the worker, and nothing was deployed.
+S2-1 to S2-3b were implemented and verified locally on 2026-11-08 and 2026-11-09 ([local record](../eval/memory-records-s2-local-20261109.md)). That record captures the package-only state before service wiring and deployment: at that point these units were not wired into REST, MCP or the worker, and nothing was deployed. Since then, `apps/api` with Remote MCP over `packages/memory-records` has been deployed; see the [current architecture](../../ARCHITECTURE.md) and [release record](../eval/memory-records-firestore-release-20261109.md). The release checked readiness and the authentication boundary only. Proposal recall and structured source references in the current repository have not been verified against the hosted service.
 
-Later steps of the plan (provisioning the database and its access as decided below, the REST and MCP service and the worker on Memory Records, a production deletion-ledger adapter, source re-fetch contracts, decision-model evaluation, enabling C and operational quality) get their own designs or units.
+The original plan listed database provisioning and access, REST and MCP service wiring, a worker on Memory Records, a production deletion-ledger adapter, source re-fetch contracts, decision-model evaluation, enabling C and operational quality as later steps. Remote MCP service wiring and the initial deployment have since been completed; the REST adapter and other current remaining implementation work are listed in the [architecture](../../ARCHITECTURE.md). The initial release did not verify authenticated MCP operations, remember, recall, correction or Forget against the hosted service, and this page does not establish hosted acceptance or recall quality.
 
 ## Decisions
 

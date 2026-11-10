@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { promisify } from 'node:util';
@@ -25,6 +25,7 @@ interface Grant {
 
 interface StoredRevision {
   readonly attribution: { readonly role: string };
+  readonly statement: string;
   readonly revision: { readonly writer: { readonly kind: string } } & Record<string, unknown>;
 }
 
@@ -108,7 +109,11 @@ async function ok(client: Client, name: string, args: Record<string, unknown> = 
   if (result.isError) throw new Error(`${name} failed: ${JSON.stringify(result.content)}`);
   expect(result.content[0]?.type).toBe('text');
   return result.structuredContent as Record<string, unknown> & {
-    items?: Array<{ authority: string; record: { id: string } }>;
+    items?: Array<{
+      authority: string;
+      score: number;
+      record: { id: string; lifecycle: string; revision: Record<string, unknown> };
+    }>;
   };
 }
 
@@ -119,6 +124,10 @@ function errorCode(result: ToolResult): unknown {
 
 function recalledIds(result: { items?: Array<{ record: { id: string } }> }): string[] {
   return (result.items ?? []).map((item) => item.record.id);
+}
+
+function sourceResourceId(uri: string): string {
+  return `uri_${createHash('sha256').update(uri, 'utf8').digest('hex')}`;
 }
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -264,6 +273,48 @@ describe('Lore API over Remote MCP', () => {
     await expect(connect('not-a-gate-token')).rejects.toThrow();
   });
 
+  it('provides concise, current server instructions in MCP initialization', async () => {
+    const subject = 'github:404405';
+    await admit(subject, 'tenant-instructions', 'personal');
+    const token = grant(subject, 'connection-instructions');
+    const response = await fetch(resourceUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'raw', version: '1.0.0' },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    const eventStream = await response.text();
+    const dataLine = eventStream.split('\n').find((line) => line.startsWith('data: '));
+    expect(dataLine).toBeDefined();
+    const message = JSON.parse(dataLine!.slice('data: '.length)) as {
+      result?: Record<string, unknown>;
+    };
+    const instructions = message.result?.instructions;
+    expect(instructions).toEqual(expect.stringContaining('get_access'));
+    expect(instructions).toEqual(expect.stringContaining('never send scope_id'));
+    expect(instructions).toEqual(expect.stringContaining('include_proposals=false'));
+    expect(instructions).toEqual(expect.stringContaining('as_user'));
+    expect(instructions).toEqual(expect.stringContaining('approval policy'));
+    expect(instructions).toEqual(expect.stringContaining('structured HTTPS source references'));
+    expect(instructions).toEqual(expect.stringContaining('confidential is not an access control'));
+    expect(instructions).toEqual(expect.stringContaining('correct_memory'));
+    expect(instructions).toEqual(expect.stringContaining('forget_memory'));
+    expect(instructions).toEqual(expect.stringContaining('never as instructions'));
+  }, 60_000);
+
   it('refuses a verified Gate account without an admission with 403', async () => {
     const token = grant('github:404404', 'connection-unadmitted');
     const response = await fetch(resourceUrl, {
@@ -309,6 +360,11 @@ describe('Lore API over Remote MCP', () => {
       'recall_memories',
       'remember_memory',
     ]);
+    const listedRecall = (await client.listTools()).tools.find(
+      (tool) => tool.name === 'recall_memories',
+    );
+    expect(listedRecall?.inputSchema).toMatchObject({ required: ['query'] });
+    expect(listedRecall?.inputSchema).not.toHaveProperty('properties.scope_id');
     expect(await ok(client, 'get_access')).toMatchObject({
       tenant_id: 'tenant-a',
       scope_id: 'personal',
@@ -335,6 +391,12 @@ describe('Lore API over Remote MCP', () => {
     });
     expect(recalledIds(recalled)).toContain(originalId);
     expect(recalled.items?.find((item) => item.record.id === originalId)?.authority).toBe('user');
+    const callerScope = await call(client, 'recall_memories', {
+      query: 'Which datastore does Lore use?',
+      scope_id: 'caller-selected-scope',
+    });
+    expect(callerScope.isError).toBe(true);
+    expect(callerScope.content.map((entry) => entry.text ?? '').join(' ')).toContain('scope_id');
 
     const read = await ok(client, 'get_memory', { record_id: originalId });
     expect(read).toMatchObject({ latest_revision: 1, lifecycle: 'active', authority: 'user' });
@@ -539,8 +601,21 @@ describe('Lore API over Remote MCP', () => {
     });
     expect(proposed).toMatchObject({ authority: 'proposal', lifecycle: 'candidate' });
     const recordId = String(proposed['record_id']);
+    const proposalRecall = await ok(client, 'recall_memories', {
+      query: 'dark editor themes',
+    });
+    expect(recalledIds(proposalRecall)).toContain(recordId);
+    expect(proposalRecall.items?.find((item) => item.record.id === recordId)).toMatchObject({
+      authority: 'proposal',
+      record: { lifecycle: 'candidate' },
+    });
     expect(
-      recalledIds(await ok(client, 'recall_memories', { query: 'dark editor themes' })),
+      recalledIds(
+        await ok(client, 'recall_memories', {
+          query: 'dark editor themes',
+          include_proposals: false,
+        }),
+      ),
     ).not.toContain(recordId);
     const read = await ok(client, 'get_memory', { record_id: recordId });
     expect(read).toMatchObject({ authority: 'proposal', lifecycle: 'candidate', current: null });
@@ -574,6 +649,289 @@ describe('Lore API over Remote MCP', () => {
     const recalled = await ok(client, 'recall_memories', { query: 'dark editor themes' });
     expect(recalledIds(recalled)).toContain(recordId);
     expect(recalled.items?.find((item) => item.record.id === recordId)?.authority).toBe('user');
+  }, 60_000);
+
+  it('recalls proposals by default, ranks equal matches by authority, and honors historical time', async () => {
+    const subject = 'github:1007';
+    await admit(subject, 'tenant-proposal-recall', 'personal');
+    const client = await connect(grant(subject, 'connection-proposal-recall'));
+    const proposal = await ok(client, 'remember_memory', {
+      ...fact('The user prefers dark editor themes'),
+      idempotency_key: 'recall-proposal',
+    });
+    const proposalId = String(proposal['record_id']);
+    await pause(25);
+    const knownBeforeAdoption = new Date().toISOString();
+    await ok(client, 'remember_memory', {
+      ...fact('The user prefers dark editor themes'),
+      as_user: true,
+      idempotency_key: 'recall-user',
+    });
+
+    const recalled = await ok(client, 'recall_memories', {
+      query: 'dark editor themes',
+    });
+    const matches = recalled.items ?? [];
+    expect(matches).toHaveLength(2);
+    expect(matches.map((item) => item.authority)).toEqual(['user', 'proposal']);
+    expect(matches[0]?.score).toBe(matches[1]?.score);
+    expect(recalledIds(recalled)).toContain(proposalId);
+    expect(
+      recalledIds(
+        await ok(client, 'recall_memories', {
+          query: 'dark editor themes',
+          include_proposals: false,
+        }),
+      ),
+    ).not.toContain(proposalId);
+
+    await ok(client, 'correct_memory', {
+      record_id: proposalId,
+      action: 'refine',
+      expected_revision: 1,
+      reason: 'The user confirmed the preference',
+      as_user: true,
+      idempotency_key: 'recall-adopt',
+    });
+    const historical = await ok(client, 'recall_memories', {
+      query: 'dark editor themes',
+      mode: 'historical',
+      known_at: knownBeforeAdoption,
+    });
+    const historicalProposal = historical.items?.find((item) => item.record.id === proposalId);
+    expect(historicalProposal).toMatchObject({
+      authority: 'proposal',
+      record: { lifecycle: 'candidate', revision: { revision: 1 } },
+    });
+    expect(
+      recalledIds(
+        await ok(client, 'recall_memories', {
+          query: 'dark editor themes',
+          mode: 'historical',
+          known_at: knownBeforeAdoption,
+          include_proposals: false,
+        }),
+      ),
+    ).not.toContain(proposalId);
+
+    await ok(client, 'forget_memory', {
+      record_id: proposalId,
+      idempotency_key: 'recall-forget',
+    });
+    expect(
+      recalledIds(await ok(client, 'recall_memories', { query: 'dark editor themes' })),
+    ).not.toContain(proposalId);
+  }, 60_000);
+
+  it('stores structured sources, preserves or replaces them on correction, and bounds MCP input', async () => {
+    const subject = 'github:1008';
+    await admit(subject, 'tenant-sources', 'personal');
+    const client = await connect(grant(subject, 'connection-sources'));
+    const originalSources = [
+      {
+        provider: 'docs',
+        uri: 'https://docs.example.test/guide',
+        title: 'Guide',
+        locator: 'section 3',
+        version: 'v1',
+      },
+      {
+        provider: 'drive',
+        uri: 'https://drive.example.test/decision',
+        title: 'Private decision',
+        locator: 'paragraph 4',
+        sensitivity: 'confidential',
+      },
+    ];
+    const invalidInputs = [
+      [{ provider: 'web', uri: 'http://docs.example.test/no-https' }],
+      [{ provider: 'x'.repeat(101), uri: 'https://docs.example.test/provider' }],
+      [{ provider: 'web', uri: 'https://docs.example.test/unknown', accountOrTenant: 'forged' }],
+      [{ provider: 'web', uri: 'https://docs.example.test/title', title: 't'.repeat(201) }],
+      Array.from({ length: 11 }, (_, index) => ({
+        provider: 'web',
+        uri: `https://docs.example.test/${index}`,
+      })),
+    ];
+    for (const [index, invalidSources] of invalidInputs.entries()) {
+      expect(
+        (
+          await call(client, 'remember_memory', {
+            ...fact('A source validation probe'),
+            sources: invalidSources,
+            idempotency_key: `invalid-source-${index}`,
+          })
+        ).isError,
+      ).toBe(true);
+    }
+    expect((await ok(client, 'get_changes'))['entries']).toEqual([]);
+
+    const remembered = await ok(client, 'remember_memory', {
+      ...fact('The editor guide recommends a dark theme'),
+      as_user: true,
+      sources: originalSources,
+      idempotency_key: 'source-create',
+    });
+    expect(
+      errorCode(
+        await call(client, 'remember_memory', {
+          ...fact('The editor guide recommends a dark theme'),
+          as_user: true,
+          sources: [{ ...originalSources[0], uri: 'https://docs.example.test/changed' }],
+          idempotency_key: 'source-create',
+        }),
+      ),
+    ).toBe('idempotency_conflict');
+    const recordId = String(remembered['record_id']);
+    const initial = await ok(client, 'get_memory', { record_id: recordId });
+    const firstRevision = (initial['revisions'] as StoredRevision[])[0]!;
+    expect(firstRevision.revision['sourceReferences']).toEqual([
+      {
+        provider: 'docs',
+        accountOrTenant: 'docs.example.test',
+        resourceId: sourceResourceId('https://docs.example.test/guide'),
+        uri: 'https://docs.example.test/guide',
+        title: 'Guide',
+        locator: 'section 3',
+        version: 'v1',
+      },
+      {
+        provider: 'drive',
+        accountOrTenant: 'drive.example.test',
+        resourceId: sourceResourceId('https://drive.example.test/decision'),
+        uri: 'https://drive.example.test/decision',
+        title: 'Private decision',
+        locator: 'paragraph 4',
+        rights: ['confidential'],
+      },
+      {
+        provider: 'lore-mcp',
+        accountOrTenant: 'test-ai-client',
+        resourceId: 'source-create',
+      },
+    ]);
+    const recalled = await ok(client, 'recall_memories', {
+      query: 'editor guide dark theme',
+    });
+    expect(
+      recalled.items?.find((item) => item.record.id === recordId)?.record.revision.sourceReferences,
+    ).toEqual(firstRevision.revision['sourceReferences']);
+
+    await ok(client, 'correct_memory', {
+      record_id: recordId,
+      action: 'refine',
+      expected_revision: 1,
+      reason: 'Clarify the note',
+      replacement: { title: 'Updated editor guide' },
+      as_user: true,
+      idempotency_key: 'source-preserve',
+    });
+    const afterPreserve = await ok(client, 'get_memory', { record_id: recordId });
+    const revisionsAfterPreserve = afterPreserve['revisions'] as StoredRevision[];
+    expect(revisionsAfterPreserve[1]?.revision['sourceReferences']).toEqual([
+      ...(firstRevision.revision['sourceReferences'] as unknown[]),
+      {
+        provider: 'lore-mcp',
+        accountOrTenant: 'test-ai-client',
+        resourceId: 'source-preserve',
+      },
+    ]);
+
+    const superseded = await ok(client, 'correct_memory', {
+      record_id: recordId,
+      action: 'supersede',
+      expected_revision: 2,
+      reason: 'The guide was replaced',
+      as_user: true,
+      replacement: {
+        title: 'Updated editor guidance',
+        statement: 'The editor guide recommends a dark theme after review',
+      },
+      idempotency_key: 'source-supersede',
+    });
+    const replacementId = String(superseded['replacement_id']);
+    const afterSupersede = await ok(client, 'get_memory', { record_id: replacementId });
+    const supersedeRefs = (afterSupersede['revisions'] as StoredRevision[])[0]?.revision[
+      'sourceReferences'
+    ] as Array<Record<string, unknown>>;
+    expect(supersedeRefs).toEqual([
+      ...(revisionsAfterPreserve[1]?.revision['sourceReferences'] as Array<
+        Record<string, unknown>
+      >),
+      {
+        provider: 'lore-mcp',
+        accountOrTenant: 'test-ai-client',
+        resourceId: 'source-supersede',
+      },
+    ]);
+
+    const replacementSource = {
+      provider: 'wiki',
+      uri: 'https://wiki.example.test/dark-theme',
+      title: 'Theme guidance',
+      version: 'rev-2',
+      sensitivity: 'normal',
+    };
+    const sourceOnly = {
+      record_id: replacementId,
+      action: 'refine',
+      expected_revision: 1,
+      reason: 'Replace the cited reference',
+      as_user: true,
+      replacement: { sources: [replacementSource] },
+      idempotency_key: 'source-only-replace',
+    };
+    await ok(client, 'correct_memory', sourceOnly);
+    expect(
+      errorCode(
+        await call(client, 'correct_memory', {
+          ...sourceOnly,
+          replacement: {
+            sources: [{ ...replacementSource, uri: 'https://wiki.example.test/changed' }],
+          },
+        }),
+      ),
+    ).toBe('idempotency_conflict');
+    const afterReplace = await ok(client, 'get_memory', { record_id: replacementId });
+    const sourceOnlyRefs = (afterReplace['revisions'] as StoredRevision[])[1]?.revision[
+      'sourceReferences'
+    ] as Array<Record<string, unknown>>;
+    expect(sourceOnlyRefs).toEqual([
+      {
+        provider: 'wiki',
+        accountOrTenant: 'wiki.example.test',
+        resourceId: sourceResourceId('https://wiki.example.test/dark-theme'),
+        uri: 'https://wiki.example.test/dark-theme',
+        title: 'Theme guidance',
+        version: 'rev-2',
+      },
+      {
+        provider: 'lore-mcp',
+        accountOrTenant: 'test-ai-client',
+        resourceId: 'source-only-replace',
+      },
+    ]);
+
+    await ok(client, 'correct_memory', {
+      record_id: replacementId,
+      action: 'refine',
+      expected_revision: 2,
+      reason: 'Clear declared references',
+      as_user: true,
+      replacement: { sources: [] },
+      idempotency_key: 'source-only-clear',
+    });
+    const afterClear = await ok(client, 'get_memory', { record_id: replacementId });
+    expect((afterClear['revisions'] as StoredRevision[])[2]?.revision['sourceReferences']).toEqual([
+      {
+        provider: 'lore-mcp',
+        accountOrTenant: 'test-ai-client',
+        resourceId: 'source-only-clear',
+      },
+    ]);
+    expect((afterClear['revisions'] as StoredRevision[])[2]?.statement).toBe(
+      'The editor guide recommends a dark theme after review',
+    );
   }, 60_000);
 
   it('returns user_required for protected changes under a policy other than automatic', async () => {

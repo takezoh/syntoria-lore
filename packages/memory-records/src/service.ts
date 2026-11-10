@@ -75,6 +75,8 @@ export interface MemoryContentInput {
   readonly validFrom?: string | null;
   readonly validUntil?: string | null;
   readonly compartmentIds?: readonly string[];
+  /** Source references for this revision; omitted correction input preserves existing references. */
+  readonly sourceReferences?: readonly SourceReference[];
 }
 
 export interface RememberInput extends MemoryContentInput {
@@ -110,6 +112,7 @@ export interface RecallInput {
   readonly mode: 'precise' | 'contextual' | 'historical';
   readonly knownAt?: string;
   readonly validAt?: string;
+  readonly includeProposals?: boolean;
   readonly limit?: number;
 }
 
@@ -300,6 +303,7 @@ export class MemoryService {
           operation: 'remember',
           kind: input.kind,
           content,
+          sourceReferences: input.sourceReferences ?? [],
           asUser: input.asUser,
           reason,
         }),
@@ -335,7 +339,7 @@ export class MemoryService {
           requestingConnectionId: access.actor.connectionId,
           gateClientId: access.actor.gateClientId,
           recordedAt,
-          sourceReferences: [this.source(access, key)],
+          sourceReferences: this.revisionSources(access, key, input.sourceReferences),
         },
       };
       const receipt = await this.commit(access, key, [{ kind: 'create', record }], authority);
@@ -428,10 +432,10 @@ export class MemoryService {
             requestingConnectionId: access.actor.connectionId,
             gateClientId: access.actor.gateClientId,
             recordedAt,
-            sourceReferences: this.withSource(
-              base.revision.sourceReferences,
-              this.source(access, key),
-            ),
+            sourceReferences:
+              input.changes?.sourceReferences === undefined
+                ? this.withSource(base.revision.sourceReferences, this.source(access, key))
+                : this.revisionSources(access, key, input.changes.sourceReferences),
           },
         };
         changes = [{ kind: 'refine', record, expectedRevision: base.revision.revision }];
@@ -476,7 +480,10 @@ export class MemoryService {
             requestingConnectionId: access.actor.connectionId,
             gateClientId: access.actor.gateClientId,
             recordedAt,
-            sourceReferences: [this.source(access, key)],
+            sourceReferences:
+              input.changes?.sourceReferences === undefined
+                ? this.withSource(base.revision.sourceReferences, this.source(access, key))
+                : this.revisionSources(access, key, input.changes.sourceReferences),
           },
         };
         this.assertValid(replacement);
@@ -574,6 +581,7 @@ export class MemoryService {
           text: input.query,
           validAt,
           knownAt,
+          includeProposals: input.includeProposals ?? true,
           byteBudget: mode.byteBudget,
           limit: input.limit ?? mode.limit,
         },
@@ -584,7 +592,7 @@ export class MemoryService {
         valid_at: validAt,
         known_at: knownAt,
         items: pack.items.map((item) => ({
-          authority: authorityOf(item.record),
+          authority: item.authority,
           freshness: item.freshness,
           score: item.score,
           record: item.record,
@@ -785,6 +793,14 @@ export class MemoryService {
       source.accountOrTenant === added.accountOrTenant &&
       source.resourceId === added.resourceId;
     return existing.some(same) ? [...existing] : [...existing, added];
+  }
+
+  private revisionSources(
+    access: ConnectionAccess,
+    key: string,
+    supplied: readonly SourceReference[] | undefined,
+  ): SourceReference[] {
+    return this.withSource(supplied ?? [], this.source(access, key));
   }
 
   private content(

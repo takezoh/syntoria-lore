@@ -60,6 +60,7 @@ export interface SourceReference {
   accountOrTenant: string;
   resourceId: string;
   uri?: string;
+  title?: string;
   locator?: string;
   version?: string;
   speaker?: string;
@@ -293,6 +294,7 @@ const sourceReferenceKeys = [
   'accountOrTenant',
   'resourceId',
   'uri',
+  'title',
   'locator',
   'version',
   'speaker',
@@ -309,6 +311,8 @@ function validSourceReference(value: unknown): value is SourceReference {
     isNonEmptyString(value['accountOrTenant']) &&
     isNonEmptyString(value['resourceId']) &&
     (value['uri'] === undefined || isNonEmptyString(value['uri'])) &&
+    (value['title'] === undefined ||
+      (isNonEmptyString(value['title']) && value['title'].length <= 200)) &&
     (value['locator'] === undefined || isNonEmptyString(value['locator'])) &&
     (value['version'] === undefined || isNonEmptyString(value['version'])) &&
     (value['speaker'] === undefined || isNonEmptyString(value['speaker'])) &&
@@ -614,26 +618,29 @@ export function selectHistoricalView(
   revisions: readonly MemoryRecord[],
   knownAt: string,
   validAt: string,
+  options: { readonly includeProposals?: boolean } = {},
 ): MemoryRecord | null {
   if (!isIsoDate(knownAt) || !isIsoDate(validAt))
     throw new TypeError('History times must be ISO dates');
   const knowledgeCut = Date.parse(knownAt);
   const applicabilityCut = Date.parse(validAt);
-  return selectAt(revisions, knowledgeCut, applicabilityCut);
+  return selectAt(revisions, knowledgeCut, applicabilityCut, options);
 }
 
 export function selectCurrentView(
   revisions: readonly MemoryRecord[],
   validAt: string,
+  options: { readonly includeProposals?: boolean } = {},
 ): MemoryRecord | null {
   if (!isIsoDate(validAt)) throw new TypeError('validAt must be an ISO date');
-  return selectAt(revisions, Number.POSITIVE_INFINITY, Date.parse(validAt));
+  return selectAt(revisions, Number.POSITIVE_INFINITY, Date.parse(validAt), options);
 }
 
 function selectAt(
   revisions: readonly MemoryRecord[],
   knowledgeCut: number,
   applicabilityCut: number,
+  options: { readonly includeProposals?: boolean },
 ): MemoryRecord | null {
   for (const record of revisions) assertMemoryRecord(record);
   const first = revisions[0];
@@ -674,7 +681,13 @@ function selectAt(
   if (
     latest === null ||
     latest.suppressed ||
-    latest.lifecycle === 'candidate' ||
+    (latest.lifecycle === 'candidate' && options.includeProposals !== true) ||
+    (options.includeProposals === false &&
+      deriveAuthority({
+        writer: latest.revision.writer,
+        protectedChange: latest.revision.approval.status === 'approved',
+        approval: latest.revision.approval,
+      }) === 'proposal') ||
     latest.lifecycle === 'retracted'
   ) {
     return null;
