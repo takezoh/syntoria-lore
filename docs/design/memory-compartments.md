@@ -1,5 +1,7 @@
 # Memory compartments design
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](memory-records.md) for what carries over.
+
 This document turns [ADR 0006](../adr/0006-enforce-disclosure-with-compartments-and-connection-allowances.md) into contracts for Lore. It is for the people who implement and review the change. It was written directly on 2026-10-30 because the dev-skills design runtime could not reach its cross-host transport. No formal design gate or independent review has run. The owner accepted the ADR and the [recommended decisions](#decisions) on 2026-10-30; implementation is tracked in [Implementation units](#implementation-units).
 
 ## Outcome

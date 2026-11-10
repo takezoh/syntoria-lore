@@ -1,5 +1,7 @@
 # MCP and HTTP API contract
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 ## Service boundary
 
 REST and Remote MCP expose the same application services. Gate credentials establish the principal through online issuer and exact-resource checks with a required client ID followed by an explicit local Gate identity binding. Business arguments and identity headers cannot select a user or widen a scope. MCP tools are thin adapters over the REST services and never reimplement core rules. Callers decide when to remember, recall or catch up and how to interpret results; Lore attributes, validates, versions and governs. See [memory system](memory-system.md) for the capture-to-recall flow, [infrastructure](infrastructure.md) for identity and transport, and the [data model](data-model.md) for persistence semantics.
@@ -15,7 +17,7 @@ Each opaque Gate bearer token is valid for exactly one configured resource: the 
 
 ## Tool and schema discovery
 
-Use MCP `initialize` followed by `tools/list` at `/mcp`; each tool advertises its `inputSchema`. Lore lists operations allowed by the authenticated principal's current `read` and `write` capabilities. The REST contract is served at `/openapi.json` and exported to [openapi.json](../api/openapi.json) with `npm run openapi:export`; `npm run openapi:check` fails when they diverge. Input schemas reject unknown keys. The running deployment defines the available tools; this checkout may describe a different version.
+Use MCP `initialize` followed by `tools/list` at `/mcp`; each tool advertises its `inputSchema`. Lore lists operations allowed by the authenticated principal's current `read` and `write` capabilities. The REST contract is served at `/openapi.json` and exported to openapi.json with `npm run openapi:export`; `npm run openapi:check` fails when they diverge. Input schemas reject unknown keys. The running deployment defines the available tools; this checkout may describe a different version.
 
 | Required operation capability | Tools available at `/mcp` |
 | --- | --- |

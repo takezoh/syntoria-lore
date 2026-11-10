@@ -1,6 +1,8 @@
 # Data model and consistency
 
-PostgreSQL is the durable store. This document defines the logical model and persistence contract. The [memory-system reference](memory-system.md) explains the flow from observation through recall; migration SQL in [packages/db/migrations](../../packages/db/migrations) is authoritative for exact columns, constraints, grants and policies, and [packages/contracts](../../packages/contracts/src/index.ts) defines request shapes.
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
+PostgreSQL is the durable store. This document defines the logical model and persistence contract. The [memory-system reference](memory-system.md) explains the flow from observation through recall; migration SQL in packages/db/migrations is authoritative for exact columns, constraints, grants and policies, and packages/contracts defines request shapes.
 
 ## Memory model
 

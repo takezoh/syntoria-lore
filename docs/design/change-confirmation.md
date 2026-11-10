@@ -1,5 +1,7 @@
 # Change confirmation design
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](memory-records.md) for what carries over.
+
 This document turns [ADR 0003](../adr/0003-attribute-ai-clients-and-confirm-user-decisions.md) into contracts for Gate and Lore. It is for the people who implement and review both services. It was written directly on 2026-10-28, because the dev-skills design runtime was unavailable (`production-design-source-unavailable`). Units U1 to U5 were implemented on 2026-10-28 and 2026-10-29 and released to production on 2026-10-29, when the switch was also set (see [Implementation units](#implementation-units)). Nothing is accepted, and no formal design gate or independent review has run. [ADR 0004](../adr/0004-approve-protected-changes-by-policy.md) (2026-10-29) made the approval a per-binding policy: this flow applies under `gate`, while `auto`, the current default, applies a protected change at once and records that the policy approved it; see [Approval policy](#approval-policy).
 
 ## Outcome

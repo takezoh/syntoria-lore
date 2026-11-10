@@ -1,5 +1,7 @@
 # Migration review record
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 Copy this file into the migration change or review record and complete each applicable item.
 
 - Migration file / version:

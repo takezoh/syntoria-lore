@@ -51,6 +51,6 @@ This ADR records the decision; it is not evidence that the Gate registration or 
 
 - Owner direction: replace split MCP read/write configuration with one `/mcp` endpoint and per-operation permissions.
 - [MCP and HTTP API contract](../technical/mcp-api.md)
-- [Gate capability derivation](../../packages/auth/src/index.ts)
+- Gate capability derivation
 - [Identity and authority decision](0003-attribute-ai-clients-and-confirm-user-decisions.md)
 - [Protected-change approval policy](0004-approve-protected-changes-by-policy.md)

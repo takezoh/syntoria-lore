@@ -1,5 +1,7 @@
 # Connect an AI client to Lore
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 Lore does not have a sign-in page, browser session or memory-browsing app. Gate handles sign-in, approval, sessions and logout. An MCP client discovers Gate's OAuth metadata, registers its own callback URL dynamically, signs you in and then sends the resulting Gate bearer token to Lore. No fixed public client ID is required.
 
 ## Before you connect

@@ -1,5 +1,7 @@
 # Local stack operations
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 This runbook describes the loopback-only Compose stack used for development and local acceptance. Setup and the acceptance command are in [development](../development.md); cloud procedures are in [deployment](deployment.md). Nothing here is a GCP, Neon or production recovery procedure.
 
 ## Start, inspect, stop, reset

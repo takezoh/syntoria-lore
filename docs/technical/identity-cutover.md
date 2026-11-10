@@ -1,5 +1,7 @@
 # Gate identity cutover
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 The Gate identity cutover is deployed and preserves existing Lore user IDs, principals, grants, memories and history. The follow-up API-only correction is also deployed: Lore has no browser sign-in behavior and Gate remains the online identity authority. The obsolete Lore browser binding was deactivated through the reviewed exact-baseline procedure; existing users, principals, grants and the MCP binding were retained. Neither step creates a user from an OAuth profile or expands grants.
 
 Lore uses one MCP resource at `/mcp`, with tool exposure based on the mapped principal's current capabilities; it has been deployed since 2026-10-29, as recorded in [deployment](deployment.md).

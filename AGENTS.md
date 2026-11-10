@@ -8,11 +8,11 @@ Keep user pages focused on what someone can do and expect, implementation behavi
 
 REST and MCP are adapters over the same domain packages; do not implement memory policy in an adapter. Authority comes from the authenticated principal and the controlled confirmation path, never from request fields or model output.
 
-Migrations are forward-only: never edit an applied migration, and review a new one with the [migration review template](docs/templates/migration-review.md). After changing the REST contract, regenerate `docs/api/openapi.json` with `npm run openapi:export`.
+The PostgreSQL implementation, its migrations and its OpenAPI document were removed on 2026-11-09; pages marked historical describe it and are not current contracts. Tests and local tools use the Firestore emulator with synthetic `demo-` project IDs, never a real project.
 
-For code changes, run `npm run verify:local`; it needs a PostgreSQL integration database (`TEST_ADMIN_URL` and `TEST_APP_URL`) and fails without one. Documentation-only changes require language and local-link checks, `npm run secret:scan` and `git diff --check`. Do not claim hosted acceptance, extraction quality or recall quality from local deterministic providers or document validation.
+For code changes, run `npm run verify:local`; it needs a loopback Firestore emulator (`FIRESTORE_EMULATOR_HOST`) and fails without one. Documentation-only changes require language and local-link checks, `npm run secret:scan` and `git diff --check`. Do not claim hosted acceptance, extraction quality or recall quality from local deterministic providers or document validation.
 
-Do not delete identity bindings or rewrite identity, memory or deletion-ledger data as an operational shortcut. Change admissions and approval policies only through the reviewed identity-mapping tool, and keep production identifiers out of the repository as described in [Deployment identifiers](#deployment-identifiers).
+Do not delete identity bindings or rewrite identity, memory or deletion-ledger data as an operational shortcut. Change admissions only with the operator tool `scripts/admit-subject.mjs` and approval policies only through a reviewed path, and keep production identifiers out of the repository as described in [Deployment identifiers](#deployment-identifiers).
 
 ## Deployment identifiers
 

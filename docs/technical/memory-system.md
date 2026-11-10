@@ -1,5 +1,7 @@
 # Memory system: from observation to recall
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 This document follows one decision through Lore's actual write, capture and retrieval paths. It explains what the service stores, how a proposal becomes a revision, and what a recall result can and cannot say. The public shapes are in the [data model](data-model.md) and [MCP/API contract](mcp-api.md); relevant implementation is linked at the end.
 
 Imagine an AI suggests a database, then you decide to wait until the finished-product requirements are settled. Later, another AI asks what the project decided. Lore must preserve two different claims, make the decision's evidence inspectable, keep its attribution separate from truth, and return the useful version without suggesting that a missing result proves nothing was ever said.
@@ -73,12 +75,12 @@ Source-rights revocation is also separate from Forget. Current rights checks blo
 
 ## Source links
 
-- [Core ChangeSet, authority, revisions and historical reads](../../packages/domain/src/core-service.ts)
-- [Observation capture and consent](../../packages/connectors/src/index.ts)
-- [Capture validation, reconciliation, review and retries](../../packages/jobs/src/index.ts)
-- [Curator proposal and provider contracts](../../packages/curator/src/index.ts)
-- [Bounded candidate search, rank fusion, Context Pack and index maintenance](../../packages/recall/src/index.ts)
-- [Forget, feedback, purge and restore checks](../../packages/governance/src/forget-service.ts)
-- [Deletion-ledger representation](../../packages/governance/src/deletion-ledger.ts)
-- [Portable import trust boundary](../../packages/governance/src/portability-service.ts)
-- [Persistence, source rights and deletion constraints](../../packages/db/migrations/)
+- Core ChangeSet, authority, revisions and historical reads
+- Observation capture and consent
+- Capture validation, reconciliation, review and retries
+- Curator proposal and provider contracts
+- Bounded candidate search, rank fusion, Context Pack and index maintenance
+- Forget, feedback, purge and restore checks
+- Deletion-ledger representation
+- Portable import trust boundary
+- Persistence, source rights and deletion constraints

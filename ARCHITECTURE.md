@@ -1,67 +1,62 @@
 # Syntoria Lore architecture
 
-## Developer model
+## Current state
 
-Lore turns authorized input into versioned, evidence-linked memories and returns a bounded selection to an authorized client. REST and Remote MCP are adapters over the same services. PostgreSQL is the source of truth; embeddings, lexical search support and relations help find candidates but do not replace committed records.
+On 2026-11-09 the owner deleted the PostgreSQL deployment, and the PostgreSQL implementation (the REST and MCP API, the worker and their packages) was removed from the repository. Lore is being rebuilt on Firestore Memory Records, as [ADR 0007](docs/adr/0007-store-memories-as-firestore-memory-records.md) and [ADR 0008](docs/adr/0008-keep-a-generative-baseline-and-enable-decision-models-per-point.md) decide and the [Memory Records design](docs/design/memory-records.md) specifies.
+
+The repository holds `packages/memory-records`, verified against the Firestore emulator ([local record](docs/eval/memory-records-s2-local-20261109.md)), and `apps/api`, the first Firestore service: a Node.js HTTP server with Remote MCP over that package. The service was tested against the emulator with a fake Gate and deterministic embeddings, and deployed to Cloud Run on 2026-11-09; in production only readiness and the authentication boundary have been checked ([release record](docs/eval/memory-records-firestore-release-20261109.md)). The removed implementation remains in Git history; pages that describe it are marked historical.
+
+## Target model
+
+Lore turns authorized input into versioned, source-referenced Memory Records and returns a bounded selection to an authorized client. REST and Remote MCP will be adapters over the same domain package. Firestore is the source of truth; term and embedding entries derived from each revision help find candidates but never replace committed records.
 
 ```mermaid
 flowchart LR
-  Client[Authorized AI client] --> API[REST / MCP adapters]
-  API --> Auth[Gate token verification and Lore grants]
-  Auth --> Core[Core, capture, recall and governance]
-  Core --> DB[(PostgreSQL source of truth)]
-  Core --> Index[Lexical and embedding indexes]
-  Input[Explicit remember or consented observations] --> Core
-  Core --> Feed[Per-scope change feed]
-  Worker[Private worker] --> Core
-  Worker --> Models[Curator and embedding provider]
-  Governance[Deletion ledger and encrypted exports] <--> Core
+  Client[Authorized AI client] --> API[apps/api: Remote MCP]
+  API --> Gate[Gate token introspection]
+  API --> Records[memory-records: access, service, repository, recall]
+  Worker[Private worker, not built] -.-> Records
+  Records --> FS[(Firestore lore-memory-records)]
+  Records --> Ledger[(Firestore lore-deletion-ledger)]
+  Records --> Ports[Embedding port: Vertex AI]
 ```
-
-The [memory-system reference](docs/technical/memory-system.md) follows explicit writes and source capture through curation, indexing, retrieval, correction and Forget. The [data model](docs/technical/data-model.md) defines persistence and transaction rules; the [MCP/API contract](docs/technical/mcp-api.md) defines client operations.
 
 ## Component ownership
 
 | Area | Responsibility |
 | --- | --- |
-| `apps/api/` | REST routing, MCP tool adapters, OpenAPI and API health |
-| `apps/worker/` | Task-delivered capture and governance work, indexing repair and scheduled recovery |
-| `packages/contracts/` | Request schemas and public error vocabulary |
-| `packages/auth/` | Gate bearer verification, identity binding and grant checks |
-| `packages/domain/` | Authorized transactions, ChangeSet validation and commit, revisions and historical reads |
-| `packages/connectors/` | Consent, source rights, observation acceptance and source lineage |
-| `packages/curator/` | Extraction and embedding provider interfaces, structured proposal validation |
-| `packages/jobs/` | Capture jobs, evidence-anchor checks, review routing and outbox work |
-| `packages/recall/` | Candidate search, ranking, relation expansion and Context Pack assembly |
-| `packages/governance/` | Forget, deletion ledger, retention and encrypted portability |
-| `packages/db/` | PostgreSQL pools, migrations, roles and database setup |
+| `packages/memory-records/src/index.ts` | Memory Record value model, validation, and lifecycle, approval and time selectors |
+| `packages/memory-records/src/firestore-repository.ts` | The only module allowed to use the Firestore client: transactional commits, idempotency, per-scope sequence and signed cursors, history reads, write authorization against the stored record, Forget, purge, restore checkpoint and source rights |
+| `packages/memory-records/src/capture.ts` | Baseline A capture through extractor and source-fetcher ports, durable capture jobs and held results |
+| `packages/memory-records/src/derived-recall.ts` | Revision-fenced term and embedding entries, candidate recall with an overlay for unindexed changes, and a byte-bounded Context Pack |
+| `packages/memory-records/src/access.ts` | Reads admissions (`memoryAdmissions`, keyed by a digest of Gate issuer and subject), creates a missing connection, person or worker authorization with an empty allowance and never widens one, and is the only code that mints a verified actor capability. Applies the admission's approval policy: `automatic` records a `policy` approval for the exact request digest; any other policy returns `user_required` |
+| `packages/memory-records/src/service.ts` | The operations adapters call: remember, refine, supersede, retract, Forget, recall, history and change feed. Builds records from trusted metadata only, pins each idempotent request's recorded time so retries replay, reconciles a scope whose restore checkpoint lags the ledger before use, and after each write purges recorded Forgets and indexes a bounded batch without failing the write |
+| `packages/memory-records/src/firestore-deletion-ledger.ts` | The deletion ledger on its own Firestore database: append-only entries and a head that moves in the same transaction |
+| `packages/memory-records/src/firestore-client.ts`, `runtime.ts` | Firestore client construction (Application Default Credentials, or a loopback emulator) and wiring of the two databases |
+| `apps/api` | Node.js 24 HTTP service: `/healthz`, `/readyz` (both databases answer), protected-resource metadata, and stateless Streamable HTTP MCP at `POST /mcp` with Gate introspection for exactly `MCP_RESOURCE_URL`, admission (403 without one), body and rate limits, and the Vertex AI embedding provider. Configuration is environment-only and fails fast |
+| `scripts/admit-subject.mjs` | Operator tool that creates or reactivates one admission with the `automatic` policy; it refuses to move an existing admission to another tenant or scope |
 
-REST and MCP call these same packages; adapters do not implement separate memory policy. The worker is another entry point to the same domain and database contracts, not a second memory store.
+Each Gate connection is its own principal with its own authorization. The person's authority acting through a connection is a separate person principal per connection, because an authorization document binds one connection. AI writes are candidates that recall does not return; `as_user` asks for the person's authority, which only the approval policy grants.
 
-## Main data flow
-
-An explicit remember uses the synchronous core path. A source capture is different: Lore accepts observations only after that source has been enabled with consent, then stores the capture job and work notification with the source data. A worker claims the job, calls the curator outside the commit transaction, validates the returned proposal and its exact evidence anchors, reconciles it with existing memories, and either commits an allowed fact or creates a user review. Lore accepts observations from clients; it does not itself synchronize arbitrary AI histories or fetch documents from other services.
-
-A committed memory version, its evidence links, relations, change-feed event, outbox record and idempotency response are written atomically after authorization, source-rights and expected-revision checks. Recorded time is separate from valid time. The change feed has its own per-scope ordering so clients can catch up independently of search indexes.
-
-Recall first checks the actor and requested scopes, then selects eligible records under current source rights, Forget suppressions, lifecycle and time. Precise mode uses exact text and subject/alias matches. Contextual, historical and exploratory modes combine bounded exact, lexical and semantic candidate lists, then can expand relations from supported roots. Changes mode follows a separate change-oriented candidate path; `get_changes` supplies the ordered feed. Ranking and Context Pack limits are implementation bounds; they do not promise complete recall. See [retrieval behavior and limits](docs/technical/memory-system.md#retrieval-and-context-packs).
+Not built yet: the REST adapter, the private worker (indexing, purge and restore reconciliation run in the API process), person confirmation at Gate, a reviewed way to widen compartment allowances or revoke sources, real extractor and source providers, and tracked deployment configuration (the first release was deployed with operator scripts kept outside the repository).
 
 ## Correctness boundaries
 
-- **Provenance and authority are separate.** Evidence identifies the source, speaker and lineage. Authority comes from the authenticated principal's actor kind, the memory kind, the declared epistemic status and the controlled user-confirmation path. Requests and model output cannot assign authority, and stored authority does not prove an external claim. Because admission is keyed by Gate issuer and subject, every client of one Gate account shares its principal; a client acting as the user marks its own suggestions `proposed` to keep them as AI proposals.
-- **Time and knowledge are separate.** A revision records when it was learned; valid-time intervals record when it applies. Historical reads choose the latest revision known at the requested time before applying its valid interval.
-- **Changes are explicit.** ChangeSets compare expected revisions. A stale update fails instead of overwriting concurrent work. Supersede, retract and Forget have different semantics; contested is an epistemic flag, not a lifecycle state.
-- **Search is derived data.** Indexing can lag a committed revision. Recall reads committed records as well as the available indexes and reports index or provider insufficiency; an index result is never the authority for what was committed.
-- **Rights apply at read time.** Scope grants, source consent and source rights are checked for candidates and again before returning them. PostgreSQL row-level security enforces the tenant boundary inside transactions.
-- **Compartments bound disclosure per connection.** Every content row carries a label of compartments, joined from what it was derived from, and every Gate connection has an allowance. One helper sets the transaction's compartment context from that allowance, and restrictive RLS policies deny labeled rows outside it, so a query that forgets the label still returns nothing restricted. Widening an allowance or relaxing a label follows the binding's approval policy. See the [memory compartments design](docs/design/memory-compartments.md).
-- **Forget denies first, purges later.** Suppression and a content-free deletion event are committed before asynchronous purge. A restore cannot serve protected data until the independent deletion ledger and database checkpoint agree.
+These hold in the package today and are contracts for the service built on it:
 
-## Identity and runtime boundary
+- **Authority comes from the verified actor.** Writes take a verified actor capability and are authorized against the stored record, not the submitted one. Labels, attribution and authority come from trusted source metadata and the approval path; model output never sets them. A proposal is never a decision.
+- **Time and knowledge are separate.** Each revision records when it was known; valid time records when it applies. Historical reads select them independently.
+- **Changes are explicit.** Commits check expected revisions, so a stale update fails instead of overwriting. Supersede, retract and Forget stay distinct.
+- **Search is derived data.** Index entries are fenced to a revision, unindexed changes are overlaid, and every candidate is rechecked against the committed record before it is returned. Vector similarity is computed in memory over at most 1,000 entries per scope; this is not Firestore vector search.
+- **Rights apply at read time.** Compartment allowances and source rights are checked in the repository boundary. Firestore server clients bypass Security Rules, so a lint rule confines the Firestore client to the repository, client, deletion-ledger and access modules, and the access contract and its tests are the only protection; there is no database-level backstop like the former row-level security.
+- **Forget denies first, purges later.** A Forget reports use stopped only after the independent ledger append is durable. Reads stay closed after a restore until the restore checkpoint is reconciled; the service reconciles a lagging scope before its next operation and fails the operation when the ledger cannot be read.
 
-Gate owns sign-in, approval and sessions. Lore accepts bearer tokens for the exact REST resource or the single MCP resource at `/mcp` and has no browser login or session route. The API has a public HTTPS entry point but protected data operations require Gate verification, an existing Lore identity binding for the Gate issuer and immutable subject, and live grants. MCP clients register dynamically with Gate; the binding does not distinguish them, so clients under one subject share the principal's operation capabilities, while each connection's compartment allowance limits which memories it receives. The MCP adapter exposes read and write tools according to those capabilities, while every operation still checks the requested scope and domain authorization. The worker remains private and accepts only its task and scheduler identities. Runtime topology, IAM and operator procedures belong in [infrastructure](docs/technical/infrastructure.md), [security](docs/technical/security.md) and [deployment](docs/technical/deployment.md).
+## Runtime boundary
 
-Syntoria Weave is a separate service for current shared state. Lore has no shared tables or required API dependency on Weave; a caller that needs both composes their results.
+Provisioned on 2026-11-09: Memory Records live in a dedicated Firestore Native database, `lore-memory-records`, and the deletion ledger in a second one, `lore-deletion-ledger`, in the shared Syntoria GCP project in `asia-southeast1`; an IAM condition limits the API service account to those two databases. The API runs on Cloud Run as `lore-api`, a private worker will follow, following the Cloud Run parts of [ADR 0001](docs/adr/0001-gcp-cloud-run-neon.md). Gate owns sign-in, approvals and sessions. Production identifiers stay out of the repository.
+
+Syntoria Weave is a separate service for current shared state. Lore has no shared storage or required API dependency on Weave.
 
 ## Verification boundary
 
-Unit tests, real-PostgreSQL contract tests, local acceptance, and hosted checks answer different questions. Passing a local deterministic provider does not measure extraction quality or semantic recall quality. The [development guide](docs/development.md) lists the verification commands, and dated results live in [evaluation records](docs/eval/).
+Unit tests check the value model, the service configuration and Gate token verification; the emulator suite checks the repository, capture and recall, and drives the API through a real MCP client against a fake Gate. The emulator does not show managed IAM, transaction contention, latency, cost, managed restore or search quality, and deterministic extractor and embedding doubles do not measure extraction or recall quality. The [development guide](docs/development.md) lists the commands, and dated results live in [evaluation records](docs/eval/).

@@ -1,0 +1,61 @@
+import type { RequestListener } from 'node:http';
+import {
+  createMemoryRecordsRuntime,
+  MemoryService,
+  type EmbeddingProvider,
+  type MemoryRecordsRuntime,
+} from '@memory/memory-records';
+import type { ApiConfig } from './config.js';
+import { createEmbeddingProvider } from './embeddings.js';
+import { createGateVerifier } from './gate.js';
+import { createRequestListener } from './server.js';
+
+export interface ApiApp {
+  readonly listener: RequestListener;
+  readonly runtime: MemoryRecordsRuntime;
+  close(): Promise<void>;
+}
+
+export interface ApiAppOverrides {
+  readonly embeddings?: EmbeddingProvider;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly log?: (event: Readonly<Record<string, unknown>>) => void;
+}
+
+/** Wires the Firestore runtime, the memory service, Gate verification and the HTTP listener. */
+export function createApiApp(config: ApiConfig, overrides: ApiAppOverrides = {}): ApiApp {
+  const log = overrides.log ?? ((event) => console.log(JSON.stringify(event)));
+  const runtime = createMemoryRecordsRuntime({
+    projectId: config.firestoreProjectId,
+    databaseId: config.firestoreDatabaseId,
+    ledgerDatabaseId: config.ledgerDatabaseId,
+    cursorSecret: config.cursorSecret,
+  });
+  const service = new MemoryService({
+    repository: runtime.repository,
+    access: runtime.access,
+    embeddings: overrides.embeddings ?? createEmbeddingProvider(config.embedding),
+    log,
+  });
+  const verifier = createGateVerifier(
+    {
+      issuer: config.gateIssuer,
+      audience: config.mcpResourceUrl,
+      clientId: config.gateClientId,
+      clientSecret: config.gateClientSecret,
+      ...(config.allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
+    },
+    overrides.fetch === undefined ? {} : { fetch: overrides.fetch },
+  );
+  const listener = createRequestListener({
+    mcpResourceUrl: config.mcpResourceUrl,
+    gateIssuer: config.gateIssuer,
+    mcpAllowedHosts: config.mcpAllowedHosts,
+    verifier,
+    resolveAccess: (principal) => runtime.access.resolve(principal),
+    service,
+    ready: () => runtime.checkReady(),
+    log,
+  });
+  return { listener, runtime, close: () => runtime.close() };
+}

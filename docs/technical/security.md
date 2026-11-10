@@ -1,5 +1,7 @@
 # Security boundaries
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 This document records Lore's assets, actors and trust boundaries, the controls that enforce them and the limits of current evidence. It is a design and verification reference, not an external audit.
 
 ## Assets and actors

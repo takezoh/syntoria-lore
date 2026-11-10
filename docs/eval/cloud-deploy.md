@@ -1,6 +1,6 @@
 # Cloud deployment evaluation
 
-This record separates observed GCP/Neon checks from the API/worker release gates that still require an actual deployment. The configuration source of truth is [deployment.json](../../infra/cloud/deployment.json); the sequence is in [deployment](../technical/deployment.md) and the commands are in the [infrastructure runbook](../technical/infrastructure-runbook.md).
+This record separates observed GCP/Neon checks from the API/worker release gates that still require an actual deployment. The configuration source of truth is deployment.json; the sequence is in [deployment](../technical/deployment.md) and the commands are in the [infrastructure runbook](../technical/infrastructure-runbook.md).
 
 For the latest local revalidation, source-package follow-up, and current hosted task statuses, see the [current cloud verification register](cloud-verification.md). This dated record preserves the deployment observations as they were made; the current register governs the latest gate status.
 

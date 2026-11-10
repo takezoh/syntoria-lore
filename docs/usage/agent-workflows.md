@@ -1,5 +1,7 @@
 # Build an agent or workflow with Lore
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 Lore gives an authorized AI access to the same versioned, evidence-linked memories through REST and Remote MCP. The client chooses when to remember or recall, interprets the result and decides what to do. Lore checks authority and source rights, preserves revisions and provides the evidence needed to assess a returned memory.
 
 ## Connect with the right authority
@@ -20,7 +22,7 @@ Call `get_access` (REST `GET /v1/access`) first: it lists the scopes and compart
 
 ## Discover the available tools
 
-For MCP, send `initialize` and then `tools/list` to the configured endpoint. Use each advertised tool's `inputSchema`; the deployment can expose a different version from this checkout. REST request and response shapes are in the served `/openapi.json` and the checked-in [OpenAPI document](../api/openapi.json).
+For MCP, send `initialize` and then `tools/list` to the configured endpoint. Use each advertised tool's `inputSchema`; the deployment can expose a different version from this checkout. REST request and response shapes are in the served `/openapi.json` and the checked-in OpenAPI document.
 
 | Need | Start with |
 | --- | --- |

@@ -12,6 +12,8 @@ summary: Run API and private worker on Cloud Run with Cloud Tasks and Cloud Sche
 
 # Run the memory service on GCP Cloud Run and Neon PostgreSQL
 
+[ADR 0007](0007-store-memories-as-firestore-memory-records.md) replaced the Neon PostgreSQL part of this decision with Firestore, and the PostgreSQL implementation and its Neon databases were removed on 2026-11-09. The Cloud Run parts still apply.
+
 ## Decision
 
 The memory service (then named Thymesis, now Syntoria Lore) runs on GCP Cloud Run with Neon PostgreSQL. The [product contract](../design/requirements.md) is unchanged by this decision.

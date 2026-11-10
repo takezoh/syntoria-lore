@@ -8,17 +8,6 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [
-    { "path": "../../packages/runtime" },
-    { "path": "../../packages/contracts" },
-    { "path": "../../packages/auth" },
-    { "path": "../../packages/db" },
-    { "path": "../../packages/domain" },
-    { "path": "../../packages/governance" },
-    { "path": "../../packages/connectors" },
-    { "path": "../../packages/curator" },
-    { "path": "../../packages/recall" },
-    { "path": "../../packages/jobs" }
-  ],
+  "references": [{ "path": "../../packages/memory-records" }],
   "include": ["src/**/*.ts"]
 }

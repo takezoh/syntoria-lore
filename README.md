@@ -8,6 +8,8 @@ Syntoria Lore is Syntoria's Memory Service: long-term memory with evidence for t
 
 Tell one AI, “We'll choose the database only after the product requirements are settled.” Next month, ask a different AI what the project decided. It can answer with your decision, when you made it and the conversation it came from—and keep it apart from the database it had suggested before.
 
+> **Status on 2026-11-09:** Lore was rebuilt on Firestore Memory Records and its first version is deployed with Remote MCP only. Remembering and recalling through a real AI client has not been verified yet, and some features described here are not available in this version; the [architecture](ARCHITECTURE.md) describes what exists today.
+
 ## Explain it once
 
 Ask any AI connected to your account to remember a decision, a preference or a lesson. In a later conversation, or in another AI connected to the same account, ask about it and it can be recalled instead of explained again. Each AI asks Lore when it needs the background, so ask yours to check its memory when the context matters.

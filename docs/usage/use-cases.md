@@ -1,5 +1,7 @@
 # Use cases: ask your AI
 
+> **Historical.** This page describes the PostgreSQL implementation that was removed on 2026-11-09, and it is not a current contract. Lore is being rebuilt on Firestore; see the [Memory Records design](../design/memory-records.md) for what carries over.
+
 Tell your AI what to keep, what to look up and what to fix. These prompts are starting points for an AI client that is already connected to Syntoria Lore; adapt them to your own words. Your AI chooses the tools and interprets the results, and Lore keeps each memory with its evidence and history. When the answer matters, ask your AI to show the source.
 
 ## Remember a decision
