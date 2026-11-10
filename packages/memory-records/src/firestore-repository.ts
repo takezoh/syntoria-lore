@@ -14,6 +14,7 @@ import {
   selectHistoricalView,
   type ApprovalProvenance,
   type MemoryRecord,
+  type SourceReference,
 } from './index.js';
 
 const MAX_CHANGES = 40;
@@ -23,6 +24,11 @@ const MAX_DECISION_CHECKS = 10;
 const MAX_RECORD_BYTES = 900_000;
 const MAX_CHANGE_SET_BYTES = 2 * 1024 * 1024;
 const MAX_CURSOR_LENGTH = 4096;
+const SOURCE_METADATA_MIGRATION_RECORDS = 51;
+const SOURCE_METADATA_MIGRATION_ADDITIONS = 55;
+const SOURCE_METADATA_MIGRATION_DISTINCT_URIS = 43;
+const MAX_SOURCE_METADATA_MIGRATION_WRITES = 500;
+const MAX_SOURCE_METADATA_MIGRATION_BYTES = 8 * 1024 * 1024;
 
 declare const verifiedActorCapabilityBrand: unique symbol;
 
@@ -153,6 +159,61 @@ export interface SearchIndexEntry {
   };
 }
 
+export interface SourceMetadataMigrationEvidence {
+  readonly revision: number;
+  readonly field: 'uri' | 'title' | 'version' | 'locator' | 'rights';
+  readonly startUtf16: number;
+  readonly endUtf16: number;
+  readonly valueSha256: string;
+}
+
+export interface SourceMetadataMigrationAddition {
+  readonly source: SourceReference;
+  readonly evidence: readonly SourceMetadataMigrationEvidence[];
+}
+
+export interface SourceMetadataMigrationEntry {
+  readonly recordId: string;
+  readonly expectedRevision: number;
+  readonly expectedCurrentSha256: string;
+  readonly expectedRevisionSha256: Readonly<Record<string, string>>;
+  readonly expectedIndexRevisionSha256: Readonly<Record<string, string>>;
+  readonly additions: readonly SourceMetadataMigrationAddition[];
+}
+
+export interface SourceMetadataMigrationManifest {
+  readonly schemaVersion: 'source-metadata-migration/v1';
+  readonly migrationId: string;
+  readonly target: {
+    readonly projectId: string;
+    readonly databaseId: string;
+    readonly deletionLedgerDatabaseId: string;
+  };
+  readonly tenantId: string;
+  readonly scopeId: string;
+  readonly recordedAt: string;
+  readonly expectedSequence: number;
+  readonly expectedIndexedThrough: number;
+  readonly entries: readonly SourceMetadataMigrationEntry[];
+  readonly sha256: string;
+}
+
+export interface SourceMetadataMigrationResult {
+  readonly migrationId: string;
+  readonly manifestSha256: string;
+  readonly sequence: number;
+  readonly indexedThrough: number;
+  readonly recordIds: readonly string[];
+  readonly operatorEmail: string;
+  readonly replayed: boolean;
+}
+
+// These entry points are intentionally omitted from the package barrel. Only the private
+// operator-maintenance module imports the symbols after authenticating its Google IAM client.
+export const sourceMetadataMigrationDryRun = Symbol('sourceMetadataMigrationDryRun');
+export const sourceMetadataMigrationApply = Symbol('sourceMetadataMigrationApply');
+export const sourceMetadataMigrationVerify = Symbol('sourceMetadataMigrationVerify');
+
 export interface RecallCandidateQuery {
   readonly terms: readonly string[];
   readonly recordId?: string;
@@ -267,6 +328,180 @@ function digest(value: unknown): string {
   return createHash('sha256').update(stableJson(value)).digest('hex');
 }
 
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+export function sourceMetadataMigrationManifestSha256(
+  manifest: Omit<SourceMetadataMigrationManifest, 'sha256'>,
+): string {
+  return digest(manifest);
+}
+
+function validSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function sourceMetadataUri(value: string): URL | null {
+  try {
+    const uri = new URL(value);
+    if (
+      uri.protocol !== 'https:' ||
+      !['docs.google.com', 'docs.example.test'].includes(uri.hostname) ||
+      uri.search !== '' ||
+      uri.hash !== '' ||
+      !/^\/document\/d\/[A-Za-z0-9_-]+$/u.test(uri.pathname)
+    ) {
+      return null;
+    }
+    return uri;
+  } catch {
+    return null;
+  }
+}
+
+function validMigrationAddition(value: unknown): value is SourceMetadataMigrationAddition {
+  if (
+    !isObject(value) ||
+    !isSourceReference(value['source']) ||
+    !Array.isArray(value['evidence'])
+  ) {
+    return false;
+  }
+  const source = value['source'];
+  const uri = typeof source.uri === 'string' ? sourceMetadataUri(source.uri) : null;
+  if (
+    !uri ||
+    source.provider !== 'google-drive' ||
+    source.accountOrTenant !== uri.host ||
+    source.resourceId !== `uri_${sha256Text(source.uri!)}` ||
+    Object.keys(source).some(
+      (key) =>
+        ![
+          'provider',
+          'accountOrTenant',
+          'resourceId',
+          'uri',
+          'title',
+          'locator',
+          'version',
+          'rights',
+        ].includes(key),
+    ) ||
+    (source.rights !== undefined && stableJson(source.rights) !== stableJson(['confidential']))
+  ) {
+    return false;
+  }
+  const seenFields = new Set<string>();
+  return (
+    value['evidence'].every((item) => {
+      if (!isObject(item)) return false;
+      const field = item['field'];
+      const revision = item['revision'];
+      const start = item['startUtf16'];
+      const end = item['endUtf16'];
+      if (
+        !['uri', 'title', 'version', 'locator', 'rights'].includes(String(field)) ||
+        seenFields.has(String(field)) ||
+        !Number.isSafeInteger(revision) ||
+        Number(revision) < 1 ||
+        !Number.isSafeInteger(start) ||
+        Number(start) < 0 ||
+        !Number.isSafeInteger(end) ||
+        Number(end) <= Number(start) ||
+        !validSha256(item['valueSha256'])
+      ) {
+        return false;
+      }
+      seenFields.add(String(field));
+      return true;
+    }) &&
+    seenFields.has('uri') &&
+    (source.title === undefined) === !seenFields.has('title') &&
+    (source.version === undefined) === !seenFields.has('version') &&
+    (source.locator === undefined) === !seenFields.has('locator') &&
+    (source.rights === undefined) === !seenFields.has('rights')
+  );
+}
+
+function validSourceMetadataMigrationManifest(
+  value: unknown,
+): value is SourceMetadataMigrationManifest {
+  if (
+    !isObject(value) ||
+    value['schemaVersion'] !== 'source-metadata-migration/v1' ||
+    !nonempty(value['migrationId']) ||
+    !isObject(value['target']) ||
+    !/^[a-z][a-z0-9-]{4,29}$/u.test(String(value['target']['projectId'])) ||
+    !/^[a-z][a-z0-9-]{2,61}[a-z0-9]$/u.test(String(value['target']['databaseId'])) ||
+    !/^[a-z][a-z0-9-]{2,61}[a-z0-9]$/u.test(String(value['target']['deletionLedgerDatabaseId'])) ||
+    Object.keys(value['target']).length !== 3 ||
+    !nonempty(value['tenantId']) ||
+    !nonempty(value['scopeId']) ||
+    !isDomainIsoDate(value['recordedAt']) ||
+    !Number.isSafeInteger(value['expectedSequence']) ||
+    Number(value['expectedSequence']) < 0 ||
+    !Number.isSafeInteger(value['expectedIndexedThrough']) ||
+    Number(value['expectedIndexedThrough']) < 0 ||
+    value['expectedIndexedThrough'] !== value['expectedSequence'] ||
+    !Array.isArray(value['entries']) ||
+    value['entries'].length !== SOURCE_METADATA_MIGRATION_RECORDS ||
+    !validSha256(value['sha256'])
+  ) {
+    return false;
+  }
+  const entries = value['entries'];
+  const recordIds = new Set<string>();
+  const uris = new Set<string>();
+  let additions = 0;
+  for (const item of entries) {
+    if (!isObject(item)) return false;
+    const revision = item['expectedRevision'];
+    const revisionHashes = item['expectedRevisionSha256'];
+    const indexHashes = item['expectedIndexRevisionSha256'];
+    if (
+      !nonempty(item['recordId']) ||
+      recordIds.has(item['recordId']) ||
+      !Number.isSafeInteger(revision) ||
+      Number(revision) < 1 ||
+      !validSha256(item['expectedCurrentSha256']) ||
+      !isObject(revisionHashes) ||
+      !isObject(indexHashes) ||
+      !Array.isArray(item['additions']) ||
+      item['additions'].length < 1 ||
+      Object.keys(revisionHashes).length !== Number(revision) ||
+      !Object.keys(revisionHashes).every((key) => validSha256(revisionHashes[key])) ||
+      !Object.keys(indexHashes).every(
+        (key) =>
+          /^[1-9]\d*$/u.test(key) &&
+          Number(key) <= Number(revision) &&
+          validSha256(indexHashes[key]),
+      ) ||
+      !validSha256(indexHashes[String(revision)])
+    ) {
+      return false;
+    }
+    recordIds.add(item['recordId']);
+    const localSources = new Set<string>();
+    for (const addition of item['additions']) {
+      if (!validMigrationAddition(addition)) return false;
+      const sourceKey = sourceReferenceKey(addition.source);
+      if (localSources.has(sourceKey)) return false;
+      localSources.add(sourceKey);
+      uris.add(addition.source.uri!);
+      additions += 1;
+    }
+  }
+  if (
+    additions !== SOURCE_METADATA_MIGRATION_ADDITIONS ||
+    uris.size !== SOURCE_METADATA_MIGRATION_DISTINCT_URIS
+  ) {
+    return false;
+  }
+  const { sha256: suppliedHash, ...body } = value as unknown as SourceMetadataMigrationManifest;
+  return sourceMetadataMigrationManifestSha256(body) === suppliedHash;
+}
+
 export function memoryForgetDigest(scopeId: string, recordId: string, requestId: string): string {
   return digest(['forget', scopeId, recordId, requestId]);
 }
@@ -342,6 +577,46 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isDomainIsoDate(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/u.exec(value);
+  if (match === null || !Number.isFinite(Date.parse(value))) return false;
+  const yearText = match[1];
+  const monthText = match[2];
+  const dayText = match[3];
+  const hourText = match[4];
+  const minuteText = match[5];
+  const secondText = match[6];
+  const offset = match[7];
+  if (
+    yearText === undefined ||
+    monthText === undefined ||
+    dayText === undefined ||
+    hourText === undefined ||
+    minuteText === undefined ||
+    secondText === undefined ||
+    offset === undefined
+  ) {
+    return false;
+  }
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day < 1 || day > daysInMonth) return false;
+  if (offset !== 'Z') {
+    const offsetHours = Number(offset.slice(1, 3));
+    const offsetMinutes = Number(offset.slice(4, 6));
+    if (offsetHours > 23 || offsetMinutes > 59) return false;
+  }
+  return true;
 }
 
 function isDecisionCandidateMetadata(value: unknown): value is DecisionCandidateMetadata {
@@ -1688,6 +1963,919 @@ export class FirestoreMemoryRecordRepository {
     changeSet: CommitChangeSet,
   ): Promise<CommitReceipt | null> {
     return this.commitChangeSet(actor, changeSet, true);
+  }
+
+  async [sourceMetadataMigrationDryRun](
+    manifest: SourceMetadataMigrationManifest,
+    operatorEmail: string,
+  ): Promise<SourceMetadataMigrationResult> {
+    const ledger = await this.sourceMetadataMigrationLedger(manifest);
+    return this.firestore.runTransaction(
+      async (transaction) => {
+        const state = await this.readSourceMetadataMigrationState(
+          transaction,
+          manifest,
+          operatorEmail,
+          ledger,
+        );
+        this.assertSourceMetadataMigrationBudget(state.writes);
+        return {
+          migrationId: manifest.migrationId,
+          manifestSha256: manifest.sha256,
+          sequence: state.sequence,
+          indexedThrough: state.indexedThrough,
+          recordIds: state.recordIds,
+          operatorEmail: state.operatorEmail,
+          replayed: state.replayed,
+        };
+      },
+      { readOnly: true },
+    );
+  }
+
+  async [sourceMetadataMigrationApply](
+    manifest: SourceMetadataMigrationManifest,
+    operatorEmail: string,
+  ): Promise<SourceMetadataMigrationResult> {
+    const ledger = await this.sourceMetadataMigrationLedger(manifest);
+    const outcome = await this.firestore.runTransaction(async (transaction) => {
+      const state = await this.readSourceMetadataMigrationState(
+        transaction,
+        manifest,
+        operatorEmail,
+        ledger,
+      );
+      if (state.replayed) {
+        return {
+          migrationId: manifest.migrationId,
+          manifestSha256: manifest.sha256,
+          sequence: state.sequence,
+          indexedThrough: state.indexedThrough,
+          recordIds: state.recordIds,
+          operatorEmail: state.operatorEmail,
+          replayed: true,
+        } satisfies SourceMetadataMigrationResult;
+      }
+
+      const writes = state.writes;
+      this.assertSourceMetadataMigrationBudget(writes);
+
+      for (const item of state.successors) {
+        transaction.set(item.currentRef, item.record);
+        transaction.create(item.revisionRef, item.record);
+        transaction.create(item.indexRef, item.index);
+      }
+      transaction.set(state.sequenceRef, { sequence: state.sequence });
+      transaction.set(state.indexStateRef, { indexedThrough: state.indexedThrough });
+      transaction.create(state.changeRef, state.changePayload);
+      transaction.create(state.jobRef, state.jobPayload);
+      transaction.create(state.auditRef, state.auditPayload);
+      transaction.create(state.receiptRef, state.receiptPayload);
+      return {
+        migrationId: manifest.migrationId,
+        manifestSha256: manifest.sha256,
+        sequence: state.sequence,
+        indexedThrough: state.indexedThrough,
+        recordIds: state.recordIds,
+        operatorEmail,
+        replayed: false,
+      } satisfies SourceMetadataMigrationResult;
+    });
+
+    const after = await this.sourceMetadataMigrationLedger(manifest);
+    if (digest(after) !== digest(ledger)) {
+      throw new MemoryRepositoryError(
+        'conflict',
+        'Deletion ledger changed during source metadata migration; verify the receipt and current records',
+      );
+    }
+    await this.firestore.runTransaction(
+      async (transaction) => {
+        const state = await this.readSourceMetadataMigrationState(
+          transaction,
+          manifest,
+          outcome.operatorEmail,
+          after,
+        );
+        if (!state.replayed || state.sequence !== outcome.sequence) {
+          throw new MemoryRepositoryError(
+            'conflict',
+            'Source metadata migration changed after commit; do not recreate suppressed records',
+          );
+        }
+      },
+      { readOnly: true },
+    );
+    return outcome;
+  }
+
+  async [sourceMetadataMigrationVerify](
+    manifest: SourceMetadataMigrationManifest,
+    operatorEmail: string,
+  ): Promise<SourceMetadataMigrationResult> {
+    const ledger = await this.sourceMetadataMigrationLedger(manifest);
+    return this.firestore.runTransaction(
+      async (transaction) => {
+        const state = await this.readSourceMetadataMigrationState(
+          transaction,
+          manifest,
+          operatorEmail,
+          ledger,
+        );
+        if (!state.replayed) {
+          throw new MemoryRepositoryError('not_found', 'Migration receipt does not exist');
+        }
+        return {
+          migrationId: manifest.migrationId,
+          manifestSha256: manifest.sha256,
+          sequence: state.sequence,
+          indexedThrough: state.indexedThrough,
+          recordIds: state.recordIds,
+          operatorEmail: state.operatorEmail,
+          replayed: true,
+        };
+      },
+      { readOnly: true },
+    );
+  }
+
+  private async sourceMetadataMigrationLedger(
+    manifest: SourceMetadataMigrationManifest,
+  ): Promise<DeletionLedgerSnapshot> {
+    if (!validSourceMetadataMigrationManifest(manifest)) {
+      throw new MemoryRepositoryError('invalid_change_set', 'Source metadata manifest is invalid');
+    }
+    const snapshot = await this.deletionLedger.snapshot();
+    if (
+      !Number.isSafeInteger(snapshot.head) ||
+      snapshot.head < 0 ||
+      snapshot.entries.length !== snapshot.head ||
+      snapshot.entries.some(
+        (entry) =>
+          !entry ||
+          !nonempty(entry.id) ||
+          !nonempty(entry.tenantId) ||
+          !nonempty(entry.scopeId) ||
+          !nonempty(entry.recordId),
+      )
+    ) {
+      throw new MemoryRepositoryError('authorization_denied', 'Deletion ledger is invalid');
+    }
+    const ids = new Set(snapshot.entries.map((entry) => entry.id));
+    if (ids.size !== snapshot.entries.length) {
+      throw new MemoryRepositoryError('authorization_denied', 'Deletion ledger is inconsistent');
+    }
+    const requested = new Set(manifest.entries.map((entry) => entry.recordId));
+    if (
+      snapshot.entries.some(
+        (entry) =>
+          entry.tenantId === manifest.tenantId &&
+          entry.scopeId === manifest.scopeId &&
+          requested.has(entry.recordId),
+      )
+    ) {
+      throw new MemoryRepositoryError(
+        'authorization_denied',
+        'A selected record is present in the deletion ledger',
+      );
+    }
+    return snapshot;
+  }
+
+  private assertSourceMetadataMigrationBudget(writes: readonly unknown[]): void {
+    if (
+      writes.length > MAX_SOURCE_METADATA_MIGRATION_WRITES ||
+      Buffer.byteLength(stableJson(writes), 'utf8') > MAX_SOURCE_METADATA_MIGRATION_BYTES
+    ) {
+      throw new MemoryRepositoryError(
+        'change_set_too_large',
+        'Source metadata migration exceeds its transaction budget',
+      );
+    }
+  }
+
+  private async readSourceMetadataMigrationState(
+    transaction: FirebaseFirestore.Transaction,
+    manifest: SourceMetadataMigrationManifest,
+    operatorEmail: string,
+    deletionLedger: DeletionLedgerSnapshot,
+  ): Promise<{
+    migrationId: string;
+    auditId: string;
+    operatorEmail: string;
+    sequence: number;
+    indexedThrough: number;
+    deletionLedgerHead: number;
+    recordIds: string[];
+    compartmentIds: string[];
+    replayed: boolean;
+    writes: unknown[];
+    changePayload: Record<string, unknown>;
+    jobPayload: Record<string, unknown>;
+    auditPayload: Record<string, unknown>;
+    receiptPayload: Record<string, unknown>;
+    successors: Array<{
+      currentRef: DocumentReference;
+      revisionRef: DocumentReference;
+      indexRef: DocumentReference;
+      record: MemoryRecord;
+      index: SearchIndexEntry & { updatedAt?: string };
+    }>;
+    sequenceRef: DocumentReference;
+    indexStateRef: DocumentReference;
+    changeRef: DocumentReference;
+    jobRef: DocumentReference;
+    receiptRef: DocumentReference;
+    auditRef: DocumentReference;
+  }> {
+    if (!validSourceMetadataMigrationManifest(manifest) || !nonempty(operatorEmail)) {
+      throw new MemoryRepositoryError('invalid_change_set', 'Source metadata manifest is invalid');
+    }
+    const base = this.firestore
+      .collection('memoryTenants')
+      .doc(id(manifest.tenantId))
+      .collection('scopes')
+      .doc(id(manifest.scopeId));
+    const records = base.collection('records');
+    const indexCollectionRef = base.collection('searchIndex');
+    const sequenceRef = base.collection('management').doc('sequence');
+    const indexStateRef = base.collection('metadata').doc('indexState');
+    const checkpointRef = base.collection('management').doc('ledgerCheckpoint');
+    const digestId = digest(['source-metadata-migration-v1', manifest.migrationId]);
+    const receiptRef = base.collection('sourceMetadataMigrationReceipts').doc(digestId);
+    const auditRef = base.collection('sourceMetadataMigrationAudits').doc(digestId);
+    const migrationSequence = manifest.expectedSequence + 1;
+    const changeRef = base.collection('changes').doc(String(migrationSequence).padStart(16, '0'));
+    const jobRef = base.collection('indexJobs').doc(String(migrationSequence).padStart(16, '0'));
+    const pendingJobsQuery = base.collection('indexJobs').where('status', '==', 'pending').limit(1);
+    const sequenceValuePromise = transaction.get(sequenceRef);
+    const indexStatePromise = transaction.get(indexStateRef);
+    const checkpointPromise = transaction.get(checkpointRef);
+    const receiptPromise = transaction.get(receiptRef);
+    const auditPromise = transaction.get(auditRef);
+    const changePromise = transaction.get(changeRef);
+    const jobPromise = transaction.get(jobRef);
+    const pendingJobsPromise = transaction.get(pendingJobsQuery);
+    const currentRefs = manifest.entries.map((entry) => records.doc(id(entry.recordId)));
+    const currentSnapshots = await Promise.all(currentRefs.map((ref) => transaction.get(ref)));
+    const currentRecords = currentSnapshots.map((snapshot, index) => {
+      const entry = manifest.entries[index];
+      const value: unknown = snapshot.data();
+      if (!snapshot.exists || !entry || !isMemoryRecord(value)) {
+        throw new MemoryRepositoryError('conflict', 'A selected current record is unavailable');
+      }
+      return value;
+    });
+
+    const authorizationRefs = new Map<string, DocumentReference>();
+    currentRecords.forEach((record) => {
+      if (record.revision.writer.kind !== 'ai') {
+        throw new MemoryRepositoryError(
+          'authorization_denied',
+          'Only existing AI proposals can be migrated',
+        );
+      }
+      authorizationRefs.set(
+        authorizationDocumentId(manifest.tenantId, record.revision.writer.id, manifest.scopeId),
+        this.firestore
+          .collection(MEMORY_AUTHORIZATION_COLLECTION)
+          .doc(
+            authorizationDocumentId(manifest.tenantId, record.revision.writer.id, manifest.scopeId),
+          ),
+      );
+    });
+
+    const historyRefs = manifest.entries.map((entry, index) => {
+      const recordRef = currentRefs[index];
+      if (!recordRef) throw new Error('Firestore migration record reference mismatch');
+      return Array.from({ length: entry.expectedRevision }, (_, offset) =>
+        recordRef.collection('revisions').doc(String(offset + 1)),
+      );
+    });
+    const indexRefs = manifest.entries.map((entry, index) => {
+      const recordRef = currentRefs[index];
+      if (!recordRef) throw new Error('Firestore migration record reference mismatch');
+      return Object.keys(entry.expectedIndexRevisionSha256)
+        .map(Number)
+        .sort((left, right) => left - right)
+        .map((revision) => indexCollectionRef.doc(this.indexEntryId(entry.recordId, revision)));
+    });
+    const suppressionRefs = manifest.entries.map((entry) =>
+      base.collection('suppressions').doc(id(entry.recordId)),
+    );
+    const successorRevisionRefs = manifest.entries.map((entry, index) => {
+      const recordRef = currentRefs[index];
+      if (!recordRef) throw new Error('Firestore migration record reference mismatch');
+      return recordRef.collection('revisions').doc(String(entry.expectedRevision + 1));
+    });
+    const successorIndexRefs = manifest.entries.map((entry) =>
+      indexCollectionRef.doc(this.indexEntryId(entry.recordId, entry.expectedRevision + 1)),
+    );
+    const authorizationSnapshotsPromise = Promise.all(
+      [...authorizationRefs.values()].map((ref) => transaction.get(ref)),
+    );
+    const historySnapshotsPromise = Promise.all(
+      historyRefs.flatMap((refs) => refs.map((ref) => transaction.get(ref))),
+    );
+    const indexSnapshotsPromise = Promise.all(
+      indexRefs.flatMap((refs) => refs.map((ref) => transaction.get(ref))),
+    );
+    const suppressionSnapshotsPromise = Promise.all(
+      suppressionRefs.map((ref) => transaction.get(ref)),
+    );
+    const successorRevisionSnapshotsPromise = Promise.all(
+      successorRevisionRefs.map((ref) => transaction.get(ref)),
+    );
+    const successorIndexSnapshotsPromise = Promise.all(
+      successorIndexRefs.map((ref) => transaction.get(ref)),
+    );
+    const [
+      sequenceSnapshot,
+      indexStateSnapshot,
+      checkpointSnapshot,
+      receiptSnapshot,
+      auditSnapshot,
+      changeSnapshot,
+      jobSnapshot,
+      pendingJobsSnapshot,
+      authorizationSnapshots,
+      historySnapshots,
+      indexSnapshots,
+      suppressionSnapshots,
+      successorRevisionSnapshots,
+      successorIndexSnapshots,
+    ] = await Promise.all([
+      sequenceValuePromise,
+      indexStatePromise,
+      checkpointPromise,
+      receiptPromise,
+      auditPromise,
+      changePromise,
+      jobPromise,
+      pendingJobsPromise,
+      authorizationSnapshotsPromise,
+      historySnapshotsPromise,
+      indexSnapshotsPromise,
+      suppressionSnapshotsPromise,
+      successorRevisionSnapshotsPromise,
+      successorIndexSnapshotsPromise,
+    ]);
+
+    const checkpointHead = checkpointSnapshot.exists ? checkpointSnapshot.get('head') : 0;
+    if (!Number.isSafeInteger(checkpointHead) || checkpointHead !== deletionLedger.head) {
+      throw new MemoryRepositoryError(
+        'authorization_denied',
+        'Deletion ledger restore checkpoint is not current',
+      );
+    }
+    const sequence = sequenceSnapshot.exists ? sequenceSnapshot.get('sequence') : 0;
+    const indexedThrough = indexStateSnapshot.exists ? indexStateSnapshot.get('indexedThrough') : 0;
+    if (
+      !Number.isSafeInteger(sequence) ||
+      Number(sequence) < 0 ||
+      !Number.isSafeInteger(indexedThrough) ||
+      Number(indexedThrough) < 0
+    ) {
+      throw new MemoryRepositoryError('conflict', 'Scope sequence or index watermark is invalid');
+    }
+
+    const hasReceipt = receiptSnapshot.exists;
+    if (hasReceipt !== auditSnapshot.exists) {
+      throw new MemoryRepositoryError('conflict', 'Migration receipt and audit are inconsistent');
+    }
+    if (hasReceipt) {
+      const receipt = receiptSnapshot.data() as Record<string, unknown> | undefined;
+      const audit = auditSnapshot.data() as Record<string, unknown> | undefined;
+      if (
+        receipt?.['schemaVersion'] !== 1 ||
+        receipt?.['manifestSha256'] !== manifest.sha256 ||
+        receipt?.['migrationId'] !== manifest.migrationId ||
+        receipt?.['tenantId'] !== manifest.tenantId ||
+        receipt?.['scopeId'] !== manifest.scopeId ||
+        audit?.['manifestSha256'] !== manifest.sha256 ||
+        audit?.['migrationId'] !== manifest.migrationId ||
+        audit?.['operatorEmail'] !== receipt?.['operatorEmail'] ||
+        audit?.['auditId'] !== receipt?.['auditId'] ||
+        audit?.['previousSequence'] !== manifest.expectedSequence ||
+        audit?.['sequence'] !== manifest.expectedSequence + 1 ||
+        audit?.['previousIndexedThrough'] !== manifest.expectedIndexedThrough ||
+        audit?.['indexedThrough'] !== manifest.expectedIndexedThrough + 1 ||
+        audit?.['deletionLedgerHead'] !== deletionLedger.head ||
+        audit?.['metadataEditor'] !== receipt?.['operatorEmail'] ||
+        audit?.['assertionWriter'] !== 'Original record writers are retained on each revision.' ||
+        typeof receipt?.['operatorEmail'] !== 'string' ||
+        typeof receipt?.['sequence'] !== 'number' ||
+        typeof receipt?.['indexedThrough'] !== 'number' ||
+        !Array.isArray(receipt?.['recordIds']) ||
+        stableJson(receipt['recordIds']) !==
+          stableJson(manifest.entries.map((entry) => entry.recordId))
+      ) {
+        throw new MemoryRepositoryError(
+          'idempotency_conflict',
+          'Migration identity or digest was reused',
+        );
+      }
+      if (
+        sequence !== receipt['sequence'] ||
+        indexedThrough !== receipt['indexedThrough'] ||
+        sequence !== indexedThrough ||
+        sequence !== manifest.expectedSequence + 1
+      ) {
+        throw new MemoryRepositoryError(
+          'conflict',
+          'Scope changed after source metadata migration',
+        );
+      }
+      if (!changeSnapshot.exists || !jobSnapshot.exists || !pendingJobsSnapshot.empty) {
+        throw new MemoryRepositoryError(
+          'conflict',
+          'Migration change feed or completed job is inconsistent',
+        );
+      }
+      const change = changeSnapshot.data() as Record<string, unknown> | undefined;
+      const job = jobSnapshot.data() as Record<string, unknown> | undefined;
+      const expectedRevisionNumbers = manifest.entries.map((entry) => entry.expectedRevision + 1);
+      const expectedRevisions = manifest.entries.map((entry) => ({
+        recordId: entry.recordId,
+        revision: entry.expectedRevision + 1,
+      }));
+      const expectedCompartments = [
+        ...new Set(currentRecords.flatMap((record) => record.compartmentIds)),
+      ].sort();
+      if (
+        change?.['sequence'] !== receipt['sequence'] ||
+        change?.['operation'] !== 'batch' ||
+        stableJson(change?.['recordIds']) !==
+          stableJson(manifest.entries.map((entry) => entry.recordId)) ||
+        stableJson(change?.['revisionNumbers']) !== stableJson(expectedRevisionNumbers) ||
+        stableJson(change?.['compartmentIds']) !== stableJson(expectedCompartments) ||
+        job?.['sequence'] !== receipt['sequence'] ||
+        job?.['status'] !== 'complete' ||
+        stableJson(job?.['recordIds']) !==
+          stableJson(manifest.entries.map((entry) => entry.recordId)) ||
+        stableJson(job?.['revisions']) !== stableJson(expectedRevisions) ||
+        typeof change?.['createdAt'] !== 'string' ||
+        typeof job?.['completedAt'] !== 'string'
+      ) {
+        throw new MemoryRepositoryError(
+          'conflict',
+          'Migration change feed or completed job is inconsistent',
+        );
+      }
+    } else if (
+      sequence !== manifest.expectedSequence ||
+      indexedThrough !== manifest.expectedIndexedThrough ||
+      sequence !== indexedThrough
+    ) {
+      throw new MemoryRepositoryError(
+        'conflict',
+        'Scope index must be caught up to the exact manifest sequence',
+      );
+    } else if (
+      changeSnapshot.exists ||
+      jobSnapshot.exists ||
+      successorRevisionSnapshots.some((snapshot) => snapshot.exists) ||
+      successorIndexSnapshots.some((snapshot) => snapshot.exists)
+    ) {
+      throw new MemoryRepositoryError(
+        'conflict',
+        'Migration target documents already exist without a receipt',
+      );
+    } else if (!pendingJobsSnapshot.empty) {
+      throw new MemoryRepositoryError(
+        'conflict',
+        'A pending index job prevents source metadata migration',
+      );
+    }
+
+    const operatorAuditEmail = hasReceipt
+      ? String((receiptSnapshot.data() as Record<string, unknown>)['operatorEmail'])
+      : operatorEmail;
+    const auditId = hasReceipt
+      ? String((receiptSnapshot.data() as Record<string, unknown>)['auditId'])
+      : `source-migration-${digestId.slice(0, 24)}`;
+    const authorizations = new Map<string, AuthorizationDocument>();
+    [...authorizationRefs.keys()].forEach((key, index) => {
+      const snapshot = authorizationSnapshots[index];
+      const value: unknown = snapshot?.data();
+      if (!snapshot?.exists || !isObject(value)) {
+        throw new MemoryRepositoryError(
+          'authorization_denied',
+          'Original writer authorization is unavailable',
+        );
+      }
+      authorizations.set(key, value as unknown as AuthorizationDocument);
+    });
+
+    let historyOffset = 0;
+    let indexOffset = 0;
+    const successors: Array<{
+      currentRef: DocumentReference;
+      revisionRef: DocumentReference;
+      indexRef: DocumentReference;
+      record: MemoryRecord;
+      index: SearchIndexEntry & { updatedAt?: string };
+    }> = [];
+    const writes: unknown[] = [];
+    const compartmentIds = new Set<string>();
+
+    for (let entryIndex = 0; entryIndex < manifest.entries.length; entryIndex += 1) {
+      const entry = manifest.entries[entryIndex];
+      const stored = currentRecords[entryIndex];
+      const currentSnapshot = currentSnapshots[entryIndex];
+      const historyRefsForRecord = historyRefs[entryIndex];
+      const historyForRecord: MemoryRecord[] = [];
+      if (!entry || !stored || !currentSnapshot || !historyRefsForRecord) {
+        throw new Error('Firestore migration read set mismatch');
+      }
+      for (let revision = 1; revision <= entry.expectedRevision; revision += 1) {
+        const snapshot = historySnapshots[historyOffset++];
+        const historyValue: unknown = snapshot?.data();
+        const expectedHash = entry.expectedRevisionSha256[String(revision)];
+        if (
+          !snapshot?.exists ||
+          !isMemoryRecord(historyValue) ||
+          historyValue.id !== entry.recordId ||
+          historyValue.tenantId !== manifest.tenantId ||
+          historyValue.scopeId !== manifest.scopeId ||
+          historyValue.revision.revision !== revision ||
+          digest(historyValue) !== expectedHash
+        ) {
+          throw new MemoryRepositoryError(
+            'conflict',
+            'Immutable record history differs from the manifest',
+          );
+        }
+        historyForRecord.push(historyValue);
+      }
+      const oldCurrent = historyForRecord.at(-1);
+      if (
+        !oldCurrent ||
+        oldCurrent.revision.revision !== entry.expectedRevision ||
+        digest(oldCurrent) !== entry.expectedCurrentSha256
+      ) {
+        throw new MemoryRepositoryError(
+          'conflict',
+          'Manifest current hash does not match immutable history',
+        );
+      }
+      const migrationTime = Date.parse(manifest.recordedAt);
+      if (
+        historyForRecord.some(
+          (revision) => migrationTime <= Date.parse(revision.revision.recordedAt),
+        )
+      ) {
+        throw new MemoryRepositoryError(
+          'invalid_change_set',
+          'Migration record time must be later than every existing revision',
+        );
+      }
+      const storedIsOriginal = digest(stored) === entry.expectedCurrentSha256;
+      const storedIsSuccessor =
+        digest(stored) ===
+        digest(this.sourceMetadataSuccessor(oldCurrent, entry, auditId, manifest));
+      const isCurrentMigrationRecord =
+        stored.id === entry.recordId &&
+        stored.tenantId === manifest.tenantId &&
+        stored.scopeId === manifest.scopeId &&
+        stored.revision.revision ===
+          (hasReceipt ? entry.expectedRevision + 1 : entry.expectedRevision);
+      if (
+        !isCurrentMigrationRecord ||
+        (!hasReceipt && !storedIsOriginal) ||
+        (hasReceipt && !storedIsSuccessor) ||
+        stored.suppressed
+      ) {
+        throw new MemoryRepositoryError(
+          'conflict',
+          'Current record differs from the migration baseline or receipt',
+        );
+      }
+
+      const writer = oldCurrent.revision.writer;
+      if (writer.kind !== 'ai') {
+        throw new MemoryRepositoryError(
+          'authorization_denied',
+          'Only existing AI proposals can be migrated',
+        );
+      }
+      const authId = authorizationDocumentId(manifest.tenantId, writer.id, manifest.scopeId);
+      const authorization = authorizations.get(authId);
+      if (
+        !authorization ||
+        authorization.active !== true ||
+        authorization.tenantId !== manifest.tenantId ||
+        authorization.principalId !== writer.id ||
+        authorization.actorKind !== 'connection' ||
+        authorization.connectionId !== writer.connectionId ||
+        authorization.gateClientId !== oldCurrent.revision.gateClientId ||
+        !Number.isSafeInteger(authorization.authorizationEpoch) ||
+        !Array.isArray(authorization.compartmentAllowance) ||
+        !authorization.compartmentAllowance.every(nonempty) ||
+        !Array.isArray(authorization.revokedSourceReferences) ||
+        !authorization.revokedSourceReferences.every(nonempty) ||
+        !containsOnly(oldCurrent.compartmentIds, authorization.compartmentAllowance)
+      ) {
+        throw new MemoryRepositoryError(
+          'authorization_denied',
+          'Original writer authorization is invalid',
+        );
+      }
+      const revokedSources = new Set(authorization.revokedSourceReferences);
+      const additions = entry.additions.map((addition) => addition.source);
+      if (
+        [...oldCurrent.revision.sourceReferences, ...additions].some((source) =>
+          revokedSources.has(sourceReferenceKey(source)),
+        )
+      ) {
+        throw new MemoryRepositoryError('authorization_denied', 'A source right is revoked');
+      }
+      this.validateSourceMetadataEvidence(entry, historyForRecord);
+
+      const suppressed = suppressionSnapshots[entryIndex];
+      if (suppressed?.exists) {
+        throw new MemoryRepositoryError('authorization_denied', 'A selected record is suppressed');
+      }
+
+      const recordIndexRefs = indexRefs[entryIndex];
+      const indexesForRecord: Array<{ ref: DocumentReference; value: unknown }> = [];
+      if (!recordIndexRefs) throw new Error('Firestore migration index read set mismatch');
+      const recordIndexSnapshots = indexSnapshots.slice(
+        indexOffset,
+        indexOffset + recordIndexRefs.length,
+      );
+      indexOffset += recordIndexRefs.length;
+      for (const snapshot of recordIndexSnapshots) {
+        const raw: unknown = snapshot?.data();
+        const revision = Number(snapshot?.get('revision'));
+        if (
+          !snapshot?.exists ||
+          !isSearchIndexEntry(raw) ||
+          raw.recordId !== entry.recordId ||
+          raw.revision !== revision ||
+          digest(raw) !== entry.expectedIndexRevisionSha256[String(revision)]
+        ) {
+          throw new MemoryRepositoryError('conflict', 'Search index differs from the manifest');
+        }
+        indexesForRecord.push({ ref: snapshot.ref, value: raw });
+      }
+      const latestIndex = indexesForRecord.find((item) => {
+        const value = item.value as SearchIndexEntry;
+        return value.revision === entry.expectedRevision;
+      });
+      const latestIndexValue = latestIndex?.value as
+        (SearchIndexEntry & { updatedAt?: string }) | undefined;
+      if (
+        !latestIndexValue ||
+        !sameStrings(latestIndexValue.compartmentIds, oldCurrent.compartmentIds)
+      ) {
+        throw new MemoryRepositoryError(
+          'conflict',
+          'Current search index is missing or inconsistent',
+        );
+      }
+
+      const expectedSuccessor = this.sourceMetadataSuccessor(oldCurrent, entry, auditId, manifest);
+      if (!isMemoryRecord(expectedSuccessor)) {
+        throw new MemoryRepositoryError(
+          'invalid_change_set',
+          'Migration successor is not a valid memory record',
+        );
+      }
+      const successorIndex = {
+        ...latestIndexValue,
+        revision: expectedSuccessor.revision.revision,
+      };
+      if (hasReceipt) {
+        const receipt = receiptSnapshot.data() as Record<string, unknown>;
+        const successorHash = (receipt['successorSha256'] as Record<string, unknown> | undefined)?.[
+          entry.recordId
+        ];
+        const indexHash = (receipt['indexSha256'] as Record<string, unknown> | undefined)?.[
+          entry.recordId
+        ];
+        const revisionSnapshot = successorRevisionSnapshots[entryIndex];
+        const indexSnapshot = successorIndexSnapshots[entryIndex];
+        const persistedIndex: unknown = indexSnapshot?.data();
+        if (
+          successorHash !== digest(expectedSuccessor) ||
+          indexHash !== digest(successorIndex) ||
+          digest(stored) !== successorHash ||
+          !revisionSnapshot?.exists ||
+          digest(revisionSnapshot.data()) !== successorHash ||
+          !indexSnapshot?.exists ||
+          !isSearchIndexEntry(persistedIndex) ||
+          digest(persistedIndex) !== indexHash ||
+          stableJson(persistedIndex) !== stableJson(successorIndex)
+        ) {
+          throw new MemoryRepositoryError(
+            'conflict',
+            'Migration successor differs from its receipt',
+          );
+        }
+      } else {
+        const currentRef = currentRefs[entryIndex]!;
+        const revisionRef = currentRef
+          .collection('revisions')
+          .doc(String(expectedSuccessor.revision.revision));
+        const indexRef = indexCollectionRef.doc(
+          this.indexEntryId(entry.recordId, expectedSuccessor.revision.revision),
+        );
+        const newRecord = { ...expectedSuccessor };
+        const newIndex = { ...successorIndex };
+        successors.push({ currentRef, revisionRef, indexRef, record: newRecord, index: newIndex });
+        writes.push(newRecord, newRecord, newIndex);
+      }
+      for (const compartmentId of oldCurrent.compartmentIds) compartmentIds.add(compartmentId);
+    }
+
+    if (!hasReceipt) {
+      const nextSequence = Number(sequence) + 1;
+      const successorRecords = successors.map((item) => item.record);
+      const auditId = `source-migration-${digestId.slice(0, 24)}`;
+      const changePayload = {
+        sequence: nextSequence,
+        operation: 'batch',
+        recordIds: manifest.entries.map((entry) => entry.recordId),
+        revisionNumbers: successorRecords.map((record) => record.revision.revision),
+        compartmentIds: [...compartmentIds].sort(),
+        createdAt: manifest.recordedAt,
+      };
+      const jobPayload = {
+        sequence: nextSequence,
+        recordIds: manifest.entries.map((entry) => entry.recordId),
+        revisions: successorRecords.map((record) => ({
+          recordId: record.id,
+          revision: record.revision.revision,
+        })),
+        status: 'complete',
+        completedAt: manifest.recordedAt,
+      };
+      const auditPayload = {
+        auditId,
+        kind: 'source-metadata-migration',
+        migrationId: manifest.migrationId,
+        manifestSha256: manifest.sha256,
+        tenantId: manifest.tenantId,
+        scopeId: manifest.scopeId,
+        operatorEmail,
+        metadataEditor: operatorEmail,
+        assertionWriter: 'Original record writers are retained on each revision.',
+        previousSequence: sequence,
+        sequence: nextSequence,
+        previousIndexedThrough: indexedThrough,
+        indexedThrough: nextSequence,
+        deletionLedgerHead: deletionLedger.head,
+        recordIds: manifest.entries.map((entry) => entry.recordId),
+        createdAt: manifest.recordedAt,
+      };
+      const receiptPayload = {
+        schemaVersion: 1,
+        migrationId: manifest.migrationId,
+        manifestSha256: manifest.sha256,
+        auditId,
+        tenantId: manifest.tenantId,
+        scopeId: manifest.scopeId,
+        operatorEmail,
+        sequence: nextSequence,
+        indexedThrough: nextSequence,
+        deletionLedgerHead: deletionLedger.head,
+        recordIds: manifest.entries.map((entry) => entry.recordId),
+        successorSha256: Object.fromEntries(
+          successors.map((item) => [item.record.id, digest(item.record)]),
+        ),
+        indexSha256: Object.fromEntries(
+          successors.map((item) => [item.record.id, digest(item.index)]),
+        ),
+        createdAt: manifest.recordedAt,
+      };
+      writes.push(
+        changePayload,
+        jobPayload,
+        { sequence: nextSequence },
+        { indexedThrough: nextSequence },
+        auditPayload,
+        receiptPayload,
+      );
+      const changeRef = base.collection('changes').doc(String(nextSequence).padStart(16, '0'));
+      const jobRef = base.collection('indexJobs').doc(String(nextSequence).padStart(16, '0'));
+      this.assertSourceMetadataMigrationBudget(writes);
+      return {
+        migrationId: manifest.migrationId,
+        auditId,
+        operatorEmail,
+        sequence: nextSequence,
+        indexedThrough: nextSequence,
+        deletionLedgerHead: deletionLedger.head,
+        recordIds: manifest.entries.map((entry) => entry.recordId),
+        compartmentIds: [...compartmentIds].sort(),
+        replayed: false,
+        writes,
+        changePayload,
+        jobPayload,
+        auditPayload,
+        receiptPayload,
+        successors,
+        sequenceRef,
+        indexStateRef,
+        changeRef,
+        jobRef,
+        receiptRef,
+        auditRef,
+      };
+    }
+
+    const receipt = receiptSnapshot.data() as Record<string, unknown>;
+    return {
+      migrationId: manifest.migrationId,
+      auditId,
+      operatorEmail: operatorAuditEmail,
+      sequence: Number(receipt['sequence']),
+      indexedThrough: Number(receipt['indexedThrough']),
+      deletionLedgerHead: Number(receipt['deletionLedgerHead']),
+      recordIds: manifest.entries.map((entry) => entry.recordId),
+      compartmentIds: [...compartmentIds].sort(),
+      replayed: true,
+      writes,
+      changePayload: changeSnapshot.data() as Record<string, unknown>,
+      jobPayload: jobSnapshot.data() as Record<string, unknown>,
+      auditPayload: auditSnapshot.data() as Record<string, unknown>,
+      receiptPayload: receipt,
+      successors,
+      sequenceRef,
+      indexStateRef,
+      changeRef,
+      jobRef,
+      receiptRef,
+      auditRef,
+    };
+  }
+
+  private sourceMetadataSuccessor(
+    current: MemoryRecord,
+    entry: SourceMetadataMigrationEntry,
+    auditId: string,
+    manifest: SourceMetadataMigrationManifest,
+  ): MemoryRecord {
+    const sources = [...current.revision.sourceReferences];
+    const keys = new Set(sources.map(sourceReferenceKey));
+    for (const addition of entry.additions) {
+      const key = sourceReferenceKey(addition.source);
+      if (!keys.has(key)) {
+        sources.push({ ...addition.source });
+        keys.add(key);
+      }
+    }
+    return {
+      ...current,
+      revision: {
+        ...current.revision,
+        revision: entry.expectedRevision + 1,
+        changeKind: 'refine',
+        reason: `Source metadata migration ${auditId}: append evidenced source references without changing the assertion.`,
+        requestingConnectionId: null,
+        gateClientId: null,
+        recordedAt: manifest.recordedAt,
+        sourceReferences: sources,
+      },
+    };
+  }
+
+  private validateSourceMetadataEvidence(
+    entry: SourceMetadataMigrationEntry,
+    history: readonly MemoryRecord[],
+  ): void {
+    for (const addition of entry.additions) {
+      for (const evidence of addition.evidence) {
+        const sourceRecord = history[evidence.revision - 1];
+        const reason = sourceRecord?.revision.reason;
+        const value =
+          typeof reason === 'string' ? reason.slice(evidence.startUtf16, evidence.endUtf16) : '';
+        if (!sourceRecord || !reason || !value || sha256Text(value) !== evidence.valueSha256) {
+          throw new MemoryRepositoryError(
+            'conflict',
+            'Stored source evidence no longer matches the manifest',
+          );
+        }
+        const source = addition.source;
+        const expected =
+          evidence.field === 'uri'
+            ? source.uri
+            : evidence.field === 'title'
+              ? source.title
+              : evidence.field === 'version'
+                ? source.version
+                : evidence.field === 'locator'
+                  ? source.locator
+                  : '機密';
+        if (evidence.field === 'rights' ? !value.includes(expected ?? '') : value !== expected) {
+          throw new MemoryRepositoryError(
+            'conflict',
+            'Stored source evidence does not support the manifest field',
+          );
+        }
+      }
+    }
   }
 
   private async commitChangeSet(

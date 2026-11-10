@@ -35,6 +35,7 @@ flowchart LR
 | `packages/memory-records/src/firestore-client.ts`, `runtime.ts` | Firestore client construction (Application Default Credentials, or a loopback emulator) and wiring of the two databases |
 | `apps/api` | Node.js 24 HTTP service: `/healthz`, `/readyz` (both databases answer), protected-resource metadata, and stateless Streamable HTTP MCP at `POST /mcp` with Gate introspection for exactly `MCP_RESOURCE_URL`, admission (403 without one), body and rate limits, and the Vertex AI embedding provider. Configuration is environment-only and fails fast |
 | `scripts/admit-subject.mjs` | Operator tool that creates or reactivates one admission with the `automatic` policy; it refuses to move an existing admission to another tenant or scope |
+| `scripts/migrate-source-metadata.mjs` | Private, reviewed operator path for appending evidenced source metadata; its audit uses the credential-derived IAM identity and it is not exported through the API, service or runtime |
 
 Each Gate connection is its own principal with its own authorization. The person's authority acting through a connection is a separate person principal per connection, because an authorization document binds one connection. Recall includes matching records with derived proposal authority by default, including candidates, and returns their lifecycle and writer attribution; `include_proposals=false` limits results to user authority. Equal-relevance user-authority records rank first. `as_user` asks for the person's authority, which only the approval policy grants. Proposal recall does not approve a record or change its identity.
 
@@ -52,6 +53,7 @@ These hold in the package today and are contracts for the service built on it:
 - **Search is derived data.** Index entries are fenced to a revision, unindexed changes are overlaid, and every candidate is rechecked against the committed record before it is returned. Vector similarity is computed in memory over at most 1,000 entries per scope; this is not Firestore vector search.
 - **Rights apply at read time.** Compartment allowances and source rights are checked in the repository boundary. Firestore server clients bypass Security Rules, so a lint rule confines the Firestore client to the repository, client, deletion-ledger and access modules, and the access contract and its tests are the only protection; there is no database-level backstop like the former row-level security.
 - **Forget denies first, purges later.** A Forget reports use stopped only after the independent ledger append is durable. Reads stay closed after a restore until the restore checkpoint is reconciled; the service reconciles a lagging scope before its next operation and fails the operation when the ledger cannot be read.
+- **Source metadata maintenance is source-only.** The private operator path appends a new revision while preserving the original assertion writer, approval, content and existing source references. Its audit identifies the metadata editor separately; prior revisions and indexes are never rewritten, and no public API grants this authority.
 
 ## Runtime boundary
 

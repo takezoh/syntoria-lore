@@ -1,10 +1,13 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { Firestore } from '@google-cloud/firestore';
+import type { GoogleAuth } from 'google-auth-library';
 
 export interface FirestoreClientOptions {
   readonly projectId: string;
   /** A named database; omitted means `(default)`. */
   readonly databaseId?: string;
+  /** Reuse an explicitly authenticated ADC client for private operator work. */
+  readonly auth?: GoogleAuth;
 }
 
 /**
@@ -27,6 +30,7 @@ export function createFirestoreClient(options: FirestoreClientOptions): Firestor
   return new Firestore({
     projectId: options.projectId,
     ...(options.databaseId === undefined ? {} : { databaseId: options.databaseId }),
+    ...(options.auth === undefined ? {} : { auth: options.auth }),
     ...(emulatorCredentials === undefined
       ? {}
       : {

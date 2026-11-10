@@ -40,6 +40,7 @@ Local checks with deterministic doubles do not establish hosted behavior, extrac
 | Value model, repository, capture, recall, access and service operations | `packages/memory-records/src/` |
 | MCP adapter, Gate verification, configuration and embeddings | `apps/api/src/` |
 | Admitting a Gate subject | `scripts/admit-subject.mjs` |
+| Reviewed source metadata maintenance | [`scripts/migrate-source-metadata.mjs`](../scripts/migrate-source-metadata.mjs): prepare, dry-run, apply and verify use private snapshot/plan/manifest files, explicit database targets and the reviewed manifest digest |
 | Test suites and runners | [Testing](technical/testing.md) |
 | Decisions and their reasons | [ADRs](adr/) |
 | Dated evidence | [Evaluation records](eval/) |
