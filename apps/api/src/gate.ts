@@ -1,3 +1,4 @@
+// Adapted and modified from @syntoria/gate-sdk 0.1.0 (Apache License 2.0); see ../THIRD_PARTY_NOTICES.md.
 import { Buffer } from 'node:buffer';
 import type { GatePrincipal } from '@memory/memory-records';
 
