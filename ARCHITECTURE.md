@@ -1,5 +1,29 @@
 # Syntoria Lore architecture
 
+## Access authentication
+
+Access mode is enabled by `ACCESS_ISSUER`, `ACCESS_AUDIENCE` and
+`ACCESS_OWNER_EMAIL`. The API independently verifies the RS256 assertion from
+`Cf-Access-Jwt-Assertion`: fixed issuer, exact application audience, expiry,
+issued-at, nonempty subject and owner email. Gateway user-info headers and the
+backend IAM `Authorization` header do not establish application identity.
+
+`OWNER_ADMISSION_ISSUER` and `OWNER_ADMISSION_SUBJECT` select an existing admission.
+These are persistence coordinates, never claims copied from an Access token. The
+API reads that admission without rewriting its tenant, scope, policy or historical
+records. All admitted AI connections use one `shared-ai` actor. The stored
+`connectionId` and `gateClientId` fields retain their existing schema names but
+contain that shared group, rather than an individual AI identity. New shared
+permissions start with General only; existing grants are never unioned. Policy
+approval remains separate from AI proposal authority.
+
+Deploy behind an API Gateway that verifies the same Access JWT and invokes Cloud
+Run with a dedicated service account. Accept the backend hostname explicitly in
+`MCP_ALLOWED_HOSTS`; do not trust request-supplied forwarded hosts. Access owns MCP
+OAuth discovery in this mode, so the API does not advertise legacy Gate metadata.
+The old Gate configuration remains available for rollback and isolated regression
+fixtures; Access mode does not instantiate or call its verifier.
+
 ## Current state
 
 On 2026-11-09 the owner deleted the PostgreSQL deployment, and the PostgreSQL implementation (the REST and MCP API, the worker and their packages) was removed from the repository. Lore is being rebuilt on Firestore Memory Records, as [ADR 0007](docs/adr/0007-store-memories-as-firestore-memory-records.md) and [ADR 0008](docs/adr/0008-keep-a-generative-baseline-and-enable-decision-models-per-point.md) decide and the [Memory Records design](docs/design/memory-records.md) specifies.

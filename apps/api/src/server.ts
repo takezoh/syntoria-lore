@@ -6,6 +6,7 @@ import {
   type GatePrincipal,
   type MemoryService,
 } from '@memory/memory-records';
+import { AccessVerificationError } from './access.js';
 import { GateVerificationError, type GateVerifier } from './gate.js';
 import { handleMcpRequest } from './mcp.js';
 import { RequestLimits } from './request-limits.js';
@@ -21,6 +22,8 @@ export interface ApiServerOptions {
   /** Hosts accepted in the Host header of `/mcp` requests. */
   readonly mcpAllowedHosts: readonly string[];
   readonly verifier: GateVerifier;
+  /** Access mode consumes only this header; Authorization is the gateway's IAM token. */
+  readonly authenticateAssertion?: (assertion: string | undefined) => Promise<GatePrincipal>;
   readonly resolveAccess: (principal: GatePrincipal) => Promise<ConnectionAccess>;
   readonly service: MemoryService;
   /** Fails unless every backing store answers. */
@@ -101,7 +104,7 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
       }
       return;
     }
-    if (method === 'GET' && path === METADATA_PATH) {
+    if (options.authenticateAssertion === undefined && method === 'GET' && path === METADATA_PATH) {
       route = 'GET /.well-known/*';
       sendJson(response, 200, {
         resource: options.mcpResourceUrl,
@@ -144,7 +147,12 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
       return;
     }
     try {
-      if (countHeader(request, 'authorization') > 1) {
+      if (
+        countHeader(
+          request,
+          options.authenticateAssertion === undefined ? 'authorization' : 'cf-access-jwt-assertion',
+        ) > 1
+      ) {
         throw new HttpError(401, 'unauthorized', 'Duplicate Authorization headers are not allowed');
       }
       const principal = await authenticate(request);
@@ -156,7 +164,7 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
         access = await options.resolveAccess(principal);
       } catch (error) {
         if (error instanceof AccessDeniedError) {
-          throw new HttpError(403, 'forbidden', 'This Gate account is not admitted to Lore');
+          throw new HttpError(403, 'forbidden', 'This account is not admitted to Lore');
         }
         throw new HttpError(503, 'unavailable', 'Access could not be checked', true);
       }
@@ -199,18 +207,32 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
    */
   async function authenticate(request: IncomingMessage): Promise<GatePrincipal> {
     const address = request.socket.remoteAddress ?? 'unknown';
-    const credential = /^Bearer (\S+)$/iu.exec(request.headers.authorization ?? '')?.[1];
+    const rawAssertion = request.headers['cf-access-jwt-assertion'];
+    const assertion = typeof rawAssertion === 'string' ? rawAssertion : undefined;
+    const credential =
+      options.authenticateAssertion === undefined
+        ? /^Bearer (\S+)$/iu.exec(request.headers.authorization ?? '')?.[1]
+        : assertion;
     if (!limits.admitCredential(address, credential)) throw rateLimited();
     try {
-      const principal = await options.verifier.authenticate(request.headers.authorization);
+      const principal =
+        options.authenticateAssertion === undefined
+          ? await options.verifier.authenticate(request.headers.authorization)
+          : await options.authenticateAssertion(assertion);
       if (credential !== undefined) limits.recordVerified(credential);
       return principal;
     } catch (error) {
-      if (error instanceof GateVerificationError && error.status === 503) {
-        throw new HttpError(503, error.code, 'Gate is unavailable', true);
+      if (
+        (error instanceof GateVerificationError || error instanceof AccessVerificationError) &&
+        error.status === 503
+      ) {
+        throw new HttpError(503, 'authorization_unavailable', 'Authorization is unavailable', true);
+      }
+      if (error instanceof AccessVerificationError && error.status === 403) {
+        throw new HttpError(403, 'forbidden', 'This identity is not admitted');
       }
       limits.recordFailure(address);
-      throw new HttpError(401, 'unauthorized', 'A valid Gate access token is required');
+      throw new HttpError(401, 'unauthorized', 'A valid access credential is required');
     }
   }
 }

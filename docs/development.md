@@ -20,6 +20,16 @@ export FIRESTORE_EMULATOR_HOST=127.0.0.1:8085
 
 Tests use synthetic `demo-` project IDs; never point them at a real project.
 
+## Access migration checks
+
+`tests/access-jwt.test.ts` signs synthetic assertions and verifies owner admission,
+wrong audience, expiry, signature rejection, service-token rejection and key-service
+outages. `tests/access-mcp.firestore.test.ts` drives the real HTTP/MCP and Firestore
+path with independently signed client assertions: both share the existing owner's
+admission, a write is visible through the other client, and old Bearers and forged
+gateway user-info do not authenticate. These tests establish local boundaries,
+not Cloudflare login, Google gateway forwarding or hosted acceptance.
+
 ## Verify a code change
 
 For code changes, `npm run verify:local` runs build, typecheck, lint, formatting, unit tests, the Firestore emulator suite, secret scanning and dependency audit. It fails if `FIRESTORE_EMULATOR_HOST` is unset or not a loopback address. CI runs the same checks except the emulator suite. The [testing reference](technical/testing.md) describes each suite.

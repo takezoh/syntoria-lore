@@ -9,6 +9,14 @@ export type EmbeddingConfig =
   | { readonly provider: 'deterministic' };
 
 export interface ApiConfig {
+  readonly access?: {
+    readonly issuer: string;
+    readonly audience: string;
+    readonly ownerEmail: string;
+    /** Existing admission coordinates, not a credential or a token claim. */
+    readonly admissionIssuer: string;
+    readonly admissionSubject: string;
+  };
   readonly port: number;
   readonly firestoreProjectId: string;
   readonly firestoreDatabaseId: string;
@@ -99,7 +107,36 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
     problems.push('LEDGER_DATABASE_ID must differ from FIRESTORE_DATABASE_ID');
   }
 
-  const gateIssuer = required('GATE_ISSUER');
+  const accessEnabled = env['ACCESS_ISSUER'] !== undefined;
+  const access = accessEnabled
+    ? {
+        issuer: required('ACCESS_ISSUER'),
+        audience: required('ACCESS_AUDIENCE'),
+        ownerEmail: required('ACCESS_OWNER_EMAIL'),
+        admissionIssuer: required('OWNER_ADMISSION_ISSUER'),
+        admissionSubject: required('OWNER_ADMISSION_SUBJECT'),
+      }
+    : undefined;
+  if (access !== undefined) {
+    const url = parseUrl(access.issuer);
+    if (url === null || url.protocol !== 'https:' || access.issuer !== url.origin) {
+      problems.push('ACCESS_ISSUER must be an exact HTTPS origin');
+    }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(access.ownerEmail)) {
+      problems.push('ACCESS_OWNER_EMAIL must be an email address');
+    }
+    if (!/^[A-Za-z0-9_-]+$/u.test(access.audience)) {
+      problems.push('ACCESS_AUDIENCE must be one application audience');
+    }
+    if (
+      [access.admissionIssuer, access.admissionSubject].some(
+        (value) => value.length > 1024 || hasControlCharacter(value),
+      )
+    ) {
+      problems.push('Owner admission coordinates must be short printable values');
+    }
+  }
+  const gateIssuer = access?.issuer ?? required('GATE_ISSUER');
   if (gateIssuer !== '') {
     const url = parseUrl(gateIssuer);
     if (
@@ -147,8 +184,8 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
     problems.push('MCP_ALLOWED_HOSTS must be a comma-separated list of host[:port] values');
   }
 
-  const gateClientId = required('GATE_MCP_CLIENT_ID');
-  const gateClientSecret = required('GATE_MCP_CLIENT_SECRET');
+  const gateClientId = accessEnabled ? '' : required('GATE_MCP_CLIENT_ID');
+  const gateClientSecret = accessEnabled ? '' : required('GATE_MCP_CLIENT_SECRET');
   for (const [name, value] of [
     ['GATE_MCP_CLIENT_ID', gateClientId],
     ['GATE_MCP_CLIENT_SECRET', gateClientSecret],
@@ -188,6 +225,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
 
   if (problems.length > 0) throw new ConfigError(problems);
   return {
+    ...(access === undefined ? {} : { access }),
     port,
     firestoreProjectId,
     firestoreDatabaseId,
