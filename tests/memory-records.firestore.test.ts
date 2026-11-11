@@ -1755,6 +1755,37 @@ describe('Firestore Memory Record repository', () => {
       idempotencyKey: 'forget-target',
       changes: [{ kind: 'create', record: record() }],
     });
+    // Index the record and warm the in-memory copy of the current index before the Forget.
+    const indexWorker = {
+      tenantId: actor.tenantId,
+      actorKind: 'worker',
+      principalId: 'index-worker-demo',
+      connectionId: actor.connectionId,
+      gateClientId: actor.gateClientId,
+      scopeIds: actor.scopeIds,
+      compartmentAllowance: actor.compartmentAllowance,
+      authorizationEpoch: actor.authorizationEpoch,
+    } as unknown as VerifiedActorCapability;
+    await seedAuthorization(projectId, indexWorker, []);
+    const flatEmbeddings = {
+      async embed() {
+        return { modelId: 'flat-test', dimension: 2, values: [1, 1] };
+      },
+    };
+    const indexer = new MemoryIndexWorker(repository, flatEmbeddings);
+    expect(await indexer.runPending(indexWorker, 'scope-demo')).toMatchObject({ completed: 1 });
+    expect(await indexer.advanceCurrentIndex(indexWorker, 'scope-demo')).toMatchObject({
+      complete: true,
+    });
+    const recallBeforeForget = new MemoryRecallService(repository, flatEmbeddings);
+    const now = new Date().toISOString();
+    const present = { validAt: now, knownAt: now, byteBudget: 10_000, text: 'Memory Records' };
+    expect((await recallBeforeForget.recall(actor, 'scope-demo', present)).items).toHaveLength(1);
+    const scopeDocuments = `http://${host}/v1/projects/${projectId}/databases/(default)/documents/memoryTenants/${encodeId('tenant-demo')}/scopes/${encodeId('scope-demo')}`;
+    const readDocument = (path: string) =>
+      fetch(`${scopeDocuments}/${path}`, { headers: { authorization: 'Bearer owner' } });
+    expect((await readDocument(`currentIndex/${encodeId('record-1')}`)).status).toBe(200);
+
     deletionLedger.loseNextAppendResponse = true;
     expect(await repository.forget(actor, 'scope-demo', 'record-1', requestId)).toEqual({
       status: 'pending',
@@ -1788,6 +1819,14 @@ describe('Firestore Memory Record repository', () => {
     expect((await repository.getChanges(worker, 'scope-demo', null)).entries).toEqual([
       expect.objectContaining({ operation: 'deletion', recordIds: [] }),
     ]);
+    // The purge removes the record's current-index entry and moves the scope's generation, so
+    // no process keeps the forgotten record's derived terms or embedding in memory.
+    expect((await readDocument(`currentIndex/${encodeId('record-1')}`)).status).toBe(404);
+    const state = (await (await readDocument('metadata/currentIndex')).json()) as {
+      fields: { generation?: { integerValue: string } };
+    };
+    expect(Number(state.fields.generation?.integerValue)).toBeGreaterThanOrEqual(1);
+    expect((await recallBeforeForget.recall(actor, 'scope-demo', present)).items).toHaveLength(0);
   });
 
   it('keeps a pre-Forget backup closed during ledger outage, then applies the retried deletion', async () => {

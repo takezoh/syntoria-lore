@@ -1,10 +1,12 @@
 import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import {
   FieldPath,
+  FieldValue,
   type DocumentReference,
   type DocumentSnapshot,
   type Firestore,
   type Query,
+  type Transaction,
 } from '@google-cloud/firestore';
 import { createFirestoreClient } from './firestore-client.js';
 import {
@@ -1062,6 +1064,7 @@ export class FirestoreMemoryRecordRepository {
         Number(currentEntry.get('revision') ?? 0) <= entry.revision
       )
         transaction.set(currentRef, { ...entry, updatedAt });
+      this.currentIndexCache.delete(this.scopeRef(actor, scopeId).path);
       return true;
     });
   }
@@ -1092,6 +1095,7 @@ export class FirestoreMemoryRecordRepository {
         if (Number(document.get('revision')) <= expectedRevision) transaction.delete(document.ref);
       }
       transaction.delete(this.currentIndexRef(actor, scopeId, recordId));
+      this.dropCurrentIndexSnapshots(actor, scopeId, transaction);
       return true;
     });
   }
@@ -1265,12 +1269,14 @@ export class FirestoreMemoryRecordRepository {
     }
     const finished = records.size < limit;
     const nowBlocked = blocked || skipped;
+    if (written > 0) this.dropCurrentIndexSnapshots(actor, scopeId);
     await stateRef.set(
       finished
         ? nowBlocked
           ? { complete: false, blocked: false, cursor: null }
           : { complete: true, completedAt: new Date().toISOString() }
         : { complete: false, blocked: nowBlocked, cursor: records.docs.at(-1)?.id ?? null },
+      { merge: true },
     );
     return { complete: finished && !nowBlocked, written };
   }
@@ -1314,7 +1320,7 @@ export class FirestoreMemoryRecordRepository {
         ? this.readCurrentIndex(
             actor,
             scopeId,
-            `${indexedThrough}:${String(currentState.get('completedAt'))}`,
+            `${indexedThrough}:${String(currentState.get('completedAt'))}:${String(currentState.get('generation') ?? 0)}`,
           )
         : this.readRevisionIndex(actor, scopeId),
       this.changeCollection(actor, scopeId)
@@ -1812,6 +1818,11 @@ export class FirestoreMemoryRecordRepository {
       .get();
     for (const entry of searchEntries.docs) await entry.ref.delete();
     await this.currentIndexRef(actor, scopeId, recordId).delete();
+    this.dropCurrentIndexSnapshots(actor, scopeId);
+    await this.currentIndexStateRef(actor, scopeId).set(
+      { generation: FieldValue.increment(1) },
+      { merge: true },
+    );
     const jobs = await this.scopeRef(actor, scopeId)
       .collection('indexJobs')
       .where('recordIds', 'array-contains', recordId)
@@ -2239,7 +2250,11 @@ export class FirestoreMemoryRecordRepository {
       transaction.set(state.indexStateRef, { indexedThrough: state.indexedThrough });
       // The successors' index entries are written here, not by the index worker, so the
       // current index is rebuilt from them before recall uses it again.
-      transaction.set(state.indexStateRef.parent.doc('currentIndex'), { complete: false });
+      transaction.set(
+        state.indexStateRef.parent.doc('currentIndex'),
+        { complete: false, generation: FieldValue.increment(1) },
+        { merge: true },
+      );
       transaction.create(state.changeRef, state.changePayload);
       transaction.create(state.jobRef, state.jobPayload);
       transaction.create(state.auditRef, state.auditPayload);
@@ -3992,6 +4007,24 @@ export class FirestoreMemoryRecordRepository {
 
   private indexEntryId(recordId: string, revision: number): string {
     return id(`${recordId}\u0000${revision}`);
+  }
+
+  /**
+   * Forgets the in-memory copy of a scope's current index and, inside a transaction, moves the
+   * scope's generation so that every other process drops its copy on its next recall. Called
+   * wherever an entry is removed, so derived data of a forgotten record does not outlive it.
+   */
+  private dropCurrentIndexSnapshots(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    transaction?: Transaction,
+  ): void {
+    this.currentIndexCache.delete(this.scopeRef(actor, scopeId).path);
+    transaction?.set(
+      this.currentIndexStateRef(actor, scopeId),
+      { generation: FieldValue.increment(1) },
+      { merge: true },
+    );
   }
 
   private currentIndexCollection(actor: VerifiedActorCapability, scopeId: string) {
