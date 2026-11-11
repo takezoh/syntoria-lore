@@ -7,6 +7,14 @@ import {
 } from '@google-cloud/firestore';
 import { createFirestoreClient } from './firestore-client.js';
 import {
+  MIN_TERM_COVERAGE,
+  normalizeSearchText,
+  searchableText,
+  termCoverage,
+  tokenizeSearchText,
+  type RecallMatchReason,
+} from './search-terms.js';
+import {
   deriveAuthority,
   isSourceReference,
   isMemoryRecord,
@@ -150,6 +158,8 @@ export interface SearchIndexEntry {
   readonly revision: number;
   readonly compartmentIds: readonly string[];
   readonly terms: readonly string[];
+  /** The term-derivation rule that produced `terms`; absent on entries written before it existed. */
+  readonly termsVersion?: number;
   readonly subjectIds: readonly string[];
   readonly aliases: readonly string[];
   readonly embedding: {
@@ -216,6 +226,8 @@ export const sourceMetadataMigrationVerify = Symbol('sourceMetadataMigrationVeri
 
 export interface RecallCandidateQuery {
   readonly terms: readonly string[];
+  /** The normalized query text, used to find subjects and aliases it mentions. */
+  readonly text?: string;
   readonly recordId?: string;
   readonly subjectIds: readonly string[];
   readonly aliases: readonly string[];
@@ -234,6 +246,7 @@ export interface RecallCandidateResult {
   readonly items: readonly {
     readonly record: MemoryRecord;
     readonly score: number;
+    readonly matched: readonly RecallMatchReason[];
     readonly freshness: 'current' | 'recent-overlay' | 'stale-index';
   }[];
   readonly insufficiencies: readonly string[];
@@ -528,23 +541,6 @@ export function authorizationDocumentId(
 
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
-}
-
-function recallTokens(text: string): string[] {
-  const normalized = text.normalize('NFKC').toLocaleLowerCase('und');
-  const tokens = new Set(
-    (normalized.match(/[\p{L}\p{N}]+/gu) ?? []).filter(
-      (word) => !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(word),
-    ),
-  );
-  for (const run of normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu) ??
-    []) {
-    const points = [...run];
-    if (points.length === 1) tokens.add(points[0]!);
-    for (let index = 0; index + 1 < points.length; index += 1)
-      tokens.add(`${points[index]}${points[index + 1]}`);
-  }
-  return [...tokens];
 }
 
 function isSearchIndexEntry(value: unknown): value is SearchIndexEntry {
@@ -1157,13 +1153,13 @@ export class FirestoreMemoryRecordRepository {
     if (latestChange > indexedThrough) insufficiencies.add('index-lag');
 
     const indexDocs = indexSnapshot.docs.slice(0, maxIndexEntries);
+    // Index entries nominate candidates and carry the vector score of their revision. Names and
+    // terms are matched against the committed record below, so entries whose terms were derived
+    // by an older rule still rank correctly.
     const candidateScores = new Map<
       string,
       { revisionScores: Map<number, number>; overlay: boolean; exactId: boolean }
     >();
-    const queryTerms = new Set(query.terms);
-    const querySubjects = new Set(query.subjectIds);
-    const queryAliases = new Set(query.aliases);
     const cosine = (left: readonly number[], right: readonly number[]): number => {
       if (left.length === 0 || left.length !== right.length) return 0;
       let dot = 0;
@@ -1185,34 +1181,22 @@ export class FirestoreMemoryRecordRepository {
       const entry = raw;
       if (document.id !== this.indexEntryId(entry.recordId, entry.revision)) continue;
       if (!containsOnly(entry.compartmentIds, actor.compartmentAllowance)) continue;
-      const termMatches = entry.terms.filter((term) => queryTerms.has(term)).length;
-      const exactId = entry.recordId === query.recordId;
-      const subjectMatch = entry.subjectIds.some((subject) => querySubjects.has(subject));
-      const aliasMatch = entry.aliases.some((alias) => queryAliases.has(alias));
       const vectorScore =
         query.embedding &&
         entry.embedding?.modelId === query.embedding.modelId &&
         entry.embedding.dimension === query.embedding.dimension
           ? cosine(entry.embedding.values, query.embedding.values)
           : 0;
-      const score =
-        (exactId ? 1000 : 0) +
-        (subjectMatch ? 100 : 0) +
-        (aliasMatch ? 80 : 0) +
-        termMatches * 2 +
-        vectorScore;
-      if (score > 0) {
-        const candidate = candidateScores.get(entry.recordId) ?? {
-          revisionScores: new Map<number, number>(),
-          overlay: false,
-          exactId: false,
-        };
-        candidate.revisionScores.set(
-          entry.revision,
-          Math.max(candidate.revisionScores.get(entry.revision) ?? 0, score),
-        );
-        candidateScores.set(entry.recordId, candidate);
-      }
+      const candidate = candidateScores.get(entry.recordId) ?? {
+        revisionScores: new Map<number, number>(),
+        overlay: false,
+        exactId: false,
+      };
+      candidate.revisionScores.set(
+        entry.revision,
+        Math.max(candidate.revisionScores.get(entry.revision) ?? 0, vectorScore),
+      );
+      candidateScores.set(entry.recordId, candidate);
     }
     if (query.recordId) {
       const candidate = candidateScores.get(query.recordId) ?? {
@@ -1237,7 +1221,7 @@ export class FirestoreMemoryRecordRepository {
         overlay: true,
       });
     const requestedIds = [...candidateScores.keys()];
-    const visible = await this.firestore.runTransaction(async (transaction) => {
+    const hydrated = await this.firestore.runTransaction(async (transaction) => {
       const auth = await transaction.get(this.authorizationRef(actor, scopeId));
       const authorization = this.assertCurrentAuthorization(
         actor,
@@ -1256,7 +1240,12 @@ export class FirestoreMemoryRecordRepository {
           transaction.get(this.recordRef(actor, scopeId, recordId).collection('revisions')),
         ),
       );
-      const results: RecallCandidateResult['items'][number][] = [];
+      const results: {
+        record: MemoryRecord;
+        vector: number;
+        exactId: boolean;
+        freshness: 'current' | 'recent-overlay';
+      }[] = [];
       requestedIds.forEach((recordId, index) => {
         const snapshot = snapshots[index];
         const suppression = suppressions[index];
@@ -1307,41 +1296,55 @@ export class FirestoreMemoryRecordRepository {
           return;
         }
         const candidate = candidateScores.get(recordId)!;
-        let score = candidate.revisionScores.get(record.revision.revision) ?? 0;
-        if (candidate.overlay) {
-          const words = recallTokens(
-            [
-              record.title,
-              record.statement,
-              ...record.subjectIds,
-              ...record.aliases.map((alias) => alias.value),
-            ].join(' '),
-          );
-          const termMatches = words.filter((term) => query.terms.includes(term)).length;
-          const exactId = candidate.exactId;
-          const subjectMatch = record.subjectIds.some((subject) =>
-            query.subjectIds.includes(subject),
-          );
-          const aliasMatch = record.aliases.some((alias) =>
-            query.aliases.includes(alias.value.normalize('NFKC').toLocaleLowerCase('und')),
-          );
-          score = Math.max(
-            score,
-            (exactId ? 1000 : 0) +
-              (subjectMatch ? 100 : 0) +
-              (aliasMatch ? 80 : 0) +
-              termMatches * 2,
-          );
-        }
-        if (score <= 0) return;
-        const fresh = !candidate.revisionScores.has(record.revision.revision)
-          ? 'recent-overlay'
-          : 'current';
-        if (candidate.overlay && !candidate.revisionScores.has(record.revision.revision))
-          insufficiencies.add('embedding-or-index-entry-missing');
-        results.push({ record, score, freshness: fresh });
+        const indexed = candidate.revisionScores.has(record.revision.revision);
+        if (candidate.overlay && !indexed) insufficiencies.add('embedding-or-index-entry-missing');
+        results.push({
+          record,
+          vector: Math.max(candidate.revisionScores.get(record.revision.revision) ?? 0, 0),
+          exactId: candidate.exactId,
+          freshness: indexed ? 'current' : 'recent-overlay',
+        });
       });
       return results;
+    });
+    const recordTerms = hydrated.map(
+      (item) => new Set(tokenizeSearchText(searchableText(item.record))),
+    );
+    const coverage = termCoverage(query.terms, recordTerms);
+    const queryText = query.text ?? '';
+    const mentions = (name: string): boolean => {
+      const normalized = normalizeSearchText(name).trim();
+      return normalized.length >= 2 && queryText.includes(normalized);
+    };
+    const visible: RecallCandidateResult['items'][number][] = [];
+    hydrated.forEach((item, index) => {
+      const subjectMatch = item.record.subjectIds.some(
+        (subject) => query.subjectIds.includes(subject) || mentions(subject),
+      );
+      const aliasMatch = item.record.aliases.some(
+        (alias) =>
+          query.aliases.includes(normalizeSearchText(alias.value)) || mentions(alias.value),
+      );
+      const termShare = coverage[index] ?? 0;
+      const termMatch = termShare >= MIN_TERM_COVERAGE;
+      const matched: RecallMatchReason[] = [];
+      if (item.exactId) matched.push('record-id');
+      if (subjectMatch) matched.push('subject');
+      if (aliasMatch) matched.push('alias');
+      if (termMatch) matched.push('terms');
+      if (item.vector > 0) matched.push('semantic');
+      if (matched.length === 0) return;
+      visible.push({
+        record: item.record,
+        score:
+          (item.exactId ? 1000 : 0) +
+          (subjectMatch ? 100 : 0) +
+          (aliasMatch ? 80 : 0) +
+          (termMatch ? termShare * 10 : 0) +
+          item.vector,
+        matched,
+        freshness: item.freshness,
+      });
     });
     visible.sort(
       (left, right) =>
@@ -1349,8 +1352,11 @@ export class FirestoreMemoryRecordRepository {
         authorityRank(right.record) - authorityRank(left.record) ||
         left.record.id.localeCompare(right.record.id),
     );
+    const items = visible.slice(0, query.limit);
+    if (items.length > 0 && items.every((item) => item.matched.every((m) => m === 'semantic')))
+      insufficiencies.add('semantic-match-only');
     return {
-      items: visible.slice(0, query.limit),
+      items,
       insufficiencies: [...insufficiencies].sort(),
       indexLag: { indexedThrough, latestChange },
     };

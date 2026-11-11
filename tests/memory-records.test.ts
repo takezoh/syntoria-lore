@@ -8,6 +8,7 @@ import {
   isSourceReference,
   selectCurrentView,
   selectHistoricalView,
+  termCoverage,
   tokenizeSearchText,
   type AuthorizedChange,
   type MemoryRecord,
@@ -70,6 +71,34 @@ describe('Memory Record value model', () => {
     expect(tokenizeSearchText('Memory ＲＥＣＯＲＤＳ 東京で記憶を使う')).toEqual(
       ['memory', 'records', '使う', 'を使', '京で', '東京', '記憶', '憶を', 'で記'].sort(),
     );
+  });
+
+  it('cuts terms where the script changes and keeps long vowels inside a katakana name', () => {
+    // A Latin name written directly before Japanese text is a term of its own.
+    expect(tokenizeSearchText('Acmeの提示金額は80万円')).toEqual(
+      ['80', 'acme', 'の提', '提示', '示金', '金額', '額は', '万円'].sort(),
+    );
+    // The prolonged sound mark does not end the run.
+    expect(tokenizeSearchText('アークメーカー')).toEqual(
+      ['アー', 'ーク', 'クメ', 'メー', 'ーカ', 'カー'].sort(),
+    );
+  });
+
+  it('weights query terms by rarity and reports the matched share of the query', () => {
+    const records = [
+      new Set(tokenizeSearchText('Acmeの提示金額')),
+      new Set(tokenizeSearchText('教材の進捗')),
+      new Set(tokenizeSearchText('開発の進捗')),
+      new Set(tokenizeSearchText('学習の進捗')),
+    ];
+    const [named, ...common] = termCoverage(tokenizeSearchText('Acme 進捗'), records);
+    // The rare name outweighs a term that most records contain.
+    expect(named).toBeGreaterThan(common[0]!);
+    expect(common[0]).toBeLessThan(0.5);
+    // A query term that no record contains still lowers the share of what matched.
+    const [partial] = termCoverage(tokenizeSearchText('Acme Unknown'), records);
+    expect(partial).toBeLessThan(1);
+    expect(termCoverage([], records)).toEqual([0, 0, 0, 0]);
   });
 
   it('records embedding model and dimension and rejects an inconsistent provider vector', () => {

@@ -839,6 +839,95 @@ describe('Firestore Memory Record repository', () => {
     expect(await repository.getCurrent(actor, 'scope-demo', proposal.id)).toBeNull();
   });
 
+  it('ranks a named record above records that share only common terms and reports why each matched', async () => {
+    const { actor, repository, projectId, deletionLedger } = await context([]);
+    const fact = (id: string, title: string, statement: string, aliases: string[] = []) =>
+      record({
+        id,
+        title,
+        statement,
+        kind: 'fact',
+        details: { kind: 'fact', subject: 'Example business', claim: statement },
+        subjectIds: ['Example business'],
+        aliases: aliases.map((value) => ({ value, from: null, until: null })),
+        compartmentIds: [],
+      });
+    await repository.commit(actor, {
+      scopeId: 'scope-demo',
+      idempotencyKey: 'named-recall',
+      changes: [
+        {
+          kind: 'create',
+          record: fact(
+            'named',
+            'Acmeの提示金額の食い違い',
+            'Acmeの提示金額は2か月総額80万円と80万円×2か月の記載で矛盾している。',
+            ['アクメーロジック'],
+          ),
+        },
+        {
+          kind: 'create',
+          record: fact('study', '教材の進捗', '教材の購入は済み、読了の進捗は未確認。'),
+        },
+        {
+          kind: 'create',
+          record: fact('agents', '開発の進捗', '開発エージェントの比較は進捗を分けて評価する。'),
+        },
+        {
+          kind: 'create',
+          record: fact('plan', '計画の進捗', '既存実装の進捗に依存しない新規計画とする。'),
+        },
+      ],
+    });
+    const workerActor = {
+      ...actor,
+      actorKind: 'worker',
+      principalId: 'worker-demo',
+    } as unknown as VerifiedActorCapability;
+    await seedAuthorization(projectId, workerActor, []);
+    const workerRepository = createFirestoreMemoryRecordRepository({
+      projectId,
+      cursorSecret: secret,
+      deletionLedger,
+    });
+    repositories.push(workerRepository);
+    // Every text embeds to the same vector, so similarity cannot tell the records apart.
+    const embeddings = {
+      async embed() {
+        return { modelId: 'flat-test', dimension: 2, values: [1, 1] };
+      },
+    };
+    expect(
+      await new MemoryIndexWorker(workerRepository, embeddings).runPending(
+        workerActor,
+        'scope-demo',
+      ),
+    ).toMatchObject({ completed: 1, failed: 0 });
+    const recall = new MemoryRecallService(repository, embeddings);
+    const at = {
+      validAt: '2026-03-01T00:00:00.000Z',
+      knownAt: '2026-03-01T00:00:00.000Z',
+      byteBudget: 20_000,
+    };
+
+    const byName = await recall.recall(actor, 'scope-demo', { ...at, text: 'Acme' });
+    expect(byName.items[0]?.record.id).toBe('named');
+    expect(byName.items[0]?.matched).toContain('terms');
+    expect(byName.items.slice(1).every((item) => !item.matched.includes('terms'))).toBe(true);
+
+    const question = await recall.recall(actor, 'scope-demo', {
+      ...at,
+      text: 'アクメーロジックの案件の進捗を教えて',
+    });
+    expect(question.items[0]?.record.id).toBe('named');
+    expect(question.items[0]?.matched).toContain('alias');
+    expect(question.insufficiencies).not.toContain('semantic-match-only');
+
+    const unknown = await recall.recall(actor, 'scope-demo', { ...at, text: 'Globex' });
+    expect(unknown.items.every((item) => item.matched.join() === 'semantic')).toBe(true);
+    expect(unknown.insufficiencies).toContain('semantic-match-only');
+  }, 30_000);
+
   it('recalls indexed proposals only when selected and still enforces rights, allowance, and suppression', async () => {
     const { actor, repository, projectId, deletionLedger } = await context(
       ['work'],

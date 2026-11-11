@@ -528,6 +528,12 @@ export {
   type RecallItem,
   type RecallQuery,
 } from './derived-recall.js';
+export {
+  MIN_TERM_COVERAGE,
+  SEARCH_TERMS_VERSION,
+  termCoverage,
+  type RecallMatchReason,
+} from './search-terms.js';
 
 export interface AuthorizedChange {
   writer: Writer;

@@ -143,6 +143,7 @@ export interface RecallView {
     readonly authority: Authority;
     readonly freshness: string;
     readonly score: number;
+    readonly matched: readonly string[];
     readonly record: MemoryRecord;
   }[];
   readonly insufficiencies: readonly string[];
@@ -595,6 +596,7 @@ export class MemoryService {
           authority: item.authority,
           freshness: item.freshness,
           score: item.score,
+          matched: item.matched,
           record: item.record,
         })),
         insufficiencies: embeddingFailed

@@ -1,4 +1,11 @@
 import { deriveAuthority, type MemoryRecord } from './index.js';
+import {
+  normalizeSearchText,
+  searchableText,
+  SEARCH_TERMS_VERSION,
+  tokenizeSearchText,
+  type RecallMatchReason,
+} from './search-terms.js';
 import type {
   FirestoreMemoryRecordRepository,
   IndexJob,
@@ -31,6 +38,8 @@ export interface RecallItem {
   readonly record: MemoryRecord;
   readonly authority: 'user' | 'proposal';
   readonly score: number;
+  /** Why the record was returned; `semantic` alone means no name or term of the query matched. */
+  readonly matched: readonly RecallMatchReason[];
   readonly freshness: 'current' | 'recent-overlay' | 'stale-index';
 }
 
@@ -40,25 +49,6 @@ export interface ContextPack {
   readonly insufficiencies: readonly string[];
   readonly indexLag: { readonly indexedThrough: number; readonly latestChange: number };
   readonly emptyMeaning: 'no-supported-match';
-}
-
-export function tokenizeSearchText(text: string): string[] {
-  const normalized = text.normalize('NFKC').toLocaleLowerCase('und');
-  const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
-  const tokens = new Set(
-    words.filter(
-      (word) => !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u.test(word),
-    ),
-  );
-  const japaneseRuns =
-    normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu) ?? [];
-  for (const run of japaneseRuns) {
-    const points = [...run];
-    if (points.length === 1) tokens.add(points[0]!);
-    for (let index = 0; index + 1 < points.length; index += 1)
-      tokens.add(`${points[index]}${points[index + 1]}`);
-  }
-  return [...tokens].sort();
 }
 
 export function indexEntryFor(record: MemoryRecord, embedding: Embedding): SearchIndexEntry {
@@ -74,19 +64,14 @@ export function indexEntryFor(record: MemoryRecord, embedding: Embedding): Searc
     throw new TypeError(
       'Embedding must have a model ID and a finite vector of the declared dimension',
     );
-  const text = [
-    record.title,
-    record.statement,
-    ...record.subjectIds,
-    ...record.aliases.map((item) => item.value),
-  ].join(' ');
   return {
     recordId: record.id,
     revision: record.revision.revision,
     compartmentIds: [...record.compartmentIds],
-    terms: tokenizeSearchText(text),
+    terms: tokenizeSearchText(searchableText(record)),
+    termsVersion: SEARCH_TERMS_VERSION,
     subjectIds: [...record.subjectIds],
-    aliases: record.aliases.map((item) => item.value.normalize('NFKC').toLocaleLowerCase('und')),
+    aliases: record.aliases.map((item) => normalizeSearchText(item.value)),
     embedding: {
       modelId: embedding.modelId,
       dimension: embedding.dimension,
@@ -179,11 +164,10 @@ export class MemoryRecallService {
     const embedding = terms.length > 0 ? await this.embeddings.embed(query.text ?? '') : undefined;
     const result = await this.repository.readRecallCandidates(actor, scopeId, {
       terms,
+      text: normalizeSearchText(query.text ?? ''),
       ...(query.recordId === undefined ? {} : { recordId: query.recordId }),
       subjectIds: query.subjectIds ?? [],
-      aliases: (query.aliases ?? []).map((alias) =>
-        alias.normalize('NFKC').toLocaleLowerCase('und'),
-      ),
+      aliases: (query.aliases ?? []).map(normalizeSearchText),
       ...(embedding === undefined ? {} : { embedding }),
       validAt: query.validAt,
       knownAt: query.knownAt ?? new Date().toISOString(),
@@ -201,6 +185,7 @@ export class MemoryRecallService {
           approval: item.record.revision.approval,
         }),
         score: item.score,
+        matched: item.matched,
         freshness: item.freshness,
       } satisfies RecallItem;
       if (
@@ -225,6 +210,7 @@ export class MemoryRecallService {
 }
 
 export type { IndexJob };
+export { tokenizeSearchText };
 
 function measuredPack(
   items: readonly RecallItem[],
