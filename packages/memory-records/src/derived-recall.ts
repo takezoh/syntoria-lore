@@ -30,6 +30,8 @@ export interface RecallQuery {
   readonly validAt: string;
   readonly knownAt?: string;
   readonly includeProposals?: boolean;
+  /** True for a question about a past time. */
+  readonly history?: boolean;
   readonly byteBudget: number;
   readonly limit?: number;
 }
@@ -139,6 +141,15 @@ export class MemoryIndexWorker {
     }
     return { completed, failed, failures };
   }
+
+  /** Extends the current index by a bounded number of records; see the repository method. */
+  async advanceCurrentIndex(
+    actor: Parameters<FirestoreMemoryRecordRepository['advanceCurrentIndex']>[0],
+    scopeId: string,
+    limit = 100,
+  ): Promise<{ complete: boolean; written: number }> {
+    return this.repository.advanceCurrentIndex(actor, scopeId, limit);
+  }
 }
 
 export class MemoryRecallService {
@@ -172,6 +183,7 @@ export class MemoryRecallService {
       validAt: query.validAt,
       knownAt: query.knownAt ?? new Date().toISOString(),
       ...(query.includeProposals === undefined ? {} : { includeProposals: query.includeProposals }),
+      ...(query.history === undefined ? {} : { history: query.history }),
       limit: query.limit ?? 10,
     });
     const insufficiencies = new Set(result.insufficiencies);

@@ -583,6 +583,7 @@ export class MemoryService {
           validAt,
           knownAt,
           includeProposals: input.includeProposals ?? true,
+          history: input.mode === 'historical',
           byteBudget: mode.byteBudget,
           limit: input.limit ?? mode.limit,
         },
@@ -702,6 +703,13 @@ export class MemoryService {
           reasons: result.failures.map((failure) => failure.reason),
         });
       }
+      const current = await this.indexer.advanceCurrentIndex(worker, access.scopeId);
+      if (current.written > 0)
+        this.log({
+          event: 'memory.index.current_advanced',
+          written: current.written,
+          complete: current.complete,
+        });
     } catch (error) {
       this.log({
         event: 'memory.after_write.failed',

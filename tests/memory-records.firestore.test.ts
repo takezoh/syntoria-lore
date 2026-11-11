@@ -926,6 +926,88 @@ describe('Firestore Memory Record repository', () => {
     const unknown = await recall.recall(actor, 'scope-demo', { ...at, text: 'Globex' });
     expect(unknown.items.every((item) => item.matched.join() === 'semantic')).toBe(true);
     expect(unknown.insufficiencies).toContain('semantic-match-only');
+
+    // The same questions give the same answers from the current index, one entry per record.
+    // Entries written before the current index existed are rebuilt from the per-revision
+    // index, so the entries the worker just wrote are removed first.
+    for (const recordId of ['named', 'study', 'agents', 'plan']) {
+      const removed = await fetch(
+        `http://${host}/v1/projects/${projectId}/databases/(default)/documents/memoryTenants/${encodeId('tenant-demo')}/scopes/${encodeId('scope-demo')}/currentIndex/${encodeId(recordId)}`,
+        { method: 'DELETE', headers: { authorization: 'Bearer owner' } },
+      );
+      expect(removed.ok).toBe(true);
+    }
+    const indexer = new MemoryIndexWorker(workerRepository, embeddings);
+    expect(await indexer.advanceCurrentIndex(workerActor, 'scope-demo', 3)).toEqual({
+      complete: false,
+      written: 3,
+    });
+    expect(await indexer.advanceCurrentIndex(workerActor, 'scope-demo', 3)).toEqual({
+      complete: true,
+      written: 1,
+    });
+    expect(await indexer.advanceCurrentIndex(workerActor, 'scope-demo', 3)).toEqual({
+      complete: true,
+      written: 0,
+    });
+    const currentByName = await recall.recall(actor, 'scope-demo', { ...at, text: 'Acme' });
+    expect(currentByName.items[0]?.record.id).toBe('named');
+    expect(currentByName.items[0]?.matched).toContain('terms');
+    expect(currentByName.items[0]?.freshness).toBe('current');
+    const currentQuestion = await recall.recall(actor, 'scope-demo', {
+      ...at,
+      text: 'アクメーロジックの案件の進捗を教えて',
+    });
+    expect(currentQuestion.items[0]?.record.id).toBe('named');
+    expect(currentQuestion.items[0]?.matched).toContain('alias');
+    const currentUnknown = await recall.recall(actor, 'scope-demo', { ...at, text: 'Globex' });
+    expect(currentUnknown.insufficiencies).toContain('semantic-match-only');
+
+    // A new revision replaces the record's entry instead of adding one, and recall follows it.
+    const renamed = fact(
+      'named',
+      'Initechの提示金額の食い違い',
+      'Initechの提示金額は記載が矛盾している。',
+    );
+    await repository.commit(actor, {
+      scopeId: 'scope-demo',
+      idempotencyKey: 'named-recall-refine',
+      changes: [
+        {
+          kind: 'refine',
+          expectedRevision: 1,
+          record: {
+            ...renamed,
+            revision: {
+              ...renamed.revision,
+              revision: 2,
+              changeKind: 'refine',
+              recordedAt: '2026-02-01T00:00:00.000Z',
+            },
+          },
+        },
+      ],
+    });
+    // Until the change is indexed it is found through the overlay of unindexed changes.
+    const pending = await recall.recall(actor, 'scope-demo', { ...at, text: 'Initech' });
+    expect(pending.items[0]?.record.revision.revision).toBe(2);
+    expect(pending.items[0]?.freshness).toBe('recent-overlay');
+    expect(await indexer.runPending(workerActor, 'scope-demo')).toMatchObject({ completed: 1 });
+    const indexed = await recall.recall(actor, 'scope-demo', { ...at, text: 'Initech' });
+    expect(indexed.items[0]?.record.id).toBe('named');
+    expect(indexed.items[0]?.matched).toContain('terms');
+    expect(indexed.items[0]?.freshness).toBe('current');
+    const former = await recall.recall(actor, 'scope-demo', { ...at, text: 'Acme' });
+    expect(former.items.every((item) => !item.matched.includes('terms'))).toBe(true);
+    // A question about the past still reads every revision's entry.
+    const past = await recall.recall(actor, 'scope-demo', {
+      ...at,
+      knownAt: '2026-01-15T00:00:00.000Z',
+      history: true,
+      text: 'Acme',
+    });
+    expect(past.items[0]?.record.revision.revision).toBe(1);
+    expect(past.items[0]?.matched).toContain('terms');
   }, 30_000);
 
   it('recalls indexed proposals only when selected and still enforces rights, allowance, and suppression', async () => {

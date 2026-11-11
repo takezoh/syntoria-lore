@@ -57,27 +57,43 @@ export type RecallMatchReason = 'record-id' | 'subject' | 'alias' | 'terms' | 's
 export const MIN_TERM_COVERAGE = 0.15;
 
 /**
- * Weights each query term by how rare it is among the candidates and returns, per candidate,
- * the matched share of the query's total weight (0 to 1). A term that many records contain
- * therefore counts for little, and a query term that no record contains still lowers the share.
+ * Weights each query term by how rare it is among the given term sets. A term that many records
+ * contain counts for little; a term that none contains gets the largest weight, so it still
+ * lowers the matched share of a query.
  */
+export function termWeights(
+  queryTerms: readonly string[],
+  termSets: readonly ReadonlySet<string>[],
+): number[] {
+  const total = termSets.length;
+  return queryTerms.map((term) => {
+    let containing = 0;
+    for (const terms of termSets) if (terms.has(term)) containing += 1;
+    return Math.log(1 + total / Math.max(containing, 0.5));
+  });
+}
+
+/** The matched share (0 to 1) of the query's total weight that one term set contains. */
+export function weightedShare(
+  queryTerms: readonly string[],
+  weights: readonly number[],
+  terms: ReadonlySet<string>,
+): number {
+  let matched = 0;
+  let sum = 0;
+  queryTerms.forEach((term, index) => {
+    const weight = weights[index] ?? 0;
+    sum += weight;
+    if (terms.has(term)) matched += weight;
+  });
+  return sum === 0 ? 0 : matched / sum;
+}
+
+/** {@link termWeights} over the candidates themselves, then each candidate's {@link weightedShare}. */
 export function termCoverage(
   queryTerms: readonly string[],
   candidateTerms: readonly ReadonlySet<string>[],
 ): number[] {
-  if (queryTerms.length === 0) return candidateTerms.map(() => 0);
-  const total = candidateTerms.length;
-  const weights = queryTerms.map((term) => {
-    let containing = 0;
-    for (const terms of candidateTerms) if (terms.has(term)) containing += 1;
-    return Math.log(1 + total / Math.max(containing, 0.5));
-  });
-  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
-  return candidateTerms.map((terms) => {
-    let matched = 0;
-    queryTerms.forEach((term, index) => {
-      if (terms.has(term)) matched += weights[index]!;
-    });
-    return weightSum === 0 ? 0 : matched / weightSum;
-  });
+  const weights = termWeights(queryTerms, candidateTerms);
+  return candidateTerms.map((terms) => weightedShare(queryTerms, weights, terms));
 }

@@ -1,5 +1,6 @@
 import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import {
+  FieldPath,
   type DocumentReference,
   type DocumentSnapshot,
   type Firestore,
@@ -10,8 +11,10 @@ import {
   MIN_TERM_COVERAGE,
   normalizeSearchText,
   searchableText,
-  termCoverage,
+  SEARCH_TERMS_VERSION,
+  termWeights,
   tokenizeSearchText,
+  weightedShare,
   type RecallMatchReason,
 } from './search-terms.js';
 import {
@@ -239,6 +242,8 @@ export interface RecallCandidateQuery {
   readonly validAt: string;
   readonly knownAt: string;
   readonly includeProposals?: boolean;
+  /** True when the query asks about a past time; such a query needs every revision's entry. */
+  readonly history?: boolean;
   readonly limit: number;
 }
 
@@ -774,8 +779,23 @@ function decodeCursor(cursor: string, secret: Buffer): CursorPayload {
  * The only module that may import the Firestore client. Actor capabilities must come from the
  * authenticated authorization path; persisted authorization state is re-read for every operation.
  */
+/** Index entries scanned per recall: one per record revision in the per-revision index. */
+const MAX_REVISION_INDEX_ENTRIES = 1000;
+/** Index entries scanned per recall in the current index, which holds one entry per record. */
+const MAX_CURRENT_INDEX_ENTRIES = 5000;
+const MAX_CACHED_INDEX_SCOPES = 16;
+
 export class FirestoreMemoryRecordRepository {
   private readonly cursorSecret: Buffer;
+  /**
+   * Current-index entries per scope, kept while the scope's index watermark and backfill marker
+   * are unchanged. Entries are filtered by the caller's allowance on every use, and every
+   * result is still rechecked against the committed record.
+   */
+  private readonly currentIndexCache = new Map<
+    string,
+    { key: string; entries: readonly SearchIndexEntry[]; overLimit: boolean }
+  >();
 
   constructor(
     private readonly firestore: Firestore,
@@ -1028,12 +1048,20 @@ export class FirestoreMemoryRecordRepository {
       )
         return false;
       const indexRef = this.indexEntryRef(actor, scopeId, entry.recordId, entry.revision);
-      const prior = await transaction.get(indexRef);
+      const currentRef = this.currentIndexRef(actor, scopeId, entry.recordId);
+      const [prior, currentEntry] = await Promise.all([
+        transaction.get(indexRef),
+        transaction.get(currentRef),
+      ]);
       if (prior.exists) return false;
-      transaction.create(indexRef, {
-        ...entry,
-        updatedAt: new Date().toISOString(),
-      });
+      const updatedAt = new Date().toISOString();
+      transaction.create(indexRef, { ...entry, updatedAt });
+      // The current index holds one entry per record, for the head revision only.
+      if (
+        record.revision.revision === entry.revision &&
+        Number(currentEntry.get('revision') ?? 0) <= entry.revision
+      )
+        transaction.set(currentRef, { ...entry, updatedAt });
       return true;
     });
   }
@@ -1063,6 +1091,7 @@ export class FirestoreMemoryRecordRepository {
       for (const document of index.docs) {
         if (Number(document.get('revision')) <= expectedRevision) transaction.delete(document.ref);
       }
+      transaction.delete(this.currentIndexRef(actor, scopeId, recordId));
       return true;
     });
   }
@@ -1108,6 +1137,144 @@ export class FirestoreMemoryRecordRepository {
     });
   }
 
+  private async readRevisionIndex(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+  ): Promise<{ entries: SearchIndexEntry[]; overLimit: boolean; invalid: boolean }> {
+    const snapshot = await this.indexCollection(actor, scopeId)
+      .limit(MAX_REVISION_INDEX_ENTRIES + 1)
+      .get();
+    const entries: SearchIndexEntry[] = [];
+    let invalid = false;
+    for (const document of snapshot.docs.slice(0, MAX_REVISION_INDEX_ENTRIES)) {
+      const entry: unknown = document.data();
+      if (!isSearchIndexEntry(entry)) invalid = true;
+      else if (document.id === this.indexEntryId(entry.recordId, entry.revision))
+        entries.push(entry);
+    }
+    return { entries, overLimit: snapshot.size > MAX_REVISION_INDEX_ENTRIES, invalid };
+  }
+
+  private async readCurrentIndex(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    key: string,
+  ): Promise<{ entries: readonly SearchIndexEntry[]; overLimit: boolean; invalid: boolean }> {
+    const path = this.scopeRef(actor, scopeId).path;
+    const cached = this.currentIndexCache.get(path);
+    if (cached?.key === key) return { ...cached, invalid: false };
+    const snapshot = await this.currentIndexCollection(actor, scopeId)
+      .limit(MAX_CURRENT_INDEX_ENTRIES + 1)
+      .get();
+    const entries: SearchIndexEntry[] = [];
+    let invalid = false;
+    for (const document of snapshot.docs.slice(0, MAX_CURRENT_INDEX_ENTRIES)) {
+      const entry: unknown = document.data();
+      if (!isSearchIndexEntry(entry)) invalid = true;
+      else if (document.id === id(entry.recordId)) entries.push(entry);
+    }
+    const overLimit = snapshot.size > MAX_CURRENT_INDEX_ENTRIES;
+    // An invalid entry is reported on every read, so such a snapshot is not kept.
+    if (!invalid) {
+      this.currentIndexCache.delete(path);
+      this.currentIndexCache.set(path, { key, entries, overLimit });
+      if (this.currentIndexCache.size > MAX_CACHED_INDEX_SCOPES)
+        this.currentIndexCache.delete(this.currentIndexCache.keys().next().value!);
+    }
+    return { entries, overLimit, invalid };
+  }
+
+  /**
+   * Builds current-index entries for records that lack one, a bounded number per call, from
+   * each record's head-revision entry in the per-revision index. Recall uses the current index
+   * only once a pass has covered the whole scope. A record the worker may not read keeps the
+   * scope on the per-revision index.
+   */
+  async advanceCurrentIndex(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    limit = 100,
+  ): Promise<{ complete: boolean; written: number }> {
+    assertActor(actor, scopeId);
+    assertWorkerActor(actor);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)
+      throw new MemoryRepositoryError('invalid_change_set', 'Invalid current-index page size');
+    await this.assertRestoreReady(actor, scopeId);
+    const stateRef = this.currentIndexStateRef(actor, scopeId);
+    const [authorization, state] = await Promise.all([
+      this.authorizationRef(actor, scopeId).get(),
+      stateRef.get(),
+    ]);
+    this.assertCurrentAuthorization(
+      actor,
+      authorization.data() as AuthorizationDocument | undefined,
+    );
+    if (state.get('complete') === true) return { complete: true, written: 0 };
+    const cursor: unknown = state.get('cursor');
+    const blocked = state.get('blocked') === true;
+    let page = this.recordCollection(actor, scopeId).orderBy(FieldPath.documentId()).limit(limit);
+    if (typeof cursor === 'string' && cursor.length > 0) page = page.startAfter(cursor);
+    const records = await page.get();
+    let written = 0;
+    let skipped = false;
+    for (const document of records.docs) {
+      const record: unknown = document.data();
+      if (!isMemoryRecord(record) || !this.matchesStoredIdentity(actor, scopeId, record.id, record))
+        continue;
+      if (record.suppressed) continue;
+      if (!containsOnly(record.compartmentIds, actor.compartmentAllowance)) {
+        skipped = true;
+        continue;
+      }
+      const wrote = await this.firestore.runTransaction(async (transaction) => {
+        const currentRef = this.currentIndexRef(actor, scopeId, record.id);
+        const [head, suppression, source, current] = await Promise.all([
+          transaction.get(document.ref),
+          transaction.get(this.suppressionRef(actor, scopeId, record.id)),
+          transaction.get(this.indexEntryRef(actor, scopeId, record.id, record.revision.revision)),
+          transaction.get(currentRef),
+        ]);
+        const stored: unknown = head.data();
+        const entry: unknown = source.data();
+        // A head revision without an entry is still waiting for its index job, which writes
+        // the current entry itself.
+        if (
+          suppression.exists ||
+          !isMemoryRecord(stored) ||
+          stored.revision.revision !== record.revision.revision ||
+          !isSearchIndexEntry(entry) ||
+          Number(current.get('revision') ?? 0) > entry.revision ||
+          (Number(current.get('revision') ?? 0) === entry.revision &&
+            current.get('termsVersion') === SEARCH_TERMS_VERSION)
+        )
+          return false;
+        transaction.set(currentRef, {
+          recordId: entry.recordId,
+          revision: entry.revision,
+          compartmentIds: [...stored.compartmentIds],
+          terms: tokenizeSearchText(searchableText(stored)),
+          termsVersion: SEARCH_TERMS_VERSION,
+          subjectIds: [...stored.subjectIds],
+          aliases: stored.aliases.map((alias) => normalizeSearchText(alias.value)),
+          embedding: entry.embedding,
+          updatedAt: new Date().toISOString(),
+        });
+        return true;
+      });
+      if (wrote) written += 1;
+    }
+    const finished = records.size < limit;
+    const nowBlocked = blocked || skipped;
+    await stateRef.set(
+      finished
+        ? nowBlocked
+          ? { complete: false, blocked: false, cursor: null }
+          : { complete: true, completedAt: new Date().toISOString() }
+        : { complete: false, blocked: nowBlocked, cursor: records.docs.at(-1)?.id ?? null },
+    );
+    return { complete: finished && !nowBlocked, written };
+  }
+
   async readRecallCandidates(
     actor: VerifiedActorCapability,
     scopeId: string,
@@ -1123,16 +1290,13 @@ export class FirestoreMemoryRecordRepository {
       !Number.isFinite(Date.parse(query.knownAt))
     )
       throw new MemoryRepositoryError('invalid_change_set', 'Invalid recall bounds or times');
-    const maxIndexEntries = 1000;
     const maxOverlayChanges = 500;
-    const [authorizationSnapshot, indexSnapshot, stateSnapshot, sequenceSnapshot] =
+    const [authorizationSnapshot, stateSnapshot, sequenceSnapshot, currentState] =
       await Promise.all([
         this.authorizationRef(actor, scopeId).get(),
-        this.indexCollection(actor, scopeId)
-          .limit(maxIndexEntries + 1)
-          .get(),
         this.indexStateRef(actor, scopeId).get(),
         this.sequenceRef(actor, scopeId).get(),
+        this.currentIndexStateRef(actor, scopeId).get(),
       ]);
     this.assertCurrentAuthorization(
       actor,
@@ -1140,22 +1304,32 @@ export class FirestoreMemoryRecordRepository {
     );
     const indexedThrough = Number(stateSnapshot.get('indexedThrough') ?? 0);
     const latestChange = Number(sequenceSnapshot.get('sequence') ?? 0);
-    const changesSnapshot = await this.changeCollection(actor, scopeId)
-      .where('sequence', '>', indexedThrough)
-      .orderBy('sequence')
-      .limit(maxOverlayChanges + 1)
-      .get();
+    const insufficiencies = new Set<string>();
+    // A question about the present needs only each record's head revision, so it reads the
+    // current index once that covers the scope. A question about the past, or a scope still
+    // being backfilled, reads the per-revision index.
+    const useCurrent = query.history !== true && currentState.get('complete') === true;
+    const [index, changesSnapshot] = await Promise.all([
+      useCurrent
+        ? this.readCurrentIndex(
+            actor,
+            scopeId,
+            `${indexedThrough}:${String(currentState.get('completedAt'))}`,
+          )
+        : this.readRevisionIndex(actor, scopeId),
+      this.changeCollection(actor, scopeId)
+        .where('sequence', '>', indexedThrough)
+        .orderBy('sequence')
+        .limit(maxOverlayChanges + 1)
+        .get(),
+    ]);
     const pendingChanges = changesSnapshot.docs;
     const overlayDocs = pendingChanges.slice(0, maxOverlayChanges);
-    const insufficiencies = new Set<string>();
-    if (indexSnapshot.size > maxIndexEntries) insufficiencies.add('index-candidate-limit');
+    if (index.overLimit) insufficiencies.add('index-candidate-limit');
+    if (index.invalid) insufficiencies.add('invalid-index-entry');
     if (pendingChanges.length > maxOverlayChanges) insufficiencies.add('overlay-candidate-limit');
     if (latestChange > indexedThrough) insufficiencies.add('index-lag');
 
-    const indexDocs = indexSnapshot.docs.slice(0, maxIndexEntries);
-    // Index entries nominate candidates and carry the vector score of their revision. Names and
-    // terms are matched against the committed record below, so entries whose terms were derived
-    // by an older rule still rank correctly.
     const candidateScores = new Map<
       string,
       { revisionScores: Map<number, number>; overlay: boolean; exactId: boolean }
@@ -1172,21 +1346,52 @@ export class FirestoreMemoryRecordRepository {
       }
       return a === 0 || b === 0 ? 0 : dot / Math.sqrt(a * b);
     };
-    for (const document of indexDocs) {
-      const raw = document.data();
-      if (!isSearchIndexEntry(raw)) {
-        insufficiencies.add('invalid-index-entry');
-        continue;
-      }
-      const entry = raw;
-      if (document.id !== this.indexEntryId(entry.recordId, entry.revision)) continue;
-      if (!containsOnly(entry.compartmentIds, actor.compartmentAllowance)) continue;
-      const vectorScore =
-        query.embedding &&
-        entry.embedding?.modelId === query.embedding.modelId &&
-        entry.embedding.dimension === query.embedding.dimension
-          ? cosine(entry.embedding.values, query.embedding.values)
-          : 0;
+    const queryText = query.text ?? '';
+    const mentions = (name: string): boolean => {
+      const normalized = normalizeSearchText(name).trim();
+      return normalized.length >= 2 && queryText.includes(normalized);
+    };
+    const permitted = index.entries.filter((entry) =>
+      containsOnly(entry.compartmentIds, actor.compartmentAllowance),
+    );
+    const vectorOf = (entry: SearchIndexEntry): number =>
+      query.embedding &&
+      entry.embedding.modelId === query.embedding.modelId &&
+      entry.embedding.dimension === query.embedding.dimension
+        ? Math.max(cosine(entry.embedding.values, query.embedding.values), 0)
+        : 0;
+    // In the current index every entry's terms follow the current rule, so the entries
+    // themselves rank the candidates and only the best are read from the records.
+    const indexTermSets = useCurrent ? permitted.map((entry) => new Set(entry.terms)) : [];
+    const indexWeights = useCurrent ? termWeights(query.terms, indexTermSets) : [];
+    const nominated = useCurrent
+      ? permitted
+          .map((entry, position) => {
+            const share = weightedShare(query.terms, indexWeights, indexTermSets[position]!);
+            const subject = entry.subjectIds.some(
+              (value) => query.subjectIds.includes(value) || mentions(value),
+            );
+            const alias = entry.aliases.some(
+              (value) => query.aliases.includes(value) || mentions(value),
+            );
+            return {
+              entry,
+              score:
+                (subject ? 100 : 0) +
+                (alias ? 80 : 0) +
+                (share >= MIN_TERM_COVERAGE ? share * 10 : 0) +
+                vectorOf(entry),
+            };
+          })
+          .filter((item) => item.score > 0)
+          .sort(
+            (left, right) =>
+              right.score - left.score || left.entry.recordId.localeCompare(right.entry.recordId),
+          )
+          .slice(0, Math.max(query.limit * 4, 20))
+          .map((item) => item.entry)
+      : permitted;
+    for (const entry of nominated) {
       const candidate = candidateScores.get(entry.recordId) ?? {
         revisionScores: new Map<number, number>(),
         overlay: false,
@@ -1194,7 +1399,7 @@ export class FirestoreMemoryRecordRepository {
       };
       candidate.revisionScores.set(
         entry.revision,
-        Math.max(candidate.revisionScores.get(entry.revision) ?? 0, vectorScore),
+        Math.max(candidate.revisionScores.get(entry.revision) ?? 0, vectorOf(entry)),
       );
       candidateScores.set(entry.recordId, candidate);
     }
@@ -1310,12 +1515,10 @@ export class FirestoreMemoryRecordRepository {
     const recordTerms = hydrated.map(
       (item) => new Set(tokenizeSearchText(searchableText(item.record))),
     );
-    const coverage = termCoverage(query.terms, recordTerms);
-    const queryText = query.text ?? '';
-    const mentions = (name: string): boolean => {
-      const normalized = normalizeSearchText(name).trim();
-      return normalized.length >= 2 && queryText.includes(normalized);
-    };
+    // Rarity comes from the whole current index when it was read, so a record keeps its rank
+    // however few candidates were read; otherwise from the candidates themselves.
+    const weights = useCurrent ? indexWeights : termWeights(query.terms, recordTerms);
+    const coverage = recordTerms.map((terms) => weightedShare(query.terms, weights, terms));
     const visible: RecallCandidateResult['items'][number][] = [];
     hydrated.forEach((item, index) => {
       const subjectMatch = item.record.subjectIds.some(
@@ -1608,6 +1811,7 @@ export class FirestoreMemoryRecordRepository {
       .where('recordId', '==', recordId)
       .get();
     for (const entry of searchEntries.docs) await entry.ref.delete();
+    await this.currentIndexRef(actor, scopeId, recordId).delete();
     const jobs = await this.scopeRef(actor, scopeId)
       .collection('indexJobs')
       .where('recordIds', 'array-contains', recordId)
@@ -2033,6 +2237,9 @@ export class FirestoreMemoryRecordRepository {
       }
       transaction.set(state.sequenceRef, { sequence: state.sequence });
       transaction.set(state.indexStateRef, { indexedThrough: state.indexedThrough });
+      // The successors' index entries are written here, not by the index worker, so the
+      // current index is rebuilt from them before recall uses it again.
+      transaction.set(state.indexStateRef.parent.doc('currentIndex'), { complete: false });
       transaction.create(state.changeRef, state.changePayload);
       transaction.create(state.jobRef, state.jobPayload);
       transaction.create(state.auditRef, state.auditPayload);
@@ -3785,6 +3992,23 @@ export class FirestoreMemoryRecordRepository {
 
   private indexEntryId(recordId: string, revision: number): string {
     return id(`${recordId}\u0000${revision}`);
+  }
+
+  private currentIndexCollection(actor: VerifiedActorCapability, scopeId: string) {
+    return this.scopeRef(actor, scopeId).collection('currentIndex');
+  }
+
+  private currentIndexRef(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    recordId: string,
+  ): DocumentReference {
+    return this.currentIndexCollection(actor, scopeId).doc(id(recordId));
+  }
+
+  /** Marks whether the current index covers every record of the scope. */
+  private currentIndexStateRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
+    return this.scopeRef(actor, scopeId).collection('metadata').doc('currentIndex');
   }
 
   private indexStateRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
