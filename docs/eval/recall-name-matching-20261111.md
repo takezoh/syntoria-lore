@@ -46,6 +46,14 @@ Commit `8b70478`, which adds the current index and the invalidation of its in-me
 - A refine without `as_user`, meant to add the customer's name as a subject and its katakana spelling as an alias, was refused as `forbidden`: the record was written by another connection, and a refine without the person's authority may change only the caller's own proposal. The change feed showed no new change afterwards.
 - No write has reached the new revision, so the pass that builds the current index has not run on the hosted scope. Recall there still reads the per-revision index. The current index is verified on the emulator only.
 
+## Alias correction with the person's authority
+
+The owner then chose to make the correction with `as_user`. The refine added the customer's name as a subject, its katakana spelling as an alias and a descriptive title, and left the statement unchanged.
+
+- The write succeeded on the new revision as change 54. Under the `automatic` policy the record's new revision carries user authority with policy provenance and the record became active; its statement is still an unverified reading of a source document.
+- The service logged one `memory.index.current_advanced` event after the write: 50 entries written and the scope complete. With the entry the index worker wrote for the corrected record, the current index covers all 51 records. No error-level log entry appeared for the revision.
+- The katakana question now returned the customer's record first with `matched` of `alias`, `terms` and `semantic` and a score above 80; the second result was `semantic` only with a score under 1. The watermark and latest change were both 54.
+
 ## Limits
 
-This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost, and no write, correction or Forget has succeeded on the new revisions. CI has not run for these commits, which are on a local branch. The existing records still lack names and aliases, so a katakana question about that customer will not rank its record first until an alias is added, which needs the person's authority.
+This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. One correction has succeeded on the new revision; remember, supersede, retract and Forget have not been exercised there. CI has not run for these commits, which are on a local branch. The other 50 records still lack names and aliases.
