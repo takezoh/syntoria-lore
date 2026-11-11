@@ -23,6 +23,21 @@ Reproduced locally with the stored term rule on synthetic text of the same shape
 
 [ADR 0009](../adr/0009-keep-firestore-and-repair-in-process-term-matching.md) records the decision. The repository now derives terms by script, matches names and terms against the committed record, weights terms by rarity, labels why each result matched, and the MCP guidance asks clients for names in `subject_ids` and other spellings in `aliases`.
 
+## Hosted rollout
+
+Commit `e7ec935` was built with Cloud Build from an allowlisted copy of the committed checkout and deployed to the existing Cloud Run API service on 2026-11-11. The new revision first received no traffic and became ready; traffic and the tagged backend address that the gateway calls were then moved to it. The service account, environment and Secret references were kept. The previous revision remains for rollback. Image digest, build and revision identifiers are in ignored local operator evidence under `.local/cloud/releases/`.
+
+Moving service traffic alone did not change responses: authenticated calls kept returning the old response shape until the revision tag was moved, so the gateway reaches the service through that tag.
+
+Read-only authenticated MCP calls after the move, with no memory writes:
+
+- `get_access` succeeded for the existing admission.
+- The customer's Latin name alone returned the customer's record first with `matched` of `terms` and `semantic` and a score above 10; the next result was `semantic` only with a score under 1.
+- That name with a common Japanese word returned the same record first with `terms`.
+- The katakana question returned a `semantic`-only result with the note `semantic-match-only`; the customer's record has no katakana alias.
+- A name that no record contains returned a `semantic`-only result with the same note.
+- The watermark and latest change stayed at 53.
+
 ## Limits
 
-This is one scope with 51 records and four queries. It does not measure recall quality. The change was verified locally only; the hosted service has not been deployed or checked with it. The existing records still lack names and aliases, so a katakana question about that customer will rank its record first only after an alias is added to the record.
+This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost, and it exercised no write, correction or Forget on the new revision. CI has not run for the commit, which is on a local branch. The existing records still lack names and aliases, so a katakana question about that customer will rank its record first only after an alias is added to the record.
