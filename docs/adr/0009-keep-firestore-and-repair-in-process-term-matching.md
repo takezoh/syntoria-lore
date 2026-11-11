@@ -2,7 +2,7 @@
 id: adr-0009-keep-firestore-and-repair-in-process-term-matching
 kind: adr
 title: Keep Firestore and repair in-process name and term matching before changing how candidates are found
-status: proposed
+status: accepted
 created: '2026-11-11'
 decision_makers:
 - owner
@@ -16,7 +16,7 @@ summary: Recall failed for names and Japanese questions because of term derivati
 
 ## Decision
 
-On 2026-11-11 the owner reviewed a failed recall on the hosted service and directed work to proceed on the plan below. This record is proposed until the owner accepts it.
+On 2026-11-11 the owner reviewed a failed recall on the hosted service and directed work to proceed on the plan below, and the same day directed that the remaining work, which named this record's acceptance, be completed.
 
 [ADR 0007](0007-store-memories-as-firestore-memory-records.md) says that if acceptance fails for names, aliases, keywords or Japanese, a search decision is made with Enterprise edition text search as the first candidate. That failure occurred. The decision is:
 
@@ -62,7 +62,8 @@ Observed on the hosted service on 2026-11-11 ([record](../eval/recall-name-match
 - Local, 2026-11-11: unit tests cover the term rule and the rarity weighting; an emulator test ranks a named record above records that share only common terms, by Latin name and by a katakana alias inside a question, and reports `semantic-match-only` for an unknown name.
 - Local, 2026-11-11: the same emulator test rebuilds the current index in bounded steps, gets the same answers from it, follows a refine through the unindexed overlay to the replaced entry, and still answers a past-time question from the per-revision index.
 - Spike, 2026-11-11: the Firestore emulator served `findNearest` with cosine distance, a distance threshold, and equality, `array-contains` and `array-contains-any` pre-filters. The emulator does not enforce indexes; the composite vector indexes, billing and behavior of the managed service are unverified.
-- Not verified: the hosted service after this change, recall quality on a labelled set, and whether the weights and the 0.15 share suit a larger memory.
+- Hosted, 2026-11-11: the [observation record](../eval/recall-name-matching-20261111.md) lists the authenticated calls made after each rollout, including the build of the current index for the existing scope.
+- Not verified: recall quality on a labelled set, latency and cost, and whether the weights and the 0.15 share suit a larger memory.
 
 ## Sources
 

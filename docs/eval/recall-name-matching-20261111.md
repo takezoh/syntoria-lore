@@ -54,6 +54,18 @@ The owner then chose to make the correction with `as_user`. The refine added the
 - The service logged one `memory.index.current_advanced` event after the write: 50 entries written and the scope complete. With the entry the index worker wrote for the corrected record, the current index covers all 51 records. No error-level log entry appeared for the revision.
 - The katakana question now returned the customer's record first with `matched` of `alias`, `terms` and `semantic` and a score above 80; the second result was `semantic` only with a score under 1. The watermark and latest change were both 54.
 
+## Write operations on the new revision
+
+At the owner's direction the write path was then exercised with one synthetic record that named an invented subject with a katakana alias and carried no real information.
+
+- `remember_memory` saved it as a proposal; a katakana question naming the alias returned it first with `alias`, `terms` and `semantic`, with the watermark caught up.
+- A refine without `as_user` succeeded on this connection's own proposal.
+- A supersede was refused with `invalid_input` because only an active memory can be superseded; no supersede was exercised.
+- A retract with `as_user` succeeded and recorded user authority with policy provenance.
+- `forget_memory` reported that use had stopped. Afterwards `get_memory` returned `not_found`, a recall of the subject and its alias returned only an unrelated `semantic` result with `semantic-match-only`, and the change feed showed a content-free deletion entry in place of the record's earlier changes. The service logged one successful purge and no error-level entry.
+
+The deletion ledger holds one entry from this check.
+
 ## Limits
 
-This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. One correction has succeeded on the new revision; remember, supersede, retract and Forget have not been exercised there. CI has not run for these commits, which are on a local branch. The other 50 records still lack names and aliases.
+This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. Supersede has not been exercised on the hosted service, and a Forget was checked only on a record written minutes earlier. The other 50 records still lack names and aliases.
