@@ -66,6 +66,15 @@ At the owner's direction the write path was then exercised with one synthetic re
 
 The deletion ledger holds one entry from this check.
 
+## Subjects for the remaining records, and an index stall
+
+The owner then chose to correct the remaining records with `as_user` as well. For each of the other 50 records, the proper names that appear verbatim in its title or statement were appended to `subject_ids`, a truncated title was replaced, and an alias was added only where the record's own fields showed another spelling. Statements were not changed.
+
+- 42 records were refined, as changes 59 to 100; 8 had no name to add and were left as proposals. Three records received an alias. Each refined record now carries user authority with policy provenance and is active.
+- Recalls of three added names returned the matching record first with `matched` including `subject`.
+- The index watermark stayed at 58 with the latest change at 100, and the service logged 42 `memory.index.failed` events with the reason `repository-rejected-index`. One added subject contained a slash. The index entry validator rejected it as if it were an identifier, so that record's job failed on every attempt and held the watermark back while later jobs completed. Recall kept answering through the overlay of unindexed changes and reported `index-lag`.
+- Commit `8a5679f` checks an entry's terms, subjects and aliases as text and lets the watermark pass jobs that finished earlier. It was built and deployed the same way. Replaying an earlier correction with its idempotency key ran the maintenance pass without a new change; afterwards a recall of the slash-containing subject returned its record first with `subject` and `terms`, freshness `current`, no notes, and the watermark and latest change both at 100. No failure or warning was logged on that revision.
+
 ## Limits
 
-This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. Supersede has not been exercised on the hosted service, and a Forget was checked only on a record written minutes earlier. The other 50 records still lack names and aliases.
+This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. Supersede has not been exercised on the hosted service, and a Forget was checked only on a record written minutes earlier. The names added to the 42 records were chosen from each record's text by an AI and were not reviewed one by one.
