@@ -38,6 +38,14 @@ Read-only authenticated MCP calls after the move, with no memory writes:
 - A name that no record contains returned a `semantic`-only result with the same note.
 - The watermark and latest change stayed at 53.
 
+## Current index rollout
+
+Commit `8b70478`, which adds the current index and the invalidation of its in-memory copy, was built and deployed the same way later on 2026-11-11, with traffic and the gateway's tag moved together. The previous revisions remain for rollback.
+
+- An authenticated recall of the customer's Latin name returned the same record, score and `matched` values as before, with the watermark at 53.
+- A refine without `as_user`, meant to add the customer's name as a subject and its katakana spelling as an alias, was refused as `forbidden`: the record was written by another connection, and a refine without the person's authority may change only the caller's own proposal. The change feed showed no new change afterwards.
+- No write has reached the new revision, so the pass that builds the current index has not run on the hosted scope. Recall there still reads the per-revision index. The current index is verified on the emulator only.
+
 ## Limits
 
-This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost, and it exercised no write, correction or Forget on the new revision. CI has not run for the commit, which is on a local branch. The existing records still lack names and aliases, so a katakana question about that customer will rank its record first only after an alias is added to the record.
+This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost, and no write, correction or Forget has succeeded on the new revisions. CI has not run for these commits, which are on a local branch. The existing records still lack names and aliases, so a katakana question about that customer will not rank its record first until an alias is added, which needs the person's authority.
