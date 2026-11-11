@@ -839,6 +839,52 @@ describe('Firestore Memory Record repository', () => {
     expect(await repository.getCurrent(actor, 'scope-demo', proposal.id)).toBeNull();
   });
 
+  it('moves the index watermark past jobs that finished before an earlier one', async () => {
+    const { actor, repository, projectId } = await context([]);
+    for (const recordId of ['first', 'second', 'third'])
+      await repository.commit(actor, {
+        scopeId: 'scope-demo',
+        idempotencyKey: `out-of-order-${recordId}`,
+        changes: [
+          {
+            kind: 'create',
+            record: record({
+              id: recordId,
+              kind: 'fact',
+              details: { kind: 'fact', subject: recordId, claim: `A claim about ${recordId}` },
+              compartmentIds: [],
+            }),
+          },
+        ],
+      });
+    const workerActor = {
+      ...actor,
+      actorKind: 'worker',
+      principalId: 'worker-demo',
+    } as unknown as VerifiedActorCapability;
+    await seedAuthorization(projectId, workerActor, []);
+    const jobs = (await repository.listPendingIndexJobs(workerActor, 'scope-demo')).sort(
+      (left, right) => left.sequence - right.sequence,
+    );
+    expect(jobs.map((job) => job.sequence)).toEqual([1, 2, 3]);
+    const watermark = async () =>
+      (
+        await repository.readRecallCandidates(actor, 'scope-demo', {
+          terms: [],
+          subjectIds: [],
+          aliases: [],
+          validAt: '2026-03-01T00:00:00.000Z',
+          knownAt: '2026-03-01T00:00:00.000Z',
+          limit: 1,
+        })
+      ).indexLag.indexedThrough;
+    await repository.completeIndexJob(workerActor, 'scope-demo', jobs[2]!);
+    await repository.completeIndexJob(workerActor, 'scope-demo', jobs[1]!);
+    expect(await watermark()).toBe(0);
+    await repository.completeIndexJob(workerActor, 'scope-demo', jobs[0]!);
+    expect(await watermark()).toBe(3);
+  });
+
   it('ranks a named record above records that share only common terms and reports why each matched', async () => {
     const { actor, repository, projectId, deletionLedger } = await context([]);
     const fact = (id: string, title: string, statement: string, aliases: string[] = []) =>
@@ -848,7 +894,8 @@ describe('Firestore Memory Record repository', () => {
         statement,
         kind: 'fact',
         details: { kind: 'fact', subject: 'Example business', claim: statement },
-        subjectIds: ['Example business'],
+        // A subject may contain a slash, as a repository name does; it must still be indexed.
+        subjectIds: ['Example business', 'example/repository'],
         aliases: aliases.map((value) => ({ value, from: null, until: null })),
         compartmentIds: [],
       });
@@ -904,6 +951,16 @@ describe('Firestore Memory Record repository', () => {
       ),
     ).toMatchObject({ completed: 1, failed: 0 });
     const recall = new MemoryRecallService(repository, embeddings);
+    expect(
+      (
+        await recall.recall(actor, 'scope-demo', {
+          text: 'example/repository',
+          validAt: '2026-03-01T00:00:00.000Z',
+          knownAt: '2026-03-01T00:00:00.000Z',
+          byteBudget: 20_000,
+        })
+      ).indexLag,
+    ).toEqual({ indexedThrough: 1, latestChange: 1 });
     const at = {
       validAt: '2026-03-01T00:00:00.000Z',
       knownAt: '2026-03-01T00:00:00.000Z',

@@ -78,6 +78,8 @@ describe('Memory Record value model', () => {
     expect(tokenizeSearchText('Acmeの提示金額は80万円')).toEqual(
       ['80', 'acme', 'の提', '提示', '示金', '金額', '額は', '万円'].sort(),
     );
+    // A run too long to be a word is left out instead of becoming an oversized term.
+    expect(tokenizeSearchText(`key ${'a1'.repeat(80)} value`)).toEqual(['key', 'value']);
     // The prolonged sound mark does not end the run.
     expect(tokenizeSearchText('アークメーカー')).toEqual(
       ['アー', 'ーク', 'クメ', 'メー', 'ーカ', 'カー'].sort(),

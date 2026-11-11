@@ -334,6 +334,17 @@ function nonempty(value: unknown): value is string {
   );
 }
 
+/**
+ * A term, subject or alias of an index entry. Unlike an identifier it may contain a slash,
+ * because a record's subjects and aliases may: an entry that rejected one could never be
+ * written, and its job would hold the index watermark back for the whole scope.
+ */
+function searchValue(value: unknown): value is string {
+  return (
+    typeof value === 'string' && value.trim().length > 0 && Buffer.byteLength(value, 'utf8') <= 1024
+  );
+}
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -560,11 +571,11 @@ function isSearchIndexEntry(value: unknown): value is SearchIndexEntry {
     Array.isArray(value['compartmentIds']) &&
     value['compartmentIds'].every(nonempty) &&
     Array.isArray(value['terms']) &&
-    value['terms'].every(nonempty) &&
+    value['terms'].every(searchValue) &&
     Array.isArray(value['subjectIds']) &&
-    value['subjectIds'].every(nonempty) &&
+    value['subjectIds'].every(searchValue) &&
     Array.isArray(value['aliases']) &&
-    value['aliases'].every(nonempty) &&
+    value['aliases'].every(searchValue) &&
     nonempty(embedding['modelId']) &&
     Number.isSafeInteger(embedding['dimension']) &&
     Number(embedding['dimension']) > 0 &&
@@ -1128,9 +1139,27 @@ export class FirestoreMemoryRecordRepository {
       );
       const priorJobs =
         refs.length > 0 ? await Promise.all(refs.map((ref) => transaction.get(ref))) : [];
+      let contiguous = true;
       for (const prior of priorJobs) {
-        if (!prior.exists || (prior.get('status') !== 'complete' && prior.id !== jobRef.id)) break;
+        if (!prior.exists || (prior.get('status') !== 'complete' && prior.id !== jobRef.id)) {
+          contiguous = false;
+          break;
+        }
         indexedThrough += 1;
+      }
+      // Jobs can finish out of order. When this job closes the gap, the watermark also passes
+      // the later jobs that had already finished, instead of waiting for the next write.
+      while (contiguous && indexedThrough >= job.sequence) {
+        const ahead = await Promise.all(
+          Array.from({ length: 50 }, (_, offset) =>
+            transaction.get(this.jobRef(actor, scopeId, indexedThrough + 1 + offset)),
+          ),
+        );
+        const finished = ahead.findIndex(
+          (later) => !later.exists || later.get('status') !== 'complete',
+        );
+        indexedThrough += finished === -1 ? ahead.length : finished;
+        if (finished !== -1) break;
       }
       transaction.set(jobRef, {
         ...snapshot.data(),

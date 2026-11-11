@@ -9,6 +9,8 @@ export const SEARCH_TERMS_VERSION = 2;
 const JAPANESE = '\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}ー';
 const RUNS = new RegExp(`([${JAPANESE}]+)|((?:(?![${JAPANESE}])[\\p{L}\\p{N}])+)`, 'gu');
 
+const MAX_TERM_LENGTH = 128;
+
 /** Case- and width-insensitive form used to compare names, terms and query text. */
 export function normalizeSearchText(text: string): string {
   return text.normalize('NFKC').toLocaleLowerCase('und');
@@ -25,7 +27,8 @@ export function tokenizeSearchText(text: string): string[] {
   for (const match of normalizeSearchText(text).matchAll(RUNS)) {
     const [, japanese, other] = match;
     if (other !== undefined) {
-      tokens.add(other);
+      // A run this long is an encoded value, not a word anyone searches for.
+      if (other.length <= MAX_TERM_LENGTH) tokens.add(other);
       continue;
     }
     const points = [...(japanese ?? '')];
