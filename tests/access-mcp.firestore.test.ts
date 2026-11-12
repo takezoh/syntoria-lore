@@ -107,20 +107,22 @@ it('uses the existing admission and shared AI actor across independent Access su
     access.structuredContent,
   );
   const write = await first.callTool({
-    name: 'remember_memory',
+    name: 'observe',
     arguments: {
-      kind: 'fact',
       title: 'Migration fixture',
-      statement: 'The synthetic migration preserves existing ownership',
-      details: { subject: 'migration', claim: 'Existing ownership is preserved' },
-      subject_ids: ['migration'],
+      summary: 'The synthetic migration preserves existing ownership.',
+      nature: 'event',
+      subjects: ['migration'],
       idempotency_key: 'shared-ai-write',
     },
   });
   expect(write.isError).not.toBe(true);
   const content = write.structuredContent as Record<string, unknown> | undefined;
-  const id = String(content?.['record_id']);
-  const read = await second.callTool({ name: 'get_memory', arguments: { record_id: id } });
+  const id = String(content?.['observation_id']);
+  const read = await second.callTool({
+    name: 'get_observation',
+    arguments: { observation_id: id },
+  });
   expect(read.isError).not.toBe(true);
   expect(gateCalls).toBe(0);
 }, 30000);

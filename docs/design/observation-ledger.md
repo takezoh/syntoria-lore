@@ -1,6 +1,6 @@
 # Observation ledger design
 
-This document turns [ADR 0010](../adr/0010-record-observations-and-derive-the-current-state.md) into contracts. It is for the people who implement and review the replacement of Memory Records. It was written on 2026-11-12. Nothing in it is implemented; the [architecture](../../ARCHITECTURE.md) describes the service that runs today.
+This document turns [ADR 0010](../adr/0010-record-observations-and-derive-the-current-state.md) into contracts. It is for the people who implement and review the replacement of Memory Records. It was written on 2026-11-12, and units 1 to 7 below were implemented and verified on the emulator the same day; the [architecture](../../ARCHITECTURE.md) describes the code, and dated [evaluation records](../eval/) say what was observed on the hosted service.
 
 ## Outcome
 
@@ -168,7 +168,7 @@ Whether a provider's terms allow keeping a summary of content read through its A
 | What is the state of X? | Names in the query resolve through the alias table to subjects; their topic views are read by key |
 | What happened with X, in order? | Events and state changes of the subject, by subject and time index |
 | What was it before? When did it change? | The topic's course and relations |
-| What held on a given date? | The course cut at that date |
+| What held on a given date? | The course cut at that date, from everything known now, so a state reported later about an earlier date is part of the answer |
 | Find something by a term or by meaning | Bounded index queries, then the topics and observations they point to |
 
 ### Recall
@@ -224,7 +224,7 @@ The existing records are converted, not reinterpreted.
 
 ## Units
 
-Each unit is verified on the emulator before the next starts. Nothing is deployed until unit 5.
+Each unit is verified on the emulator. Where the implementation settled a detail differently from the sections above, the notes under the table say so.
 
 | Unit | Scope | Distinguishing check |
 | --- | --- | --- |
@@ -235,6 +235,18 @@ Each unit is verified on the emulator before the next starts. Nothing is deploye
 | 5 Service | MCP tools and instructions, access, source reports | The tools drive the units above through a real MCP client; tier and writer cannot be set by a request |
 | 6 Forget | Forget by observation, subject and source; purge; restore | A forgotten observation leaves views and indexes and is not restored from a backup taken before it |
 | 7 Migration and cutover | Conversion of existing records, index definitions, release | Every existing record is found by the names it was found by before |
+
+### Implementation notes
+
+- **Conversion runs in the service.** The existing records are converted by a bounded pass after each write, by the in-process worker, not by an operator script. It writes no change-feed entry.
+- **Indexing has its own queue.** An observation is queued for indexing in its write transaction and indexed after a write; it is found by subject and topic before that. An observation in a compartment the worker may not read is not indexed and stays reachable by key.
+- **A view is checked before it is used.** A stored view is returned only when the reader may see every observation it names and none is suppressed; otherwise the view is computed from what the reader may see, as it is for a past date, a full course, linked topics and upcoming states.
+- **A course is computed from at most 500 observations**, the latest by recorded time. A longer course is marked truncated.
+- **A retraction names an observation of the same topic, or an event.** It is stored even when it has no effect.
+- **Forget of a converted observation also forgets the record it came from**, since the record holds the same text.
+- **Writer suppression has no tool yet.** The ledger method exists and reads honour it; an operator path to set it is not built.
+- **Vector search is not filtered by a field.** Each scope's index is its own collection, which is the bound; disclosure is checked on the results.
+- **The check "bounded reads with a large memory present" was not measured.** The queries carry their bounds; no test loads a large memory.
 
 ## Evaluation
 

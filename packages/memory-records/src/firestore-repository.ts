@@ -92,7 +92,7 @@ export interface CommitReceipt {
 
 export interface ChangeFeedEntry {
   readonly sequence: number;
-  readonly operation: MemoryChange['kind'] | 'batch' | 'deletion';
+  readonly operation: MemoryChange['kind'] | 'batch' | 'deletion' | 'observe';
   readonly recordIds: readonly string[];
   readonly revisionNumbers: readonly number[];
   readonly compartmentIds: readonly string[];
@@ -286,7 +286,7 @@ interface IdempotencyDocument {
   receipt: Omit<CommitReceipt, 'replayed'>;
 }
 
-interface AuthorizationDocument {
+export interface AuthorizationDocument {
   active: boolean;
   tenantId: string;
   principalId: string;
@@ -298,7 +298,7 @@ interface AuthorizationDocument {
   revokedSourceReferences: string[];
 }
 
-interface ProtectedApprovalDocument {
+export interface ProtectedApprovalDocument {
   principalId: string;
   connectionId: string;
   gateClientId: string;
@@ -327,7 +327,7 @@ interface DecisionCandidateMetadata {
   details: { kind: string; question?: string };
 }
 
-function nonempty(value: unknown): value is string {
+export function nonempty(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     value.trim().length > 0 &&
@@ -347,7 +347,7 @@ function searchValue(value: unknown): value is string {
   );
 }
 
-function stableJson(value: unknown): string {
+export function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   const object = value as Record<string, unknown>;
@@ -357,7 +357,7 @@ function stableJson(value: unknown): string {
     .join(',')}}`;
 }
 
-function digest(value: unknown): string {
+export function digest(value: unknown): string {
   return createHash('sha256').update(stableJson(value)).digest('hex');
 }
 
@@ -543,7 +543,7 @@ export function memoryChangeDigest(scopeId: string, changes: readonly MemoryChan
   return digest({ scopeId, changes });
 }
 
-function id(value: string): string {
+export function id(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
 }
 
@@ -559,7 +559,7 @@ export function authorizationDocumentId(
   return id(`${tenantId}_${principalId}_${scopeId}`);
 }
 
-function sortedUnique(values: readonly string[]): string[] {
+export function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
 }
 
@@ -591,7 +591,7 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
   return stableJson(sortedUnique(left)) === stableJson(sortedUnique(right));
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -679,12 +679,12 @@ function changeRecords(
   return [{ record: change.record, expected: change.expectedRevision }];
 }
 
-function containsOnly(values: readonly string[], allowed: readonly string[]): boolean {
+export function containsOnly(values: readonly string[], allowed: readonly string[]): boolean {
   const set = new Set(allowed);
   return values.every((value) => set.has(value));
 }
 
-function assertActor(actor: VerifiedActorCapability, scopeId: string): void {
+export function assertActor(actor: VerifiedActorCapability, scopeId: string): void {
   if (
     !actor ||
     !nonempty(actor.tenantId) ||
@@ -709,7 +709,7 @@ function assertActor(actor: VerifiedActorCapability, scopeId: string): void {
   }
 }
 
-function assertWorkerActor(actor: VerifiedActorCapability): void {
+export function assertWorkerActor(actor: VerifiedActorCapability): void {
   if (actor.actorKind !== 'worker') {
     throw new MemoryRepositoryError(
       'authorization_denied',
@@ -813,9 +813,9 @@ export class FirestoreMemoryRecordRepository {
   >();
 
   constructor(
-    private readonly firestore: Firestore,
+    protected readonly firestore: Firestore,
     cursorSecret: Uint8Array,
-    private readonly deletionLedger: DeletionLedger,
+    protected readonly deletionLedger: DeletionLedger,
   ) {
     if (cursorSecret.byteLength < 32)
       throw new TypeError('Cursor signing secret must be at least 32 bytes');
@@ -2125,7 +2125,7 @@ export class FirestoreMemoryRecordRepository {
     await this.firestore.collection(MEMORY_AUTHORIZATION_COLLECTION).limit(1).get();
   }
 
-  private async applyLedgerSnapshot(
+  protected async applyLedgerSnapshot(
     actor: VerifiedActorCapability,
     scopeId: string,
   ): Promise<number> {
@@ -2188,7 +2188,10 @@ export class FirestoreMemoryRecordRepository {
     return snapshot.head;
   }
 
-  private async assertRestoreReady(actor: VerifiedActorCapability, scopeId: string): Promise<void> {
+  protected async assertRestoreReady(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+  ): Promise<void> {
     const [head, checkpoint] = await Promise.all([
       this.deletionLedger.head(),
       this.scopeRef(actor, scopeId).collection('management').doc('ledgerCheckpoint').get(),
@@ -3445,6 +3448,29 @@ export class FirestoreMemoryRecordRepository {
           entries.push(entry);
           continue;
         }
+        if (entry.operation === 'observe') {
+          // An observation is disclosed like a record: it must still exist, be unsuppressed and
+          // lie within the reader's allowance.
+          const visible = await Promise.all(
+            entry.recordIds.map(async (observationId) => {
+              const [observation, suppression] = await Promise.all([
+                transaction.get(
+                  this.scopeRef(actor, scopeId).collection('observations').doc(id(observationId)),
+                ),
+                transaction.get(this.suppressionRef(actor, scopeId, observationId)),
+              ]);
+              const compartments: unknown = observation.get('compartmentIds');
+              return (
+                observation.exists &&
+                !suppression.exists &&
+                Array.isArray(compartments) &&
+                containsOnly(compartments as string[], actor.compartmentAllowance)
+              );
+            }),
+          );
+          if (visible.every(Boolean)) entries.push(entry);
+          continue;
+        }
         const disclosure = await Promise.all(
           entry.recordIds.map(async (recordId, index) => {
             const recordRef = this.recordRef(actor, scopeId, recordId);
@@ -3814,7 +3840,7 @@ export class FirestoreMemoryRecordRepository {
     }
   }
 
-  private assertCurrentAuthorization(
+  protected assertCurrentAuthorization(
     actor: VerifiedActorCapability,
     document: AuthorizationDocument | undefined,
   ): AuthorizationDocument {
@@ -4015,13 +4041,13 @@ export class FirestoreMemoryRecordRepository {
     };
   }
 
-  private authorizationRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
+  protected authorizationRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
     return this.firestore
       .collection(MEMORY_AUTHORIZATION_COLLECTION)
       .doc(authorizationDocumentId(actor.tenantId, actor.principalId, scopeId));
   }
 
-  private scopeRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
+  protected scopeRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
     return this.firestore
       .collection('memoryTenants')
       .doc(id(actor.tenantId))
@@ -4085,7 +4111,7 @@ export class FirestoreMemoryRecordRepository {
     return this.scopeRef(actor, scopeId).collection('metadata').doc('currentIndex');
   }
 
-  private indexStateRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
+  protected indexStateRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
     return this.scopeRef(actor, scopeId).collection('metadata').doc('indexState');
   }
 
@@ -4097,7 +4123,7 @@ export class FirestoreMemoryRecordRepository {
     return this.recordCollection(actor, scopeId).doc(id(recordId));
   }
 
-  private suppressionRef(
+  protected suppressionRef(
     actor: VerifiedActorCapability,
     scopeId: string,
     recordId: string,
@@ -4105,7 +4131,7 @@ export class FirestoreMemoryRecordRepository {
     return this.scopeRef(actor, scopeId).collection('suppressions').doc(id(recordId));
   }
 
-  private forgetRequestRef(
+  protected forgetRequestRef(
     actor: VerifiedActorCapability,
     scopeId: string,
     requestId: string,
@@ -4115,7 +4141,7 @@ export class FirestoreMemoryRecordRepository {
       .doc(digest([actor.principalId, requestId]));
   }
 
-  private deletionIntentRef(
+  protected deletionIntentRef(
     actor: VerifiedActorCapability,
     scopeId: string,
     deletionId: string,
@@ -4123,11 +4149,11 @@ export class FirestoreMemoryRecordRepository {
     return this.scopeRef(actor, scopeId).collection('deletionIntents').doc(id(deletionId));
   }
 
-  private sequenceRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
+  protected sequenceRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {
     return this.scopeRef(actor, scopeId).collection('management').doc('sequence');
   }
 
-  private protectedApprovalRef(
+  protected protectedApprovalRef(
     actor: VerifiedActorCapability,
     scopeId: string,
     protectedChangeId: string,
@@ -4135,11 +4161,11 @@ export class FirestoreMemoryRecordRepository {
     return this.scopeRef(actor, scopeId).collection('approvals').doc(id(protectedChangeId));
   }
 
-  private changeCollection(actor: VerifiedActorCapability, scopeId: string) {
+  protected changeCollection(actor: VerifiedActorCapability, scopeId: string) {
     return this.scopeRef(actor, scopeId).collection('changes');
   }
 
-  private changeRef(
+  protected changeRef(
     actor: VerifiedActorCapability,
     scopeId: string,
     sequence: number,
@@ -4147,7 +4173,7 @@ export class FirestoreMemoryRecordRepository {
     return this.changeCollection(actor, scopeId).doc(String(sequence).padStart(16, '0'));
   }
 
-  private jobRef(
+  protected jobRef(
     actor: VerifiedActorCapability,
     scopeId: string,
     sequence: number,

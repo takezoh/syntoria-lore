@@ -45,9 +45,11 @@ Local checks with deterministic doubles do not establish hosted behavior, extrac
 | User value and examples | [README](../README.md), [Product](../PRODUCT.md) |
 | Product positioning and claims | [Product design](design/product.md) |
 | Required behavior and measurable service targets | [Product requirements](design/requirements.md) |
-| Memory Records contracts, access, Forget, recall and the decision-model evaluation | [Memory Records design](design/memory-records.md) |
+| Observations, subjects, topics, trust, source references, reading, Forget and migration | [Observation ledger design](design/observation-ledger.md) |
+| The earlier Memory Records contracts and the decision-model evaluation | [Memory Records design](design/memory-records.md) |
 | Components and correctness boundaries | [Architecture](../ARCHITECTURE.md) |
-| Value model, repository, capture, recall, access and service operations | `packages/memory-records/src/` |
+| Observation value model, ledger, service operations and access; the Memory Records code they extend | `packages/memory-records/src/` |
+| Composite and vector indexes the queries need | [`firestore.indexes.json`](../firestore.indexes.json) |
 | MCP adapter, Gate verification, configuration and embeddings | `apps/api/src/` |
 | Admitting a Gate subject | `scripts/admit-subject.mjs` |
 | Reviewed source metadata maintenance | [`scripts/migrate-source-metadata.mjs`](../scripts/migrate-source-metadata.mjs): prepare, dry-run, apply and verify use private snapshot/plan/manifest files, explicit database targets and the reviewed manifest digest |

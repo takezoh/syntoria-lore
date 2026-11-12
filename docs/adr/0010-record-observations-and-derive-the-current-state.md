@@ -2,7 +2,7 @@
 id: adr-0010-record-observations-and-derive-the-current-state
 kind: adr
 title: Record observations that are never rewritten and derive the current state from them, on Firestore
-status: proposed
+status: accepted
 created: '2026-11-12'
 decision_makers:
 - owner
@@ -16,7 +16,7 @@ summary: A memory stops being one claim that is revised and becomes a series of 
 
 ## Decision
 
-On 2026-11-12 the owner stated the conditions Lore must meet and directed the work: other AIs observe and Lore is only written to; writes are many and keep growing; no person reviews individual memories; things change, and the course of a change must be kept and readable, which is not the same as rewriting a memory; and originals in services such as Slack, Gmail and Notion are not copied, only summarized and referenced. The owner also decided that Firestore stays and that what it lacks is built, and that a later shortfall is not to be blamed on the infrastructure. This record is proposed until the owner accepts it; the [observation ledger design](../design/observation-ledger.md) turns it into contracts.
+On 2026-11-12 the owner stated the conditions Lore must meet and directed the work: other AIs observe and Lore is only written to; writes are many and keep growing; no person reviews individual memories; things change, and the course of a change must be kept and readable, which is not the same as rewriting a memory; and originals in services such as Slack, Gmail and Notion are not copied, only summarized and referenced. The owner also decided that Firestore stays and that what it lacks is built, and that a later shortfall is not to be blamed on the infrastructure. The owner then directed that the design be implemented through migration and cutover, which accepts this record; the [observation ledger design](../design/observation-ledger.md) turns it into contracts.
 
 1. **The unit is an observation.** One write by an AI is one observation: a short summary of what matters, the subjects it is about, what aspect of them, when it was the case, who wrote it and from what. An observation is never changed after it is written.
 2. **Change is kept as a course, not as a rewrite.** Observations about the same aspect of the same subject form one topic, ordered in time. A later state does not replace or hide an earlier one. How two observations relate (follows, restates, conflicts with, retracts) is its own appended record, which can be revoked.
@@ -56,7 +56,7 @@ Published systems for agent memory have moved to appending and closing instead o
 
 ## Confirmation
 
-Nothing is implemented. The design lists the units and, for each, the check that distinguishes it from the current behaviour. Three measurements decide whether the model works in practice and are part of the work: how often different writers put the same matter under the same topic, whether name and term search finds Japanese and mixed-script names at the sizes tested, and whether a set of the owner's own questions, including what a state was before and what held on a given date, is answered correctly. Composite and vector indexes exist only on the managed service and must be checked there.
+The design lists the units and, for each, the check that distinguishes it from the earlier behaviour; they were implemented and verified on the emulator on 2026-11-12. Three measurements decide whether the model works in practice and are part of the work: how often different writers put the same matter under the same topic, whether name and term search finds Japanese and mixed-script names at the sizes tested, and whether a set of the owner's own questions, including what a state was before and what held on a given date, is answered correctly. Composite and vector indexes exist only on the managed service and must be checked there.
 
 ## Sources
 

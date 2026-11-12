@@ -31,6 +31,7 @@ export default typescriptEslint.config(
     // access module that reads admissions and provisions authorizations.
     ignores: [
       'packages/memory-records/src/firestore-repository.ts',
+      'packages/memory-records/src/firestore-observation-ledger.ts',
       'packages/memory-records/src/firestore-client.ts',
       'packages/memory-records/src/firestore-deletion-ledger.ts',
       'packages/memory-records/src/access.ts',

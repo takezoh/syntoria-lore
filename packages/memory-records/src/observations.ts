@@ -402,17 +402,15 @@ export function arrivalRelation(
   return { relation: step.relation, toObservationId: step.toObservationId };
 }
 
-/** The course as it stood at a past time: only observations effective and recorded by then. */
+/**
+ * What held at a past time, from everything known now: the course cut at that time. A state
+ * reported later about an earlier date is part of the answer.
+ */
 export function computeCourseAt(
   observations: readonly Observation[],
   at: string,
   excluded: ReadonlySet<string> = new Set(),
 ): ReturnType<typeof computeCourse> {
   if (!isIso(at)) throw new TypeError('at must be an ISO time');
-  const cut = Date.parse(at);
-  return computeCourse(
-    observations.filter((observation) => Date.parse(observation.recordedAt) <= cut),
-    excluded,
-    at,
-  );
+  return computeCourse(observations, excluded, at);
 }

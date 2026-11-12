@@ -4,7 +4,7 @@ import {
   AccessDeniedError,
   type ConnectionAccess,
   type GatePrincipal,
-  type MemoryService,
+  type ObservationService,
 } from '@memory/memory-records';
 import { AccessVerificationError } from './access.js';
 import { GateVerificationError, type GateVerifier } from './gate.js';
@@ -25,7 +25,7 @@ export interface ApiServerOptions {
   /** Access mode consumes only this header; Authorization is the gateway's IAM token. */
   readonly authenticateAssertion?: (assertion: string | undefined) => Promise<GatePrincipal>;
   readonly resolveAccess: (principal: GatePrincipal) => Promise<ConnectionAccess>;
-  readonly service: MemoryService;
+  readonly service: ObservationService;
   /** Fails unless every backing store answers. */
   readonly ready: () => Promise<void>;
   readonly maxBodyBytes?: number;

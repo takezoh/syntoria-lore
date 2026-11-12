@@ -705,3 +705,28 @@ function selectAt(
   return applicabilityCut >= from && applicabilityCut < until ? latest : null;
 }
 export * from './observations.js';
+export {
+  createFirestoreObservationLedger,
+  FirestoreObservationLedger,
+  observationDigest,
+  observationSourceKey,
+  type LinkKind,
+  type ObservationIndexEntry,
+  type ObserveReceipt,
+  type ObserveRequest,
+  type SourceReport,
+  type StoredArrival,
+  type SubjectDocument,
+  type TopicResult,
+} from './firestore-observation-ledger.js';
+export {
+  ObservationService,
+  type ObservationRecallView,
+  type ObservationServiceOptions,
+  type ObservationView,
+  type ObserveInput,
+  type ObserveView,
+  type RecallItemView,
+  type SourceInput,
+  type TopicStateView,
+} from './observation-service.js';

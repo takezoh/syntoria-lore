@@ -4,7 +4,8 @@ import {
   createFirestoreDeletionLedger,
   type FirestoreDeletionLedger,
 } from './firestore-deletion-ledger.js';
-import { FirestoreMemoryRecordRepository } from './firestore-repository.js';
+import { FirestoreObservationLedger } from './firestore-observation-ledger.js';
+import type { FirestoreMemoryRecordRepository } from './firestore-repository.js';
 
 export interface MemoryRecordsRuntimeOptions {
   readonly projectId: string;
@@ -16,7 +17,9 @@ export interface MemoryRecordsRuntimeOptions {
 }
 
 export interface MemoryRecordsRuntime {
+  /** The Memory Records repository; the same object as `observations`. */
   readonly repository: FirestoreMemoryRecordRepository;
+  readonly observations: FirestoreObservationLedger;
   readonly ledger: FirestoreDeletionLedger;
   readonly access: MemoryAccess;
   /** Fails unless both databases answer a read. */
@@ -39,10 +42,11 @@ export function createMemoryRecordsRuntime(
     projectId: options.projectId,
     databaseId: options.databaseId,
   });
-  const repository = new FirestoreMemoryRecordRepository(firestore, options.cursorSecret, ledger);
+  const repository = new FirestoreObservationLedger(firestore, options.cursorSecret, ledger);
   const access = new MemoryAccess(firestore, repository);
   return {
     repository,
+    observations: repository,
     ledger,
     access,
     async checkReady() {

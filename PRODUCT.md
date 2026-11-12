@@ -4,7 +4,7 @@
 
 Syntoria Lore is Syntoria's Memory Service: long-term memory with evidence for the AIs you authorize. It turns what you and your AIs submit into reusable memories—facts, decisions, preferences, hypotheses, experiences and procedures—each linked to the observations behind it, who made the statement, when it applies and how it was corrected. AI clients that sign in with your account read and update the same memories through REST and Remote MCP, so context explained in one conversation can be recalled in another and checked against its source. The intended benefit is less re-explaining and fewer mistakes from outdated or misattributed context. Lore does not depend on a particular assistant.
 
-> **Status on 2026-11-09:** Lore was rebuilt on Firestore Memory Records and its first version is deployed with Remote MCP only. Remembering and recalling through a real AI client has not been verified yet, and some features described here are not available in this version; the [architecture](ARCHITECTURE.md) describes what exists today.
+> **Status on 2026-11-12:** Lore now keeps a ledger of observations and derives the current state from it, as [ADR 0010](docs/adr/0010-record-observations-and-derive-the-current-state.md) decides. This page still describes the earlier model of approved memories and AI proposals in places and is being revised; the [architecture](ARCHITECTURE.md) describes what runs.
 
 ## Who it is for
 

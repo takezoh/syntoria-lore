@@ -280,29 +280,27 @@ describe('Observation ledger value model', () => {
     expect(computeCourse([])).toEqual({ steps: [], view: null, upcoming: [] });
   });
 
-  it('answers what held on a past date from what was effective and known by then', () => {
+  it('answers what held on a past date from everything known now', () => {
     const observations = [
       state('a', {
         value: 'draft',
         effectiveAt: '2026-01-01T00:00:00.000Z',
-        recordedAt: '2026-01-01T12:00:00.000Z',
+        recordedAt: '2026-03-01T00:00:00.000Z',
       }),
       state('b', {
         value: 'signed',
         effectiveAt: '2026-01-10T00:00:00.000Z',
-        recordedAt: '2026-01-12T00:00:00.000Z',
+        recordedAt: '2026-03-01T00:00:01.000Z',
       }),
     ];
+    // Both were reported in March; the question is about January.
     expect(computeCourseAt(observations, '2026-01-05T00:00:00.000Z').view?.current.value).toBe(
       'draft',
     );
-    // Effective on the 10th but not yet reported on the 11th.
-    expect(computeCourseAt(observations, '2026-01-11T00:00:00.000Z').view?.current.value).toBe(
-      'draft',
-    );
-    expect(computeCourseAt(observations, '2026-01-12T00:00:00.000Z').view?.current.value).toBe(
-      'signed',
-    );
+    expect(computeCourseAt(observations, '2026-01-10T00:00:00.000Z').view).toMatchObject({
+      current: { value: 'signed' },
+      previous: { value: 'draft' },
+    });
     expect(computeCourseAt(observations, '2025-12-31T00:00:00.000Z').view).toBeNull();
   });
 

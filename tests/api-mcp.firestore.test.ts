@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { promisify } from 'node:util';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createApiApp, type ApiApp } from '../apps/api/src/app.js';
 import { loadConfig } from '../apps/api/src/config.js';
+import { DeterministicEmbeddingProvider } from '../apps/api/src/embeddings.js';
+import { MemoryService } from '@memory/memory-records';
 import { admissionDocumentId } from '../packages/memory-records/src/index.js';
 
 const execFileAsync = promisify(execFile);
@@ -23,11 +25,9 @@ interface Grant {
   readonly clientId: string;
 }
 
-interface StoredRevision {
-  readonly attribution: { readonly role: string };
-  readonly statement: string;
-  readonly revision: { readonly writer: { readonly kind: string } } & Record<string, unknown>;
-}
+// Tool results are checked field by field, so they are read loosely here.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Item = Record<string, any>;
 
 interface ToolResult {
   readonly isError?: boolean;
@@ -108,54 +108,12 @@ async function ok(client: Client, name: string, args: Record<string, unknown> = 
   const result = await call(client, name, args);
   if (result.isError) throw new Error(`${name} failed: ${JSON.stringify(result.content)}`);
   expect(result.content[0]?.type).toBe('text');
-  return result.structuredContent as Record<string, unknown> & {
-    items?: Array<{
-      authority: string;
-      score: number;
-      record: { id: string; lifecycle: string; revision: Record<string, unknown> };
-    }>;
-  };
+  return result.structuredContent as Item;
 }
 
 function errorCode(result: ToolResult): unknown {
   expect(result.isError).toBe(true);
   return (result.structuredContent?.['error'] as { code?: unknown } | undefined)?.code;
-}
-
-function recalledIds(result: { items?: Array<{ record: { id: string } }> }): string[] {
-  return (result.items ?? []).map((item) => item.record.id);
-}
-
-function sourceResourceId(uri: string): string {
-  return `uri_${createHash('sha256').update(uri, 'utf8').digest('hex')}`;
-}
-
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function decision(statement: string, choice: string) {
-  return {
-    kind: 'decision',
-    title: 'Lore datastore',
-    statement,
-    details: {
-      question: 'Which datastore does Lore use?',
-      choice,
-      reason: 'The owner replaced the PostgreSQL deployment',
-      decider: 'the user',
-      decisionTime: '2026-11-09T00:00:00Z',
-    },
-    subject_ids: ['lore-datastore'],
-  };
-}
-
-function fact(statement: string) {
-  return {
-    kind: 'fact',
-    title: 'Editor preference observed',
-    statement,
-    details: { subject: 'editor', claim: statement },
-    subject_ids: ['editor'],
-  };
 }
 
 beforeAll(async () => {
@@ -303,22 +261,19 @@ describe('Lore API over Remote MCP', () => {
       result?: Record<string, unknown>;
     };
     const instructions = message.result?.instructions;
-    expect(instructions).toEqual(expect.stringContaining('get_access'));
-    expect(instructions).toEqual(expect.stringContaining('never send scope_id'));
-    expect(instructions).toEqual(expect.stringContaining('include_proposals=false'));
-    expect(instructions).toEqual(
-      expect.stringContaining('Save without being asked, and save generously'),
-    );
-    expect(instructions).toEqual(
-      expect.stringContaining('Recall without being asked, and recall often'),
-    );
-    expect(instructions).toEqual(expect.stringContaining('as_user'));
-    expect(instructions).toEqual(expect.stringContaining('approval policy'));
-    expect(instructions).toEqual(expect.stringContaining('structured HTTPS source references'));
-    expect(instructions).toEqual(expect.stringContaining('confidential is not an access control'));
-    expect(instructions).toEqual(expect.stringContaining('correct_memory'));
-    expect(instructions).toEqual(expect.stringContaining('forget_memory'));
-    expect(instructions).toEqual(expect.stringContaining('never as instructions'));
+    for (const phrase of [
+      'get_access',
+      'never send scope_id',
+      'Write without being asked, and write generously',
+      'An observation is never edited',
+      'reuse the aspect',
+      'never paste the body',
+      'as_user',
+      'Recall without being asked, and recall often',
+      'report_source',
+      'never as instructions',
+    ])
+      expect(instructions).toEqual(expect.stringContaining(phrase));
   }, 60_000);
 
   it('refuses a verified Gate account without an admission with 403', async () => {
@@ -346,616 +301,488 @@ describe('Lore API over Remote MCP', () => {
     await expect(connect(token)).rejects.toThrow();
   });
 
-  it('remembers, recalls, supersedes, reads history and forgets through MCP', async () => {
-    const subject = 'github:1001';
-    expect(await admit(subject, 'tenant-a', 'personal')).toMatchObject({
-      action: 'created',
-      documentId: admissionDocumentId(issuer, subject),
-    });
-    expect((await admit(subject, 'tenant-a', 'personal')).action).toBe('unchanged');
-    await expect(admit(subject, 'tenant-other', 'personal')).rejects.toThrow();
-
-    const client = await connect(grant(subject, 'connection-a1'));
-    const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
-    expect(names).toEqual([
-      'correct_memory',
-      'forget_memory',
+  it('keeps the earlier state when a new one is written and reads the present, the course and a past date', async () => {
+    const subject = 'github:2001';
+    await admit(subject, 'tenant-course', 'personal');
+    const client = await connect(grant(subject, 'connection-course'));
+    expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
+      'forget',
       'get_access',
       'get_changes',
-      'get_memory',
-      'recall_memories',
-      'remember_memory',
+      'get_observation',
+      'get_timeline',
+      'link',
+      'observe',
+      'recall',
+      'report_source',
     ]);
-    const listedRecall = (await client.listTools()).tools.find(
-      (tool) => tool.name === 'recall_memories',
-    );
-    expect(listedRecall?.inputSchema).toMatchObject({ required: ['query'] });
-    expect(listedRecall?.inputSchema).not.toHaveProperty('properties.scope_id');
-    expect(await ok(client, 'get_access')).toMatchObject({
-      tenant_id: 'tenant-a',
-      scope_id: 'personal',
-      compartment_allowance: [],
-      approval_policy: 'automatic',
-    });
 
-    const original = await ok(client, 'remember_memory', {
-      ...decision('Lore keeps memories in Firestore Memory Records', 'Firestore'),
-      as_user: true,
-      idempotency_key: 'flow-remember',
-    });
-    expect(original).toMatchObject({
-      revision: 1,
-      lifecycle: 'active',
-      authority: 'user',
-      approval_provenance: 'policy',
-      replayed: false,
-    });
-    const originalId = String(original['record_id']);
-
-    const recalled = await ok(client, 'recall_memories', {
-      query: 'Which datastore does Lore use?',
-    });
-    expect(recalledIds(recalled)).toContain(originalId);
-    expect(recalled.items?.find((item) => item.record.id === originalId)?.authority).toBe('user');
-    const callerScope = await call(client, 'recall_memories', {
-      query: 'Which datastore does Lore use?',
-      scope_id: 'caller-selected-scope',
-    });
-    expect(callerScope.isError).toBe(true);
-    expect(callerScope.content.map((entry) => entry.text ?? '').join(' ')).toContain('scope_id');
-
-    const read = await ok(client, 'get_memory', { record_id: originalId });
-    expect(read).toMatchObject({ latest_revision: 1, lifecycle: 'active', authority: 'user' });
-    const firstRevision = (read['revisions'] as StoredRevision[])[0]!;
-    expect(firstRevision.attribution).toMatchObject({ role: 'user' });
-    expect(firstRevision.revision).toMatchObject({
-      writer: { kind: 'person' },
-      approval: { status: 'approved', provenance: 'policy' },
-      requestingConnectionId: 'connection-a1',
-      gateClientId: 'test-ai-client',
-      sourceReferences: [
-        { provider: 'lore-mcp', accountOrTenant: 'test-ai-client', resourceId: 'flow-remember' },
-      ],
-    });
-
-    await pause(25);
-    const knownBefore = new Date().toISOString();
-    await pause(25);
-    const superseded = await ok(client, 'correct_memory', {
-      record_id: originalId,
-      action: 'supersede',
-      expected_revision: 1,
-      reason: 'The ledger moved to its own database',
-      as_user: true,
-      idempotency_key: 'flow-supersede',
-      replacement: {
-        statement:
-          'Lore keeps memories in Firestore and the deletion ledger in a separate database',
-        details: {
-          question: 'Which datastore does Lore use?',
-          choice: 'Firestore with a separate ledger database',
-          reason: 'Forget needs an independent ledger',
-          decider: 'the user',
-          decisionTime: '2026-11-09T01:00:00Z',
+    const quoted = {
+      title: 'Quoted price',
+      summary: 'Acme quoted 800,000 yen in total for two months.',
+      nature: 'state',
+      kind: 'fact',
+      subjects: ['Acme Corp'],
+      aliases: ['アクメーロジック'],
+      aspect: 'Quoted price',
+      value: '800,000 yen total',
+      effective_at: '2026-01-06T00:00:00Z',
+      sources: [
+        {
+          provider: 'notion',
+          ids: { page_id: 'page-1' },
+          uri: 'https://www.example.com/page-1',
+          title: 'Customer notes',
         },
+      ],
+      idempotency_key: 'course-1',
+    };
+    const first = await ok(client, 'observe', quoted);
+    expect(first).toMatchObject({
+      replayed: false,
+      tier: 'source',
+      relation: 'first',
+      ambiguous_names: [],
+      topic: { aspect: 'quoted price', current: { value: '800,000 yen total' }, previous: null },
+    });
+    expect(first.topic.current.sources[0]).toMatchObject({
+      provider: 'notion',
+      ids: { page_id: 'page-1' },
+      sensitivity: 'normal',
+    });
+    expect(await ok(client, 'observe', quoted)).toMatchObject({
+      observation_id: first.observation_id,
+      replayed: true,
+    });
+    expect(errorCode(await call(client, 'observe', { ...quoted, value: 'something else' }))).toBe(
+      'idempotency_conflict',
+    );
+    // A request cannot set the tier or the writer.
+    expect(
+      (await call(client, 'observe', { ...quoted, tier: 'person', idempotency_key: 'course-x' }))
+        .isError,
+    ).toBe(true);
+
+    const { aliases: _aliases, ...withoutAliases } = quoted;
+    void _aliases;
+    const second = await ok(client, 'observe', {
+      ...withoutAliases,
+      summary: 'Acme quoted 800,000 yen per month for two months.',
+      value: '800,000 yen per month',
+      effective_at: '2026-01-09T00:00:00Z',
+      idempotency_key: 'course-2',
+    });
+    expect(second).toMatchObject({
+      relation: 'follows',
+      topic: {
+        current: { value: '800,000 yen per month' },
+        previous: { value: '800,000 yen total', observation_id: first.observation_id },
+        changed: 'yes',
+        changed_at: '2026-01-09T00:00:00Z',
+        observations: 2,
       },
     });
-    expect(superseded).toMatchObject({ revision: 2, lifecycle: 'superseded', authority: 'user' });
-    const replacementId = String(superseded['replacement_id']);
-
-    const stale = await call(client, 'correct_memory', {
-      record_id: originalId,
-      action: 'refine',
-      expected_revision: 1,
-      reason: 'A stale edit',
-      as_user: true,
-      idempotency_key: 'flow-stale',
-      replacement: { title: 'Stale' },
+    const visit = await ok(client, 'observe', {
+      title: 'Visit to Acme',
+      summary: 'Visited Acme; the price was discussed and not settled.',
+      nature: 'event',
+      subjects: ['Acme Corp'],
+      effective_at: '2026-01-10T00:00:00Z',
+      idempotency_key: 'course-3',
     });
-    expect(errorCode(stale)).toBe('conflict');
+    expect(visit).toMatchObject({ tier: 'inference', relation: null, topic: null });
 
-    const current = await ok(client, 'recall_memories', {
-      query: 'Which datastore does Lore use?',
-      mode: 'contextual',
+    // A question written without spaces finds the subject through its katakana alias.
+    const recalled = await ok(client, 'recall', { query: 'アクメーロジックの案件の進捗を教えて' });
+    expect(recalled.subjects).toEqual([{ id: first.subject_ids[0], name: 'Acme Corp' }]);
+    expect(recalled.items[0]).toMatchObject({
+      type: 'topic',
+      topic: {
+        subject: { name: 'Acme Corp' },
+        current: { value: '800,000 yen per month' },
+        previous: { value: '800,000 yen total' },
+        changed: 'yes',
+      },
     });
-    expect(recalledIds(current)).toContain(replacementId);
-    expect(recalledIds(current)).not.toContain(originalId);
-
-    const historical = await ok(client, 'recall_memories', {
-      query: 'Which datastore does Lore use?',
-      mode: 'historical',
-      known_at: knownBefore,
-    });
-    expect(recalledIds(historical)).toContain(originalId);
-    expect(recalledIds(historical)).not.toContain(replacementId);
-
-    expect(await ok(client, 'get_memory', { record_id: originalId })).toMatchObject({
-      lifecycle: 'superseded',
-      superseded_by: replacementId,
-      latest_revision: 2,
-      current: null,
-    });
-
-    const headBefore = await app.runtime.ledger.head();
-    const forgotten = await ok(client, 'forget_memory', {
-      record_id: replacementId,
-      idempotency_key: 'flow-forget',
-    });
-    expect(forgotten).toEqual({ record_id: replacementId, status: 'stopped', use_stopped: true });
-    expect(await app.runtime.ledger.head()).toBe(headBefore + 1);
+    expect(recalled.items[0].matched).toContain('name');
     expect(
-      await ok(client, 'forget_memory', {
-        record_id: replacementId,
-        idempotency_key: 'flow-forget',
-      }),
-    ).toEqual(forgotten);
-    expect(await app.runtime.ledger.head()).toBe(headBefore + 1);
-
-    const afterForget = await ok(client, 'recall_memories', {
-      query: 'Which datastore does Lore use?',
-      mode: 'contextual',
-    });
-    expect(recalledIds(afterForget)).not.toContain(replacementId);
-    expect(afterForget['insufficiencies']).not.toContain('index-lag');
-    expect(errorCode(await call(client, 'get_memory', { record_id: replacementId }))).toBe(
-      'not_found',
-    );
-    expect(
-      errorCode(
-        await call(client, 'forget_memory', {
-          record_id: 'mem_doesnotexist',
-          idempotency_key: 'flow-forget-missing',
-        }),
+      recalled.items.some(
+        (item: Item) => item.type === 'event' && item.observation.title === 'Visit to Acme',
       ),
-    ).toBe('not_found');
+    ).toBe(true);
+    expect(recalled.notes).not.toContain('semantic-match-only');
+
+    // Found by a term alone when no subject is named.
+    const byTerm = await ok(client, 'recall', { query: 'settled' });
+    expect(byTerm.subjects).toEqual([]);
+    expect(byTerm.items[0]).toMatchObject({ type: 'event' });
+    expect(byTerm.items[0].matched).toContain('terms');
+    const unknown = await ok(client, 'recall', { query: 'Globex' });
+    expect(unknown.items.every((item: Item) => item.matched.join() === 'semantic')).toBe(true);
+
+    // What held on a past date, from what is known now.
+    const past = await ok(client, 'recall', { query: 'Acme Corp', at: '2026-01-07T00:00:00Z' });
+    expect(past.items).toHaveLength(1);
+    expect(past.items[0].topic).toMatchObject({
+      current: { value: '800,000 yen total' },
+      previous: null,
+    });
+
+    const course = await ok(client, 'get_timeline', {
+      subjects: ['Acme Corp'],
+      aspect: 'quoted price',
+    });
+    expect(course.topic.course.map((item: Item) => item.value)).toEqual([
+      '800,000 yen total',
+      '800,000 yen per month',
+    ]);
+    const everything = await ok(client, 'get_timeline', { subjects: ['アクメーロジック'] });
+    expect(everything.observations.map((item: Item) => item.title)).toEqual([
+      'Visit to Acme',
+      'Quoted price',
+      'Quoted price',
+    ]);
+
+    await ok(client, 'report_source', {
+      observation_id: first.observation_id,
+      source_index: 0,
+      status: 'changed',
+    });
+    const read = await ok(client, 'get_observation', { observation_id: first.observation_id });
+    expect(read.sources[0].last_report).toMatchObject({ status: 'changed' });
+    expect(read).toMatchObject({ tier: 'source', at: '2026-01-06T00:00:00Z' });
 
     const changes = await ok(client, 'get_changes');
-    const entries = changes['entries'] as Array<{ operation: string; recordIds: string[] }>;
-    expect(entries.map((entry) => entry.operation)).toContain('deletion');
-    expect(entries.some((entry) => entry.recordIds.includes(replacementId))).toBe(false);
-    const next = await ok(client, 'get_changes', { cursor: changes['cursor'] });
-    expect(next['entries']).toEqual([]);
-    expect(
-      errorCode(await call(client, 'get_changes', { cursor: `${String(changes['cursor'])}x` })),
-    ).toBe('resync_required');
+    expect(changes.entries.map((entry: Item) => entry.operation)).toEqual([
+      'observe',
+      'observe',
+      'observe',
+    ]);
+    expect(logs.some((event) => event['event'] === 'mcp.tool.failed')).toBe(false);
+  }, 90_000);
 
-    const logged = JSON.stringify(logs);
-    expect(logged).not.toContain('Lore keeps memories');
-    expect(logged).not.toContain('Which datastore');
-  }, 60_000);
-
-  it('replays an idempotent request and rejects a reused key with different input', async () => {
-    const subject = 'github:1002';
-    await admit(subject, 'tenant-replay', 'personal');
-    const client = await connect(grant(subject, 'connection-replay'));
-    const input = { ...fact('The user edits in Helix'), idempotency_key: 'replay-proposal' };
-    const first = await ok(client, 'remember_memory', input);
-    const second = await ok(client, 'remember_memory', input);
-    expect(second).toEqual({ ...first, replayed: true });
-    expect(first).toMatchObject({ authority: 'proposal', lifecycle: 'candidate' });
-
-    const user = {
-      ...decision('Lore runs on Cloud Run', 'Cloud Run'),
-      as_user: true,
-      idempotency_key: 'replay-user',
+  it('derives trust from who wrote an observation and keeps a disagreeing lower tier as a conflict', async () => {
+    const subject = 'github:2002';
+    await admit(subject, 'tenant-trust', 'personal');
+    const first = await connect(grant(subject, 'connection-trust-a'));
+    const second = await connect(grant(subject, 'connection-trust-b'));
+    const status = {
+      title: 'Contract status',
+      nature: 'state',
+      subjects: ['Initech'],
+      aspect: 'contract status',
     };
-    const firstUser = await ok(client, 'remember_memory', user);
-    expect(await ok(client, 'remember_memory', user)).toEqual({ ...firstUser, replayed: true });
+    const stated = await ok(first, 'observe', {
+      ...status,
+      summary: 'The user says the contract with Initech is not agreed yet.',
+      value: 'not agreed',
+      as_user: true,
+      idempotency_key: 'trust-1',
+    });
+    expect(stated).toMatchObject({ tier: 'person', relation: 'first' });
 
+    // Another AI infers otherwise: it does not take over.
+    const inferred = await ok(second, 'observe', {
+      ...status,
+      summary: 'A message suggests the contract with Initech was agreed.',
+      value: 'agreed',
+      idempotency_key: 'trust-2',
+    });
+    expect(inferred).toMatchObject({
+      tier: 'inference',
+      relation: 'conflicts',
+      topic: { current: { value: 'not agreed', tier: 'person' }, changed: 'no' },
+    });
+    expect(inferred.topic.conflicts.map((item: Item) => item.value)).toEqual(['agreed']);
+    // Nor can it withdraw what the person stated.
+    const withdrawn = await ok(second, 'observe', {
+      ...status,
+      summary: 'Withdrawing the statement that the contract is not agreed.',
+      retracts: stated.observation_id,
+      idempotency_key: 'trust-3',
+    });
+    expect(withdrawn.topic.current).toMatchObject({ value: 'not agreed', tier: 'person' });
+    // A second writer stating the same value agrees with it.
+    const agreeing = await ok(second, 'observe', {
+      ...status,
+      summary: 'The Initech contract is still not agreed according to the tracker.',
+      value: 'Not agreed',
+      sources: [{ provider: 'gmail', ids: { message_id: '<m1@example.com>' } }],
+      idempotency_key: 'trust-4',
+    });
+    expect(agreeing).toMatchObject({
+      tier: 'source',
+      relation: 'restates',
+      topic: { current: { value: 'not agreed' }, agreeing: 2 },
+    });
+    // The person changing their statement settles the conflict.
+    const settled = await ok(first, 'observe', {
+      ...status,
+      summary: 'The user says the contract with Initech is now agreed.',
+      value: 'agreed',
+      as_user: true,
+      idempotency_key: 'trust-5',
+    });
+    expect(settled).toMatchObject({
+      relation: 'follows',
+      topic: {
+        current: { value: 'agreed', tier: 'person' },
+        previous: { value: 'not agreed' },
+        conflicts: [],
+        changed: 'yes',
+      },
+    });
+
+    // A connection starts with General only and cannot write into a compartment.
     expect(
       errorCode(
-        await call(client, 'remember_memory', { ...input, statement: 'The user edits in Vim' }),
-      ),
-    ).toBe('idempotency_conflict');
-    expect(
-      errorCode(await call(client, 'remember_memory', { ...user, statement: 'Lore runs on GKE' })),
-    ).toBe('idempotency_conflict');
-  }, 60_000);
-
-  it('starts every new connection with General only and shares the scope with it', async () => {
-    const subject = 'github:1003';
-    await admit(subject, 'tenant-shared', 'personal');
-    const first = await connect(grant(subject, 'connection-first', 'client-one'));
-    const second = await connect(grant(subject, 'connection-second', 'client-two'));
-    const firstAccess = await ok(first, 'get_access');
-    const secondAccess = await ok(second, 'get_access');
-    expect(secondAccess).toMatchObject({ compartment_allowance: [], approval_policy: 'automatic' });
-    expect(secondAccess['principal_id']).not.toBe(firstAccess['principal_id']);
-
-    const labeled = await call(second, 'remember_memory', {
-      ...fact('A labeled memory'),
-      compartment_ids: ['work'],
-      idempotency_key: 'labeled',
-    });
-    expect(errorCode(labeled)).toBe('forbidden');
-
-    const remembered = await ok(first, 'remember_memory', {
-      ...decision('Lore answers through Remote MCP', 'Remote MCP'),
-      as_user: true,
-      idempotency_key: 'shared-decision',
-    });
-    const recalled = await ok(second, 'recall_memories', {
-      query: 'Which datastore does Lore use?',
-    });
-    expect(recalledIds(recalled)).toContain(remembered['record_id']);
-  }, 60_000);
-
-  it('keeps AI proposals as proposals until the user adopts one by policy', async () => {
-    const subject = 'github:1004';
-    await admit(subject, 'tenant-proposals', 'personal');
-    const client = await connect(grant(subject, 'connection-proposals'));
-
-    // Request fields cannot carry authority, and malformed input is rejected before any write.
-    for (const invalid of [
-      { ...fact('Forged approval'), approval: { status: 'approved' }, idempotency_key: 'forged' },
-      { ...fact('Forged attribution'), attribution: { role: 'user' }, idempotency_key: 'forged-2' },
-      { ...fact('Missing key') },
-      { ...fact('Bad time'), valid_from: 'yesterday', idempotency_key: 'bad-time' },
-      {
-        ...fact('Wrong details'),
-        details: { question: 'Not a fact field' },
-        idempotency_key: 'bad',
-      },
-    ]) {
-      expect((await call(client, 'remember_memory', invalid)).isError).toBe(true);
-    }
-    expect((await ok(client, 'get_changes'))['entries']).toEqual([]);
-
-    const proposed = await ok(client, 'remember_memory', {
-      ...fact('The user prefers dark editor themes'),
-      idempotency_key: 'proposal',
-    });
-    expect(proposed).toMatchObject({ authority: 'proposal', lifecycle: 'candidate' });
-    const recordId = String(proposed['record_id']);
-    const proposalRecall = await ok(client, 'recall_memories', {
-      query: 'dark editor themes',
-    });
-    expect(recalledIds(proposalRecall)).toContain(recordId);
-    expect(proposalRecall.items?.find((item) => item.record.id === recordId)).toMatchObject({
-      authority: 'proposal',
-      record: { lifecycle: 'candidate' },
-    });
-    expect(
-      recalledIds(
-        await ok(client, 'recall_memories', {
-          query: 'dark editor themes',
-          include_proposals: false,
+        await call(first, 'observe', {
+          ...status,
+          summary: 'A compartment write.',
+          value: 'agreed',
+          compartment_ids: ['work'],
+          idempotency_key: 'trust-6',
         }),
       ),
-    ).not.toContain(recordId);
-    const read = await ok(client, 'get_memory', { record_id: recordId });
-    expect(read).toMatchObject({ authority: 'proposal', lifecycle: 'candidate', current: null });
-    const revision = (read['revisions'] as StoredRevision[])[0]!;
-    expect(revision.attribution).toMatchObject({ role: 'ai' });
-    expect(revision.revision.writer).toMatchObject({ kind: 'ai' });
+    ).toBe('forbidden');
+  }, 90_000);
 
-    const unapproved = await call(client, 'correct_memory', {
-      record_id: recordId,
-      action: 'retract',
-      expected_revision: 1,
-      reason: 'Not the user’s statement',
-      idempotency_key: 'proposal-retract',
+  it('resolves names without merging subjects and reads linked subjects and topics together', async () => {
+    const subject = 'github:2003';
+    await admit(subject, 'tenant-subjects', 'personal');
+    const client = await connect(grant(subject, 'connection-subjects'));
+    const east = await ok(client, 'observe', {
+      title: 'East office headcount',
+      summary: 'Globex East has forty people.',
+      nature: 'state',
+      subjects: ['Globex East'],
+      aliases: ['Globex'],
+      aspect: 'headcount',
+      value: '40',
+      idempotency_key: 'subjects-1',
     });
-    expect(errorCode(unapproved)).toBe('invalid_input');
+    const west = await ok(client, 'observe', {
+      title: 'West office headcount',
+      summary: 'Globex West has twelve people.',
+      nature: 'state',
+      subjects: ['Globex West'],
+      aliases: ['Globex'],
+      aspect: 'staff',
+      value: '12',
+      idempotency_key: 'subjects-2',
+    });
+    // The spelling already belongs to another subject, so it is reported and not reassigned.
+    expect(west).toMatchObject({ alias_conflicts: ['globex'] });
+    expect(west.subject_ids[0]).not.toBe(east.subject_ids[0]);
+    expect((await ok(client, 'recall', { query: 'Globex' })).subjects).toEqual([
+      { id: east.subject_ids[0], name: 'Globex East' },
+    ]);
 
-    const refined = await ok(client, 'correct_memory', {
-      record_id: recordId,
-      action: 'refine',
-      expected_revision: 1,
-      reason: 'The user confirmed it',
-      as_user: true,
-      idempotency_key: 'proposal-adopt',
+    await ok(client, 'link', { kind: 'same-subject', a: 'Globex East', b: 'Globex West' });
+    const linked = await ok(client, 'recall', { query: 'Globex East' });
+    expect(linked.items.map((item: Item) => item.topic?.current.value).sort()).toEqual([
+      '12',
+      '40',
+    ]);
+    await ok(client, 'link', {
+      kind: 'same-subject',
+      a: 'Globex East',
+      b: 'Globex West',
+      revoke: true,
     });
-    expect(refined).toMatchObject({
-      revision: 2,
-      lifecycle: 'active',
-      authority: 'user',
-      approval_provenance: 'policy',
-    });
-    const recalled = await ok(client, 'recall_memories', { query: 'dark editor themes' });
-    expect(recalledIds(recalled)).toContain(recordId);
-    expect(recalled.items?.find((item) => item.record.id === recordId)?.authority).toBe('user');
-  }, 60_000);
-
-  it('recalls proposals by default, ranks equal matches by authority, and honors historical time', async () => {
-    const subject = 'github:1007';
-    await admit(subject, 'tenant-proposal-recall', 'personal');
-    const client = await connect(grant(subject, 'connection-proposal-recall'));
-    const proposal = await ok(client, 'remember_memory', {
-      ...fact('The user prefers dark editor themes'),
-      idempotency_key: 'recall-proposal',
-    });
-    const proposalId = String(proposal['record_id']);
-    await pause(25);
-    const knownBeforeAdoption = new Date().toISOString();
-    await ok(client, 'remember_memory', {
-      ...fact('The user prefers dark editor themes'),
-      as_user: true,
-      idempotency_key: 'recall-user',
-    });
-
-    const recalled = await ok(client, 'recall_memories', {
-      query: 'dark editor themes',
-    });
-    const matches = recalled.items ?? [];
-    expect(matches).toHaveLength(2);
-    expect(matches.map((item) => item.authority)).toEqual(['user', 'proposal']);
-    expect(matches[0]?.score).toBe(matches[1]?.score);
-    expect(recalledIds(recalled)).toContain(proposalId);
+    const unlinked = await ok(client, 'recall', { query: 'Globex East' });
     expect(
-      recalledIds(
-        await ok(client, 'recall_memories', {
-          query: 'dark editor themes',
-          include_proposals: false,
-        }),
-      ),
-    ).not.toContain(proposalId);
+      unlinked.items
+        .filter((item: Item) => item.matched.includes('name'))
+        .map((item: Item) => item.topic?.current.value),
+    ).toEqual(['40']);
 
-    await ok(client, 'correct_memory', {
-      record_id: proposalId,
-      action: 'refine',
-      expected_revision: 1,
-      reason: 'The user confirmed the preference',
-      as_user: true,
-      idempotency_key: 'recall-adopt',
+    // The same matter written under another aspect is read as one course once it is linked.
+    await ok(client, 'observe', {
+      title: 'East office staff',
+      summary: 'Globex East grew to forty-five people.',
+      nature: 'state',
+      subjects: [east.subject_ids[0]],
+      aspect: 'staff count',
+      value: '45',
+      effective_at: '2026-02-01T00:00:00Z',
+      idempotency_key: 'subjects-3',
     });
-    const historical = await ok(client, 'recall_memories', {
-      query: 'dark editor themes',
-      mode: 'historical',
-      known_at: knownBeforeAdoption,
+    await ok(client, 'link', {
+      kind: 'same-topic',
+      subject: 'Globex East',
+      a: 'headcount',
+      b: 'staff count',
     });
-    const historicalProposal = historical.items?.find((item) => item.record.id === proposalId);
-    expect(historicalProposal).toMatchObject({
-      authority: 'proposal',
-      record: { lifecycle: 'candidate', revision: { revision: 1 } },
+    const course = await ok(client, 'get_timeline', {
+      subjects: ['Globex East'],
+      aspect: 'staff count',
     });
-    expect(
-      recalledIds(
-        await ok(client, 'recall_memories', {
-          query: 'dark editor themes',
-          mode: 'historical',
-          known_at: knownBeforeAdoption,
-          include_proposals: false,
-        }),
-      ),
-    ).not.toContain(proposalId);
-
-    await ok(client, 'forget_memory', {
-      record_id: proposalId,
-      idempotency_key: 'recall-forget',
-    });
-    expect(
-      recalledIds(await ok(client, 'recall_memories', { query: 'dark editor themes' })),
-    ).not.toContain(proposalId);
-  }, 60_000);
-
-  it('stores structured sources, preserves or replaces them on correction, and bounds MCP input', async () => {
-    const subject = 'github:1008';
-    await admit(subject, 'tenant-sources', 'personal');
-    const client = await connect(grant(subject, 'connection-sources'));
-    const originalSources = [
-      {
-        provider: 'docs',
-        uri: 'https://docs.example.test/guide',
-        title: 'Guide',
-        locator: 'section 3',
-        version: 'v1',
-      },
-      {
-        provider: 'drive',
-        uri: 'https://drive.example.test/decision',
-        title: 'Private decision',
-        locator: 'paragraph 4',
-        sensitivity: 'confidential',
-      },
-    ];
-    const invalidInputs = [
-      [{ provider: 'web', uri: 'http://docs.example.test/no-https' }],
-      [{ provider: 'x'.repeat(101), uri: 'https://docs.example.test/provider' }],
-      [{ provider: 'web', uri: 'https://docs.example.test/unknown', accountOrTenant: 'forged' }],
-      [{ provider: 'web', uri: 'https://docs.example.test/title', title: 't'.repeat(201) }],
-      Array.from({ length: 11 }, (_, index) => ({
-        provider: 'web',
-        uri: `https://docs.example.test/${index}`,
-      })),
-    ];
-    for (const [index, invalidSources] of invalidInputs.entries()) {
-      expect(
-        (
-          await call(client, 'remember_memory', {
-            ...fact('A source validation probe'),
-            sources: invalidSources,
-            idempotency_key: `invalid-source-${index}`,
-          })
-        ).isError,
-      ).toBe(true);
-    }
-    expect((await ok(client, 'get_changes'))['entries']).toEqual([]);
-
-    const remembered = await ok(client, 'remember_memory', {
-      ...fact('The editor guide recommends a dark theme'),
-      as_user: true,
-      sources: originalSources,
-      idempotency_key: 'source-create',
-    });
+    expect(course.topic.course.map((item: Item) => item.value).sort()).toEqual(['40', '45']);
     expect(
       errorCode(
-        await call(client, 'remember_memory', {
-          ...fact('The editor guide recommends a dark theme'),
-          as_user: true,
-          sources: [{ ...originalSources[0], uri: 'https://docs.example.test/changed' }],
-          idempotency_key: 'source-create',
-        }),
+        await call(client, 'link', { kind: 'same-subject', a: 'Globex East', b: 'Nobody' }),
       ),
-    ).toBe('idempotency_conflict');
-    const recordId = String(remembered['record_id']);
-    const initial = await ok(client, 'get_memory', { record_id: recordId });
-    const firstRevision = (initial['revisions'] as StoredRevision[])[0]!;
-    expect(firstRevision.revision['sourceReferences']).toEqual([
-      {
-        provider: 'docs',
-        accountOrTenant: 'docs.example.test',
-        resourceId: sourceResourceId('https://docs.example.test/guide'),
-        uri: 'https://docs.example.test/guide',
-        title: 'Guide',
-        locator: 'section 3',
-        version: 'v1',
-      },
-      {
-        provider: 'drive',
-        accountOrTenant: 'drive.example.test',
-        resourceId: sourceResourceId('https://drive.example.test/decision'),
-        uri: 'https://drive.example.test/decision',
-        title: 'Private decision',
-        locator: 'paragraph 4',
-        rights: ['confidential'],
-      },
-      {
-        provider: 'lore-mcp',
-        accountOrTenant: 'test-ai-client',
-        resourceId: 'source-create',
-      },
-    ]);
-    const recalled = await ok(client, 'recall_memories', {
-      query: 'editor guide dark theme',
+    ).toBe('invalid_input');
+  }, 90_000);
+
+  it('forgets an observation, a source and a subject, and rebuilds what was derived', async () => {
+    const subject = 'github:2004';
+    await admit(subject, 'tenant-forget-obs', 'personal');
+    const client = await connect(grant(subject, 'connection-forget-obs'));
+    const plan = { title: 'Launch date', nature: 'state', subjects: ['Hooli'], aspect: 'launch' };
+    const old = await ok(client, 'observe', {
+      ...plan,
+      summary: 'Hooli plans to launch in March.',
+      value: 'March',
+      effective_at: '2026-01-01T00:00:00Z',
+      idempotency_key: 'forget-1',
+    });
+    const latest = await ok(client, 'observe', {
+      ...plan,
+      summary: 'Hooli moved the launch to May.',
+      value: 'May',
+      effective_at: '2026-02-01T00:00:00Z',
+      sources: [{ provider: 'slack', ids: { channel: 'C1', ts: '171.5' } }],
+      idempotency_key: 'forget-2',
     });
     expect(
-      recalled.items?.find((item) => item.record.id === recordId)?.record.revision.sourceReferences,
-    ).toEqual(firstRevision.revision['sourceReferences']);
-
-    await ok(client, 'correct_memory', {
-      record_id: recordId,
-      action: 'refine',
-      expected_revision: 1,
-      reason: 'Clarify the note',
-      replacement: { title: 'Updated editor guide' },
-      as_user: true,
-      idempotency_key: 'source-preserve',
-    });
-    const afterPreserve = await ok(client, 'get_memory', { record_id: recordId });
-    const revisionsAfterPreserve = afterPreserve['revisions'] as StoredRevision[];
-    expect(revisionsAfterPreserve[1]?.revision['sourceReferences']).toEqual([
-      ...(firstRevision.revision['sourceReferences'] as unknown[]),
-      {
-        provider: 'lore-mcp',
-        accountOrTenant: 'test-ai-client',
-        resourceId: 'source-preserve',
-      },
-    ]);
-
-    const superseded = await ok(client, 'correct_memory', {
-      record_id: recordId,
-      action: 'supersede',
-      expected_revision: 2,
-      reason: 'The guide was replaced',
-      as_user: true,
-      replacement: {
-        title: 'Updated editor guidance',
-        statement: 'The editor guide recommends a dark theme after review',
-      },
-      idempotency_key: 'source-supersede',
-    });
-    const replacementId = String(superseded['replacement_id']);
-    const afterSupersede = await ok(client, 'get_memory', { record_id: replacementId });
-    const supersedeRefs = (afterSupersede['revisions'] as StoredRevision[])[0]?.revision[
-      'sourceReferences'
-    ] as Array<Record<string, unknown>>;
-    expect(supersedeRefs).toEqual([
-      ...(revisionsAfterPreserve[1]?.revision['sourceReferences'] as Array<
-        Record<string, unknown>
-      >),
-      {
-        provider: 'lore-mcp',
-        accountOrTenant: 'test-ai-client',
-        resourceId: 'source-supersede',
-      },
-    ]);
-
-    const replacementSource = {
-      provider: 'wiki',
-      uri: 'https://wiki.example.test/dark-theme',
-      title: 'Theme guidance',
-      version: 'rev-2',
-      sensitivity: 'normal',
-    };
-    const sourceOnly = {
-      record_id: replacementId,
-      action: 'refine',
-      expected_revision: 1,
-      reason: 'Replace the cited reference',
-      as_user: true,
-      replacement: { sources: [replacementSource] },
-      idempotency_key: 'source-only-replace',
-    };
-    await ok(client, 'correct_memory', sourceOnly);
+      await ok(client, 'forget', {
+        observation_id: latest.observation_id,
+        idempotency_key: 'forget-3',
+      }),
+    ).toMatchObject({ stopped: 1, pending: 0, use_stopped: true });
     expect(
-      errorCode(
-        await call(client, 'correct_memory', {
-          ...sourceOnly,
-          replacement: {
-            sources: [{ ...replacementSource, uri: 'https://wiki.example.test/changed' }],
-          },
-        }),
-      ),
-    ).toBe('idempotency_conflict');
-    const afterReplace = await ok(client, 'get_memory', { record_id: replacementId });
-    const sourceOnlyRefs = (afterReplace['revisions'] as StoredRevision[])[1]?.revision[
-      'sourceReferences'
-    ] as Array<Record<string, unknown>>;
-    expect(sourceOnlyRefs).toEqual([
-      {
-        provider: 'wiki',
-        accountOrTenant: 'wiki.example.test',
-        resourceId: sourceResourceId('https://wiki.example.test/dark-theme'),
-        uri: 'https://wiki.example.test/dark-theme',
-        title: 'Theme guidance',
-        version: 'rev-2',
-      },
-      {
-        provider: 'lore-mcp',
-        accountOrTenant: 'test-ai-client',
-        resourceId: 'source-only-replace',
-      },
-    ]);
-
-    await ok(client, 'correct_memory', {
-      record_id: replacementId,
-      action: 'refine',
-      expected_revision: 2,
-      reason: 'Clear declared references',
-      as_user: true,
-      replacement: { sources: [] },
-      idempotency_key: 'source-only-clear',
+      errorCode(await call(client, 'get_observation', { observation_id: latest.observation_id })),
+    ).toBe('not_found');
+    // The topic falls back to the state that remains, with no trace of the forgotten text.
+    const after = await ok(client, 'recall', { query: 'Hooli' });
+    expect(after.items).toHaveLength(1);
+    expect(after.items[0].topic).toMatchObject({
+      current: { value: 'March', observation_id: old.observation_id },
+      previous: null,
+      observations: 1,
     });
-    const afterClear = await ok(client, 'get_memory', { record_id: replacementId });
-    expect((afterClear['revisions'] as StoredRevision[])[2]?.revision['sourceReferences']).toEqual([
-      {
-        provider: 'lore-mcp',
-        accountOrTenant: 'test-ai-client',
-        resourceId: 'source-only-clear',
-      },
-    ]);
-    expect((afterClear['revisions'] as StoredRevision[])[2]?.statement).toBe(
-      'The editor guide recommends a dark theme after review',
+    expect(JSON.stringify(after)).not.toContain('May');
+    expect(
+      (await ok(client, 'recall', { query: 'moved' })).items.filter((item: Item) =>
+        item.matched.includes('terms'),
+      ),
+    ).toEqual([]);
+
+    await ok(client, 'observe', {
+      title: 'Call with Hooli',
+      summary: 'Hooli confirmed the budget on a call.',
+      nature: 'event',
+      subjects: ['Hooli'],
+      sources: [{ provider: 'slack', ids: { ts: '171.9', channel: 'C1' } }],
+      idempotency_key: 'forget-4',
+    });
+    expect(
+      await ok(client, 'forget', {
+        source: { provider: 'slack', ids: { channel: 'C1', ts: '171.9' } },
+        idempotency_key: 'forget-5',
+      }),
+    ).toMatchObject({ stopped: 1, use_stopped: true });
+    expect(
+      await ok(client, 'forget', { subject: 'Hooli', idempotency_key: 'forget-6' }),
+    ).toMatchObject({ stopped: 1, remaining: false });
+    expect((await ok(client, 'recall', { query: 'Hooli' })).items).toEqual([]);
+    expect(errorCode(await call(client, 'forget', { idempotency_key: 'forget-7' }))).toBe(
+      'invalid_input',
     );
-  }, 60_000);
+    const changes = await ok(client, 'get_changes');
+    expect(changes.entries.map((entry: Item) => entry.operation)).toEqual([
+      'deletion',
+      'deletion',
+      'deletion',
+    ]);
+    expect(changes.entries.every((entry: Item) => entry.recordIds.length === 0)).toBe(true);
+    expect(logs.some((event) => event['event'] === 'observation.purge')).toBe(true);
+  }, 90_000);
 
-  it('returns user_required for protected changes under a policy other than automatic', async () => {
-    const forgetting = 'github:1005';
-    await admit(forgetting, 'tenant-forget', 'personal');
-    const writer = await connect(grant(forgetting, 'connection-forget'));
-    const remembered = await ok(writer, 'remember_memory', {
-      ...decision('Lore deletes forgotten memories', 'Delete them'),
-      as_user: true,
-      idempotency_key: 'policy-forget-target',
+  it('converts existing Memory Records into observations found by the same names', async () => {
+    const subject = 'github:2005';
+    await admit(subject, 'tenant-legacy', 'personal');
+    // Records written by the previous service, before any observation exists in the scope.
+    const access = await app.runtime.access.resolve({
+      issuer,
+      subject,
+      connectionId: 'connection-legacy',
+      clientId: 'test-ai-client',
     });
-    await ok(writer, 'forget_memory', {
-      record_id: remembered['record_id'],
-      idempotency_key: 'policy-forget',
+    const legacy = new MemoryService({
+      repository: app.runtime.repository,
+      access: app.runtime.access,
+      embeddings: new DeterministicEmbeddingProvider(),
+      log: () => undefined,
     });
+    await legacy.remember(access, {
+      kind: 'fact',
+      title: 'Umbrella proposal received',
+      statement: 'Umbrella proposed a licence for 35,000 dollars; nothing is signed.',
+      details: { subject: 'Umbrella', claim: 'Umbrella proposed a licence.' },
+      subjectIds: ['Umbrella'],
+      aliases: [{ value: 'アンブレラ' }],
+      sourceReferences: [
+        {
+          provider: 'google-drive',
+          accountOrTenant: 'docs.example.com',
+          resourceId: 'file-1',
+          uri: 'https://docs.example.com/document/d/file-1',
+        },
+      ],
+      asUser: false,
+      idempotencyKey: 'legacy-1',
+    });
+    const client = await connect(grant(subject, 'connection-legacy'));
+    // The first write to the scope carries the conversion along.
+    await ok(client, 'observe', {
+      title: 'Unrelated note',
+      summary: 'A note that starts the conversion.',
+      nature: 'event',
+      subjects: ['Elsewhere'],
+      idempotency_key: 'legacy-2',
+    });
+    // The converted observation is indexed by the write after the one that converted it.
+    await ok(client, 'observe', {
+      title: 'Second note',
+      summary: 'A note that lets the index catch up.',
+      nature: 'event',
+      subjects: ['Elsewhere'],
+      idempotency_key: 'legacy-2b',
+    });
+    const found = await ok(client, 'recall', { query: 'アンブレラ' });
+    expect(found.subjects).toEqual([{ id: expect.any(String), name: 'Umbrella' }]);
+    const converted = found.items.filter((item: Item) => item.matched.includes('name'));
+    expect(converted).toHaveLength(1);
+    expect(converted[0]).toMatchObject({
+      type: 'event',
+      observation: {
+        title: 'Umbrella proposal received',
+        summary: 'Umbrella proposed a licence for 35,000 dollars; nothing is signed.',
+        kind: 'fact',
+        tier: 'source',
+        aspect: null,
+      },
+    });
+    expect(
+      converted[0].observation.sources.some(
+        (item: Item) => item.uri === 'https://docs.example.com/document/d/file-1',
+      ),
+    ).toBe(true);
+    // Forgetting the observation also forgets the record it came from.
+    await ok(client, 'forget', {
+      observation_id: converted[0].observation.observation_id,
+      idempotency_key: 'legacy-3',
+    });
+    expect((await legacy.recall(access, { query: 'Umbrella', mode: 'contextual' })).items).toEqual(
+      [],
+    );
+  }, 90_000);
 
-    // The ledger head moved, so this new scope is reconciled before its first operation.
-    const subject = 'github:1006';
+  it("returns user_required for the person's authority and for Forget under a policy other than automatic", async () => {
+    const subject = 'github:2006';
     await admit(subject, 'tenant-confirm', 'personal');
     const response = await fetch(
       `http://${emulatorHost}/v1/projects/${projectId}/databases/${memoryDatabase}/documents/memoryAdmissions/${admissionDocumentId(issuer, subject)}?updateMask.fieldPaths=approvalPolicy`,
@@ -968,28 +795,104 @@ describe('Lore API over Remote MCP', () => {
     expect(response.ok).toBe(true);
     const client = await connect(grant(subject, 'connection-confirm'));
     expect(await ok(client, 'get_access')).toMatchObject({ approval_policy: 'confirm' });
-    const proposal = await ok(client, 'remember_memory', {
-      ...fact('A proposal needs no approval'),
-      idempotency_key: 'confirm-proposal',
-    });
-    expect(proposal).toMatchObject({ authority: 'proposal' });
+    const note = {
+      title: 'A note',
+      summary: 'An observation needs no approval.',
+      nature: 'event',
+      subjects: ['Confirm'],
+    };
+    const written = await ok(client, 'observe', { ...note, idempotency_key: 'confirm-1' });
+    expect(written).toMatchObject({ tier: 'inference' });
     expect(
       errorCode(
-        await call(client, 'remember_memory', {
-          ...decision('Lore needs confirmation', 'Confirm'),
-          as_user: true,
-          idempotency_key: 'confirm-user',
-        }),
+        await call(client, 'observe', { ...note, as_user: true, idempotency_key: 'confirm-2' }),
       ),
     ).toBe('user_required');
     expect(
       errorCode(
-        await call(client, 'forget_memory', {
-          record_id: proposal['record_id'],
-          idempotency_key: 'confirm-forget',
+        await call(client, 'forget', {
+          observation_id: written.observation_id,
+          idempotency_key: 'confirm-3',
         }),
       ),
     ).toBe('user_required');
-    expect(logs.some((event) => event['event'] === 'memory.restore.reconciled')).toBe(true);
+    // Earlier tests moved the ledger head, so this new scope was reconciled before its first use.
+    expect(logs.some((event) => event['event'] === 'observation.restore.reconciled')).toBe(true);
   }, 60_000);
+
+  it('takes a misled writer out of every read and hides what a restored backup would bring back', async () => {
+    const subject = 'github:2007';
+    await admit(subject, 'tenant-suppress', 'personal');
+    const trusted = await connect(grant(subject, 'connection-suppress-a'));
+    const misled = await connect(grant(subject, 'connection-suppress-b'));
+    const owner = { title: 'Owner', nature: 'state', subjects: ['Pied Piper'], aspect: 'owner' };
+    const good = await ok(trusted, 'observe', {
+      ...owner,
+      summary: 'Pied Piper is owned by Richard.',
+      value: 'Richard',
+      effective_at: '2026-01-01T00:00:00Z',
+      idempotency_key: 'suppress-1',
+    });
+    const bad = await ok(misled, 'observe', {
+      ...owner,
+      summary: 'Pied Piper is owned by Gavin.',
+      value: 'Gavin',
+      effective_at: '2026-01-02T00:00:00Z',
+      idempotency_key: 'suppress-2',
+    });
+    expect(bad.topic.current.value).toBe('Gavin');
+
+    const access = await app.runtime.access.resolve({
+      issuer,
+      subject,
+      connectionId: 'connection-suppress-a',
+      clientId: 'test-ai-client',
+    });
+    const worker = await app.runtime.access.worker(access);
+    const misledPrincipal = String((await ok(misled, 'get_access'))['principal_id']);
+    await app.runtime.observations.setWriterSuppression(worker, access.scopeId, {
+      principalId: misledPrincipal,
+      from: null,
+      until: null,
+      active: true,
+    });
+    const suppressed = await ok(trusted, 'recall', { query: 'Pied Piper' });
+    expect(suppressed.items).toHaveLength(1);
+    expect(suppressed.items[0].topic).toMatchObject({
+      current: { value: 'Richard', observation_id: good.observation_id },
+      previous: null,
+    });
+    expect(JSON.stringify(suppressed)).not.toContain('Gavin');
+    expect(
+      errorCode(await call(trusted, 'get_observation', { observation_id: bad.observation_id })),
+    ).toBe('not_found');
+    // Lifting it brings the observations back; nothing was deleted.
+    await app.runtime.observations.setWriterSuppression(worker, access.scopeId, {
+      principalId: misledPrincipal,
+      from: null,
+      until: null,
+      active: false,
+    });
+    expect(
+      (await ok(trusted, 'recall', { query: 'Pied Piper' })).items[0].topic.current.value,
+    ).toBe('Gavin');
+
+    // A backup restored after a Forget holds the observation without its forgotten mark; the
+    // ledger then names it in a suppression document, and that alone must hide it.
+    const encode = (value: string) => Buffer.from(value, 'utf8').toString('base64url');
+    const seeded = await fetch(
+      `http://${emulatorHost}/v1/projects/${projectId}/databases/${memoryDatabase}/documents/memoryTenants/${encode('tenant-suppress')}/scopes/${encode('personal')}/suppressions?documentId=${encode(bad.observation_id)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+        body: JSON.stringify({ fields: { deletionId: { stringValue: 'deletion-demo' } } }),
+      },
+    );
+    expect(seeded.ok).toBe(true);
+    const restored = await ok(trusted, 'recall', { query: 'Pied Piper Gavin' });
+    expect(restored.items[0].topic.current.value).toBe('Richard');
+    expect(JSON.stringify(restored)).not.toContain('Gavin');
+    const course = await ok(trusted, 'get_timeline', { subjects: ['Pied Piper'] });
+    expect(course.observations.map((item: Item) => item.value)).toEqual(['Richard']);
+  }, 90_000);
 });

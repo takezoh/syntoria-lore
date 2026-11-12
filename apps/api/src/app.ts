@@ -2,7 +2,7 @@ import type { JWTVerifyGetKey } from 'jose';
 import type { RequestListener } from 'node:http';
 import {
   createMemoryRecordsRuntime,
-  MemoryService,
+  ObservationService,
   type EmbeddingProvider,
   type MemoryRecordsRuntime,
 } from '@memory/memory-records';
@@ -34,8 +34,8 @@ export function createApiApp(config: ApiConfig, overrides: ApiAppOverrides = {})
     ledgerDatabaseId: config.ledgerDatabaseId,
     cursorSecret: config.cursorSecret,
   });
-  const service = new MemoryService({
-    repository: runtime.repository,
+  const service = new ObservationService({
+    ledger: runtime.observations,
     access: runtime.access,
     embeddings: overrides.embeddings ?? createEmbeddingProvider(config.embedding),
     log,

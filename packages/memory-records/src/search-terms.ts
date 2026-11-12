@@ -111,3 +111,52 @@ export function termCoverage(
   const weights = termWeights(queryTerms, candidateTerms);
   return candidateTerms.map((terms) => weightedShare(queryTerms, weights, terms));
 }
+
+const NAME_SEPARATORS = /[\s,.;:!?、。・「」『』（）()[\]<>"'/|]+/u;
+const SCRIPT_RUNS =
+  /[\p{Script=Katakana}\u30fc]+|\p{Script=Han}+|\p{Script=Hiragana}+|(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc])[\p{L}\p{N}])+/gu;
+const MAX_NAME_CANDIDATES = 40;
+
+/**
+ * Strings in a query that may be the name of a subject, to be looked up one by one in the alias
+ * table: the query itself, its space-separated parts and runs of two or three of them, and, for
+ * text written without spaces, each run of one script, since a name in katakana or kanji is
+ * usually followed by hiragana.
+ */
+export function nameCandidates(query: string): string[] {
+  const candidates = new Set<string>();
+  const add = (value: string): void => {
+    const normalized = normalizeSearchText(value).trim().replace(/\s+/gu, ' ');
+    if ([...normalized].length >= 2 && candidates.size < MAX_NAME_CANDIDATES)
+      candidates.add(normalized);
+  };
+  add(query);
+  const parts = query.split(NAME_SEPARATORS).filter((part) => part !== '');
+  for (let size = 3; size >= 1; size -= 1)
+    for (let start = 0; start + size <= parts.length; start += 1)
+      add(parts.slice(start, start + size).join(' '));
+  for (const part of parts)
+    for (const run of part.match(SCRIPT_RUNS) ?? [])
+      if (!/^\p{Script=Hiragana}+$/u.test(run)) add(run);
+  return [...candidates];
+}
+
+/**
+ * At most `limit` terms of a query for an index lookup, the most telling first: whole words of
+ * other scripts before Japanese bigrams, and longer before shorter.
+ */
+export function lookupTerms(query: string, limit: number): string[] {
+  const terms = tokenizeSearchText(query);
+  const isBigram = (term: string): boolean =>
+    /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc]{1,2}$/u.test(term);
+  const hiragana = (term: string): number => (term.match(/\p{Script=Hiragana}/gu) ?? []).length;
+  return [...terms]
+    .sort(
+      (left, right) =>
+        Number(isBigram(left)) - Number(isBigram(right)) ||
+        hiragana(left) - hiragana(right) ||
+        right.length - left.length ||
+        left.localeCompare(right),
+    )
+    .slice(0, limit);
+}

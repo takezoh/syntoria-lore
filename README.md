@@ -8,7 +8,7 @@ Syntoria Lore is Syntoria's Memory Service: long-term memory with evidence for t
 
 Tell one AI, “We'll choose the database only after the product requirements are settled.” Next month, ask a different AI what the project decided. It can answer with your decision, when you made it and the conversation it came from—and keep it apart from the database it had suggested before.
 
-> **Status on 2026-11-10:** Lore was rebuilt on Firestore Memory Records and its first version is deployed with Remote MCP only. Remembering and recalling through a real AI client have not been verified. Proposal recall and structured MCP source references are implemented in the current repository but have not been checked against the hosted deployment; the [architecture](ARCHITECTURE.md) describes the current source behavior.
+> **Status on 2026-11-12:** Lore now keeps a ledger of observations and derives the current state from it; the [architecture](ARCHITECTURE.md) describes what runs. The sections below still describe the earlier memory model in places and are being revised. Use with a real AI client has been observed only as recorded in the [evaluation records](docs/eval/).
 
 ## Explain it once
 
