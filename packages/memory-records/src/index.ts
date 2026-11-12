@@ -704,3 +704,4 @@ function selectAt(
     latest.valid.until === null ? Number.POSITIVE_INFINITY : Date.parse(latest.valid.until);
   return applicabilityCut >= from && applicabilityCut < until ? latest : null;
 }
+export * from './observations.js';

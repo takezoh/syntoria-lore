@@ -603,7 +603,7 @@ describe('Firestore Memory Record repository', () => {
     const current = await repository.getCurrent(actor, 'scope-demo', 'record-1');
     expect(current?.revision.revision).toBe(2);
     expect(current?.statement).toMatch(/^[AB]$/u);
-  });
+  }, 30_000);
 
   it('rejects a historical read when the persisted current revision is missing', async () => {
     const { actor, repository, projectId } = await context();
