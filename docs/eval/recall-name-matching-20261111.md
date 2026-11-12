@@ -83,6 +83,12 @@ Commit `82beb56` returns at most two similarity-only results next to results tha
 
 After the client was made to read the server instructions again, its report used short name queries, cited the `matched` reasons and described the watermark as a change number.
 
+## Guidance to save and recall without being asked, 2026-11-12
+
+The owner asked that connected AIs save and recall on their own initiative. Commit `2524c63` adds that guidance to the MCP server instructions and to the descriptions of `remember_memory` and `recall_memories`; it changes no stored data and no recall behaviour. It was built and deployed the same way, and an authenticated `get_access` succeeded on the new revision.
+
+A client that listed the tools after the deploy still showed the earlier descriptions, so clients keep tool descriptions they fetched before. Whether any client now saves or recalls on its own initiative has not been observed.
+
 ## Limits
 
-This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. Supersede has not been exercised on the hosted service, and a Forget was checked only on a record written minutes earlier. The names added to the 42 records were chosen from each record's text by an AI and were not reviewed one by one. Nothing about the customer's visit or the progress of the deal has been saved, so no recall can return it.
+This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. Supersede has not been exercised on the hosted service, and a Forget was checked only on a record written minutes earlier. The names added to the 42 records were chosen from each record's text by an AI and were not reviewed one by one. Nothing about the customer's visit or the progress of the deal has been saved, so no recall can return it. The new guidance was checked only for being returned at initialization in the local suite; its effect on real clients is unobserved.
