@@ -102,7 +102,9 @@ Writing a state observation into a topic that already has a current state append
 
 The first four relations follow from the course by rule, so they are recomputed whenever the course changes, for example when an earlier observation arrives late; the relation stored with an observation is the one that held when it was written. `retracts`, like the links between subjects and between topics, is declared by a writer: it is appended, never edited, and revoked only by appending a revocation. An open conflict closes when an observation of the current state's tier or higher follows either side, or when one side is retracted.
 
-`retracts` is allowed for the writer's own observations and for an observation of the same or a lower tier. Retracting a `person` observation needs the person's authority.
+`retracts` takes effect only from the writer of the retracted observation or from a tier at least as high as its tier, so retracting a `person` observation needs the person's authority. Any other retraction is stored and has no effect. A retraction that was itself retracted has no effect either.
+
+A state whose `effectiveAt` is later than the time of the read is announced, not current. It is listed as upcoming and joins the course when its time arrives, so a date far in the future cannot hold the present state against later reports.
 
 Lore does not use a model to decide a relation. Where the rule cannot tell whether a state changed, the view says `unknown` and returns both summaries.
 

@@ -209,10 +209,75 @@ describe('Observation ledger value model', () => {
     });
   });
 
+  it('honours a retraction only from the same writer or an equal or higher tier', () => {
+    const person = state('person', {
+      value: 'not agreed',
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      tier: 'person',
+      writer: 'person-one',
+    });
+    const fromBelow = state('low', {
+      recordedAt: '2026-01-02T00:00:00.000Z',
+      tier: 'inference',
+      writer: 'ai-one',
+      retracts: 'person',
+    });
+    expect(computeCourse([person, fromBelow]).view?.current.observationId).toBe('person');
+    const own = state('own', {
+      value: 'draft',
+      recordedAt: '2026-01-03T00:00:00.000Z',
+      tier: 'source',
+      writer: 'ai-one',
+    });
+    const ownRetraction = state('own-r', {
+      recordedAt: '2026-01-04T00:00:00.000Z',
+      tier: 'inference',
+      writer: 'ai-one',
+      retracts: 'own',
+    });
+    // Its own writer may withdraw it even from a lower tier.
+    expect(computeCourse([own, ownRetraction]).view).toBeNull();
+    // A retraction that was itself retracted has no effect.
+    const undo = state('undo', {
+      recordedAt: '2026-01-05T00:00:00.000Z',
+      tier: 'inference',
+      writer: 'ai-one',
+      retracts: 'own-r',
+    });
+    expect(computeCourse([own, ownRetraction, undo]).view?.current.observationId).toBe('own');
+  });
+
+  it('does not let a state dated in the future hold the present', () => {
+    const now = '2026-01-10T00:00:00.000Z';
+    const current = state('a', { value: 'draft', recordedAt: '2026-01-01T00:00:00.000Z' });
+    const farFuture = state('b', {
+      value: 'signed',
+      effectiveAt: '2099-01-01T00:00:00.000Z',
+      recordedAt: '2026-01-02T00:00:00.000Z',
+    });
+    const later = state('c', { value: 'in review', recordedAt: '2026-01-03T00:00:00.000Z' });
+    const course = computeCourse([current, farFuture, later], new Set(), now);
+    expect(course.view).toMatchObject({
+      current: { observationId: 'c' },
+      previous: { observationId: 'a' },
+      count: 2,
+    });
+    expect(course.upcoming).toEqual(['b']);
+    expect(arrivalRelation(course, farFuture)).toEqual({
+      relation: 'follows',
+      toObservationId: 'c',
+    });
+    // Once its date arrives it takes its place in the course.
+    expect(
+      computeCourse([current, farFuture, later], new Set(), '2099-01-02T00:00:00.000Z').view
+        ?.current.observationId,
+    ).toBe('b');
+  });
+
   it('leaves out suppressed observations and returns no view for an empty course', () => {
     const only = state('a', { value: 'draft', recordedAt: '2026-01-01T00:00:00.000Z' });
-    expect(computeCourse([only], new Set(['a']))).toEqual({ steps: [], view: null });
-    expect(computeCourse([])).toEqual({ steps: [], view: null });
+    expect(computeCourse([only], new Set(['a']))).toEqual({ steps: [], view: null, upcoming: [] });
+    expect(computeCourse([])).toEqual({ steps: [], view: null, upcoming: [] });
   });
 
   it('answers what held on a past date from what was effective and known by then', () => {

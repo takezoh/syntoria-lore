@@ -259,7 +259,14 @@ function sameValue(left: Observation, right: Observation): boolean {
 export function computeCourse(
   observations: readonly Observation[],
   excluded: ReadonlySet<string> = new Set(),
-): { readonly steps: readonly CourseStep[]; readonly view: TopicView | null } {
+  now?: string,
+): {
+  readonly steps: readonly CourseStep[];
+  readonly view: TopicView | null;
+  /** States whose effective time is still ahead of `now`; they are not yet part of the present. */
+  readonly upcoming: readonly string[];
+} {
+  if (now !== undefined && !isIso(now)) throw new TypeError('now must be an ISO time');
   const topicKey = observations[0]?.topicKey ?? null;
   for (const observation of observations)
     if (
@@ -268,15 +275,31 @@ export function computeCourse(
       observation.topicKey !== topicKey
     )
       throw new TypeError('A course takes state observations of one topic');
-  const retracted = new Set(
-    observations
-      .filter((observation) => observation.retracts !== null && !excluded.has(observation.id))
-      .map((observation) => observation.retracts!),
-  );
-  const course = observations
+  const present = observations.filter((observation) => !excluded.has(observation.id));
+  const byId = new Map(present.map((observation) => [observation.id, observation]));
+  // A retraction counts only from the writer of its target or from a tier at least as high, so
+  // a lower tier cannot remove what a higher tier stated. Later retractions are applied first,
+  // so that a retraction which was itself retracted has no effect.
+  const retracted = new Set<string>();
+  for (const retraction of present
+    .filter((observation) => observation.retracts !== null)
+    .sort(
+      (left, right) =>
+        Date.parse(right.recordedAt) - Date.parse(left.recordedAt) ||
+        right.id.localeCompare(left.id),
+    )) {
+    if (retracted.has(retraction.id)) continue;
+    const target = byId.get(retraction.retracts!);
+    if (
+      target !== undefined &&
+      (target.writer.principalId === retraction.writer.principalId ||
+        tierRank(retraction.tier) >= tierRank(target.tier))
+    )
+      retracted.add(target.id);
+  }
+  const standing = present
     .filter(
       (observation) =>
-        !excluded.has(observation.id) &&
         !retracted.has(observation.id) &&
         // An observation that only retracts another states nothing new about the topic.
         observation.retracts === null,
@@ -287,8 +310,15 @@ export function computeCourse(
         Date.parse(left.recordedAt) - Date.parse(right.recordedAt) ||
         left.id.localeCompare(right.id),
     );
+  // A state dated ahead of now is announced, not current: otherwise one far-future date would
+  // hold the present state against every later report.
+  const cut = now === undefined ? Number.POSITIVE_INFINITY : Date.parse(now);
+  const course = standing.filter((observation) => sortTime(observation) <= cut);
+  const upcoming = standing
+    .filter((observation) => sortTime(observation) > cut)
+    .map((observation) => observation.id);
   const first = course[0];
-  if (first === undefined || topicKey === null) return { steps: [], view: null };
+  if (first === undefined || topicKey === null) return { steps: [], view: null, upcoming };
 
   const steps: CourseStep[] = [
     { observationId: first.id, relation: 'first', toObservationId: null },
@@ -335,6 +365,7 @@ export function computeCourse(
 
   return {
     steps,
+    upcoming,
     view: {
       topicKey,
       current: stateRef(current),
@@ -361,6 +392,8 @@ export function arrivalRelation(
 ): { readonly relation: ArrivalRelation; readonly toObservationId: string | null } {
   if (observation.retracts !== null)
     return { relation: 'retracts', toObservationId: observation.retracts };
+  if (course.upcoming.includes(observation.id))
+    return { relation: 'follows', toObservationId: course.view?.current.observationId ?? null };
   const step = course.steps.find((item) => item.observationId === observation.id);
   if (step === undefined) throw new TypeError('The observation is not part of the course');
   const currentId = course.view?.current.observationId ?? null;
@@ -378,9 +411,8 @@ export function computeCourseAt(
   if (!isIso(at)) throw new TypeError('at must be an ISO time');
   const cut = Date.parse(at);
   return computeCourse(
-    observations.filter(
-      (observation) => Date.parse(observation.recordedAt) <= cut && sortTime(observation) <= cut,
-    ),
+    observations.filter((observation) => Date.parse(observation.recordedAt) <= cut),
     excluded,
+    at,
   );
 }
