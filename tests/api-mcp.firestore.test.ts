@@ -306,6 +306,7 @@ describe('Lore API over Remote MCP', () => {
     expect(instructions).toEqual(expect.stringContaining('get_access'));
     expect(instructions).toEqual(expect.stringContaining('never send scope_id'));
     expect(instructions).toEqual(expect.stringContaining('include_proposals=false'));
+    expect(instructions).toEqual(expect.stringContaining('Save without being asked'));
     expect(instructions).toEqual(expect.stringContaining('as_user'));
     expect(instructions).toEqual(expect.stringContaining('approval policy'));
     expect(instructions).toEqual(expect.stringContaining('structured HTTPS source references'));
