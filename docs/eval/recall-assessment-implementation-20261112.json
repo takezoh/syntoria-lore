@@ -1,0 +1,3828 @@
+{
+  "evaluated_at": "2026-11-12T17:06:00.615096+00:00",
+  "overall_acceptance": false,
+  "status": "implemented-opt-in-not-deployed",
+  "source_sha256": {
+    "packages/memory-records/src/recall-assessment.ts": "64901a469d3ffea83f8539e0de4eca2f860dd0fdc7e23a84aed1d3234aefe110",
+    "packages/memory-records/src/observation-service.ts": "f8b73081607f3242edfb3b464414637b4779da0b580c966972834df84b2e7497",
+    "apps/api/src/recall-assessment.ts": "c135d02c41662bdf4c47d6abc559bb67f82d23c555e956152c1f246a0e32bc2d",
+    "apps/api/src/config.ts": "8e488f09cceceecacdf93d8136abda7ef44d8062bf1453880bce1e588463d1ca",
+    "apps/api/src/app.ts": "9b5fe1737f5d54747f7a65436838872dbfa9fa06d528d010f64ae1d38184200d",
+    "apps/api/src/embeddings.ts": "cf2b66a389ee39ed100e61891ef7abc6da77eb84a678736e572ffa15dac2ba1b",
+    "scripts/run-situational-recall.mjs": "33a7fd3def473a99e4774f7f4dbff78d53f97c886d9c30b75f712c884e9a5d01",
+    "scripts/evaluate-situational-answers.mjs": "75d63ff97dcce8e3866a5376a44fbc0aca11365330da98e49f494e0f6d2be02e",
+    "tests/recall-assessment.test.ts": "9c06271952688105e739752afc9a38a4ac80a9afd2d71cfc93d90c23b2d97d16",
+    "tests/recall-assessment.firestore.test.ts": "698b66e2194caff5c89f722fd96f1b9d5261c0e5b04989d6659138cf902b6259"
+  },
+  "datasets": {
+    "development": {
+      "report": {
+        "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+        "tool_schemas_sha256": "bb17023c0fff59f14ce3e6dff12a76abf680485a0cc936bb72e8924cac3e8305",
+        "client_flow": [],
+        "assessment_model": "gemini-2.5-flash",
+        "answer_model": "gemini-2.5-flash",
+        "generation": {
+          "temperature": 0,
+          "thinking_budget": 0
+        },
+        "dataset_sha256": "a315f8614a32eb142a6e2e4deec5601adffae40e7a9e695835ae3b9611b84d7d",
+        "embedding": {
+          "model": "gemini-embedding-001",
+          "dimension": 768,
+          "new_calls": 0
+        },
+        "storage": "loopback-firestore-emulator",
+        "evaluated_at": "2026-11-12T17:02:23.725Z",
+        "boundary": "Loopback HTTP/MCP tools and schemas with real Vertex embeddings; synthetic verified identities, not hosted OAuth.",
+        "cases": [
+          {
+            "id": "paraphrase",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 5262.428536,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "mixed-name",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 4157.950113999999,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "cross-project",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 5212.810400999999,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "current",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3666.6221960000003,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "historical-match",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 4233.253431999998,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "as-of",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3890.4100700000017,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "eligibility-crowding",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 4627.880366999998,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "forget",
+            "recall": null,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3375.317581000003,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "no-match",
+            "recall": null,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 2942.5585809999975,
+            "notes": [
+              "assessment-no-applicable-candidates",
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "correction",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 4074.6179429999975,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "changed-source",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 2929.651356000002,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "multiple-constraints",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 4140.555403000006,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "japanese-paraphrase",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 5144.508604000002,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "cross-language",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 4831.162305999998,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          }
+        ],
+        "macro_recall_at_5": 1,
+        "all_required_hit_rate": 1,
+        "prohibited_content_cases": 0,
+        "retrieval_passed": true,
+        "passed": null,
+        "limitation": "Retrieval judgments only; answer quality, abstention and client behavior are unmeasured."
+      },
+      "results": [
+        {
+          "id": "paraphrase",
+          "items": [
+            [
+              "solo"
+            ],
+            [
+              "cost"
+            ],
+            [
+              "retry"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 5262.428536
+        },
+        {
+          "id": "mixed-name",
+          "items": [
+            [
+              "solo"
+            ],
+            [
+              "retry"
+            ],
+            [
+              "cost"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 4157.950113999999
+        },
+        {
+          "id": "cross-project",
+          "items": [
+            [
+              "corrected"
+            ],
+            [
+              "retry"
+            ],
+            [
+              "solo"
+            ],
+            [
+              "cost"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 5212.810400999999
+        },
+        {
+          "id": "current",
+          "items": [
+            [
+              "new",
+              "old"
+            ],
+            [
+              "retry"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 3666.6221960000003
+        },
+        {
+          "id": "historical-match",
+          "items": [
+            [
+              "new",
+              "old"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 4233.253431999998
+        },
+        {
+          "id": "as-of",
+          "items": [
+            [
+              "old"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 3890.4100700000017
+        },
+        {
+          "id": "eligibility-crowding",
+          "items": [
+            [
+              "solo"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 4627.880366999998
+        },
+        {
+          "id": "forget",
+          "items": [
+            [
+              "source-change"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 3375.317581000003
+        },
+        {
+          "id": "no-match",
+          "items": [],
+          "notes": [
+            "assessment-no-applicable-candidates",
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 2942.5585809999975
+        },
+        {
+          "id": "correction",
+          "items": [
+            [
+              "corrected"
+            ],
+            [
+              "unmapped"
+            ],
+            [
+              "retry"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 4074.6179429999975
+        },
+        {
+          "id": "changed-source",
+          "items": [
+            [
+              "source-change"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 2929.651356000002
+        },
+        {
+          "id": "multiple-constraints",
+          "items": [
+            [
+              "solo"
+            ],
+            [
+              "cost"
+            ],
+            [
+              "retry"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 4140.555403000006
+        },
+        {
+          "id": "japanese-paraphrase",
+          "items": [
+            [
+              "solo"
+            ],
+            [
+              "cost"
+            ],
+            [
+              "retry"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 5144.508604000002
+        },
+        {
+          "id": "cross-language",
+          "items": [
+            [
+              "retry"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 4831.162305999998
+        }
+      ],
+      "raw": [
+        {
+          "id": "paraphrase",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "maintenance constraint",
+                  "current": {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This memory item directly addresses the core constraint of the query: keeping the service easy to run without a dedicated operations team. The prior project's constraint of 'single operator' and avoiding 'routine manual administration' directly informs how to achieve the goal of ease of operation.",
+                  "limits": "This item establishes a preference for minimal manual administration but does not provide specific technical solutions or strategies to achieve it. It also pertains to a 'Prior project' and may not be a hard constraint for the 'new service' unless explicitly stated."
+                }
+              },
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "cost constraint",
+                  "current": {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "This item discusses a cost constraint for a 'Prior project'. If the 'new service' is subject to similar cost constraints, then solutions for ease of operation that incur significant recurring infrastructure spending would be disfavored.",
+                  "limits": "This item is about a 'Prior project' and its cost constraints. It does not directly apply to the 'new service' unless the new service is confirmed to have the same or similar cost limitations. It also doesn't offer solutions for ease of operation, only a potential constraint on those solutions."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This item describes a past problem (duplicate charges from retrying timed-out payments) and a solution (stable idempotency keys). This is a general lesson about designing robust systems that can be applied to a new service to make it more reliable and thus easier to run, as it reduces the need for manual intervention to correct data issues.",
+                  "limits": "This is a lesson from a specific incident ('Cedar' project) and does not directly dictate the operational model for the new service. While idempotency can improve reliability and reduce operational burden, it's a specific technical detail and not a comprehensive solution for 'easy to run' without an ops team. It doesn't address other aspects of operational ease like deployment, monitoring, or scaling."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "mixed-name",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "maintenance constraint",
+                  "current": {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "This item describes a maintenance constraint from a prior project, indicating a preference for avoiding components requiring routine manual administration due to a single operator. If Cedar has similar staffing constraints, this would be a direct concern for adding independently managed services, which often increase operational overhead.",
+                  "limits": "This constraint applies to a 'Prior project'. Its applicability to Cedar depends on whether Cedar shares the same 'single operator' maintenance constraint. It does not provide specific details about the nature or complexity of the proposed services."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "name",
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This item highlights a past issue with duplicate charges due to retrying timed-out payments and the solution of using stable idempotency keys. While not directly about service management, it offers a general lesson on designing robust systems, which is relevant when considering new services that might involve similar payment or transaction processing.",
+                  "limits": "This is a lesson from a specific incident related to payment processing. Its direct applicability to the current task depends on whether the 'independently managed services' involve similar transactional logic. It does not provide information about the operational burden or cost of managing multiple services."
+                }
+              },
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "cost constraint",
+                  "current": {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "This item states a cost constraint from a prior project to avoid increased recurring infrastructure spending. Adding several independently managed services could potentially increase recurring costs, making this a relevant consideration if Cedar operates under similar financial constraints.",
+                  "limits": "This constraint applies to a 'Prior project'. Its applicability to Cedar depends on whether Cedar has the same 'no increased recurring spend' cost constraint. It does not provide specific cost estimates for the proposed services."
+                }
+              }
+            ],
+            "subjects": [
+              {
+                "id": "sub_a126a187f5182b7da9deb0e7108978f1",
+                "name": "Cedar"
+              }
+            ],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "cross-project",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_1ef2daecd25c464e4c49558c2e2c7a45",
+                  "title": "Birch memory",
+                  "summary": "The timeout came from a missing client deadline, not the database.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_43bf6e37918dfce82d346f9c4161f0b6"
+                  ],
+                  "subject_names": [
+                    "Birch"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "corrected"
+                      },
+                      "uri": "https://example.test/evidence/corrected",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This item clarifies the root cause of a timeout in a previous project (Birch). While the specific cause (missing client deadline) might not directly apply, the general lesson about identifying the true source of timeouts is relevant to handling responses that never arrive in a new checkout system.",
+                  "limits": "This item does not provide specific instructions on how to handle a missing response, only a lesson on diagnosing the cause of a timeout. It does not establish that the new checkout system will experience the same type of timeout or that a client deadline is the only possible cause for a response not arriving."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This item highlights a critical issue (duplicate charges from retrying timed-out payments) and a solution (stable idempotency keys). This is directly applicable to a new checkout system, where handling timed-out payment responses might involve retries, and preventing duplicate charges is crucial.",
+                  "limits": "This item provides a solution (idempotency keys) for a specific problem (duplicate charges due to retries). It does not detail how to implement idempotency keys, nor does it cover all possible failure modes or handling strategies for responses that never arrive beyond the context of retries and duplicate charges."
+                }
+              },
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "maintenance constraint",
+                  "current": {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "This item describes a maintenance constraint from a prior project: a single operator and a preference for avoiding components requiring routine manual administration. If the new checkout system has similar maintenance constraints, this item suggests a preference for automated solutions for handling missing responses rather than manual intervention.",
+                  "limits": "This item is conditional on the new checkout system having a similar maintenance constraint (single operator, avoid manual administration). It does not provide specific technical solutions for handling missing responses, only a high-level preference for automation if the condition applies. It does not establish that the new checkout system will have this constraint."
+                }
+              },
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "cost constraint",
+                  "current": {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "This item states a cost constraint from a prior project: no increased recurring infrastructure spending. If the new checkout system operates under a similar cost constraint, then any proposed solution for handling missing responses should not incur significant new recurring infrastructure costs.",
+                  "limits": "This item is conditional on the new checkout system having a similar cost constraint. It does not offer technical solutions for handling missing responses, but rather a financial boundary within which solutions must operate if the condition applies. It does not establish that the new checkout system will have this constraint."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "current",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "name",
+                  "terms",
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_a126a187f5182b7da9deb0e7108978f1",
+                    "name": "Cedar"
+                  },
+                  "aspect": "review day",
+                  "current": {
+                    "observation_id": "obs_4670f0ebb00e37b158654f9fffa54389",
+                    "title": "Cedar memory",
+                    "summary": "Reviews moved to Tuesday on November 1.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Tuesday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-11-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "new"
+                        },
+                        "uri": "https://example.test/evidence/new",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": {
+                    "observation_id": "obs_4b24a313254edde0db7f2b26a3b13ad3",
+                    "title": "Cedar memory",
+                    "summary": "Reviews used to happen on Monday.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Monday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old"
+                        },
+                        "uri": "https://example.test/evidence/old",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "changed": "yes",
+                  "changed_at": "2026-11-01T09:00:00Z",
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 2,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_4670f0ebb00e37b158654f9fffa54389",
+                    "title": "Cedar memory",
+                    "summary": "Reviews moved to Tuesday on November 1.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Tuesday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-11-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "new"
+                        },
+                        "uri": "https://example.test/evidence/new",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  {
+                    "observation_id": "obs_4b24a313254edde0db7f2b26a3b13ad3",
+                    "title": "Cedar memory",
+                    "summary": "Reviews used to happen on Monday.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Monday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old"
+                        },
+                        "uri": "https://example.test/evidence/old",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly states that Cedar reviews moved to Tuesday on November 1st, which is before the query's timestamp of November 12th, 2026. It directly answers the question about when the Cedar review is now.",
+                  "limits": "This item only provides the day of the week for the review, not a specific time or frequency."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "name",
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This item describes a past issue with Cedar's payment system and a solution using idempotency keys. While it pertains to Cedar, it's a lesson learned about a technical mechanism, not about the review schedule.",
+                  "limits": "This item provides a technical lesson from a past incident, which does not directly answer the question about the current review schedule. Its applicability would require a task asking about payment system design or incident resolution for Cedar."
+                }
+              }
+            ],
+            "subjects": [
+              {
+                "id": "sub_a126a187f5182b7da9deb0e7108978f1",
+                "name": "Cedar"
+              }
+            ],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "historical-match",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "terms",
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_a126a187f5182b7da9deb0e7108978f1",
+                    "name": "Cedar"
+                  },
+                  "aspect": "review day",
+                  "current": {
+                    "observation_id": "obs_4670f0ebb00e37b158654f9fffa54389",
+                    "title": "Cedar memory",
+                    "summary": "Reviews moved to Tuesday on November 1.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Tuesday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-11-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "new"
+                        },
+                        "uri": "https://example.test/evidence/new",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": {
+                    "observation_id": "obs_4b24a313254edde0db7f2b26a3b13ad3",
+                    "title": "Cedar memory",
+                    "summary": "Reviews used to happen on Monday.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Monday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old"
+                        },
+                        "uri": "https://example.test/evidence/old",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "changed": "yes",
+                  "changed_at": "2026-11-01T09:00:00Z",
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 2,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_4b24a313254edde0db7f2b26a3b13ad3",
+                    "title": "Cedar memory",
+                    "summary": "Reviews used to happen on Monday.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Monday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old"
+                        },
+                        "uri": "https://example.test/evidence/old",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  {
+                    "observation_id": "obs_4670f0ebb00e37b158654f9fffa54389",
+                    "title": "Cedar memory",
+                    "summary": "Reviews moved to Tuesday on November 1.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Tuesday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-11-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "new"
+                        },
+                        "uri": "https://example.test/evidence/new",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly states that the review day for Cedar changed from Monday to Tuesday, which directly answers the query about what the earlier Monday arrangement changed to.",
+                  "limits": "This item only provides information about the change in review day for 'Cedar' and does not provide any further context or details about the reasons for the change or other arrangements."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "as-of",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "name",
+                  "terms",
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_a126a187f5182b7da9deb0e7108978f1",
+                    "name": "Cedar"
+                  },
+                  "aspect": "review day",
+                  "current": {
+                    "observation_id": "obs_4b24a313254edde0db7f2b26a3b13ad3",
+                    "title": "Cedar memory",
+                    "summary": "Reviews used to happen on Monday.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Monday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old"
+                        },
+                        "uri": "https://example.test/evidence/old",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 1,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_4b24a313254edde0db7f2b26a3b13ad3",
+                    "title": "Cedar memory",
+                    "summary": "Reviews used to happen on Monday.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "Monday",
+                    "subject_ids": [
+                      "sub_a126a187f5182b7da9deb0e7108978f1"
+                    ],
+                    "subject_names": [
+                      "Cedar"
+                    ],
+                    "effective_until": null,
+                    "aspect": "review day",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old"
+                        },
+                        "uri": "https://example.test/evidence/old",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly states that Cedar reviews used to happen on Monday. This information is relevant to determining if a review would have occurred on October 15th, which is a Thursday.",
+                  "limits": "This item only states when reviews 'used to happen'. It does not confirm if this schedule is still current as of 2026-10-15, nor does it provide any information about specific review dates or times, only the day of the week."
+                }
+              }
+            ],
+            "subjects": [
+              {
+                "id": "sub_a126a187f5182b7da9deb0e7108978f1",
+                "name": "Cedar"
+              }
+            ],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-10-15T12:00:00Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "eligibility-crowding",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "terms",
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "maintenance constraint",
+                  "current": {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly addresses the query by stating that a prior project, maintained by a single person, avoided components requiring routine manual administration to reduce maintenance overhead. This provides a direct example of how one operator can avoid maintenance overhead.",
+                  "limits": "This item describes a past preference from a 'Prior project' and does not guarantee that the same approach is applicable or optimal for the current task or any other project. It also doesn't provide specific technical solutions or strategies, only a general principle."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "forget",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_274cbcb56d39d43ccde12b27c8cf0f88",
+                  "title": "Maple memory",
+                  "summary": "The old integration guide described an endpoint that the source now marks removed.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_791195efa126dd6757cc9fa31170c863"
+                  ],
+                  "subject_names": [
+                    "Maple"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "source-change"
+                      },
+                      "uri": "https://example.test/evidence/source-change",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal",
+                      "last_report": {
+                        "status": "changed",
+                        "checked_at": "2026-11-12T12:00:00.000Z"
+                      }
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This memory item indicates that an 'old integration guide described an endpoint that the source now marks removed'. This directly suggests that there was a former delivery address (endpoint) that is no longer in use, which is relevant to the query 'What was the former delivery address?'.",
+                  "limits": "The memory item states that the endpoint was 'described' and 'removed', but it does not provide the actual address or any specific details about it. It only confirms the existence of a former delivery address."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "no-match",
+          "response": {
+            "items": [],
+            "subjects": [],
+            "notes": [
+              "assessment-no-applicable-candidates",
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "correction",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "name",
+                  "terms",
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_1ef2daecd25c464e4c49558c2e2c7a45",
+                  "title": "Birch memory",
+                  "summary": "The timeout came from a missing client deadline, not the database.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_43bf6e37918dfce82d346f9c4161f0b6"
+                  ],
+                  "subject_names": [
+                    "Birch"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "corrected"
+                      },
+                      "uri": "https://example.test/evidence/corrected",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly addresses the cause of the Birch timeout, stating it was due to a missing client deadline and not the database. This directly answers the query about whether to replace the database to fix the timeout.",
+                  "limits": "This item identifies the cause of the timeout but does not provide solutions or next steps for fixing the missing client deadline."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "terms",
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_85e28984c4e811935f2c929af1c27b84",
+                  "title": "Retraction",
+                  "summary": "Withdraw the mistaken database cause.",
+                  "nature": "event",
+                  "kind": null,
+                  "value": null,
+                  "subject_ids": [
+                    "sub_43bf6e37918dfce82d346f9c4161f0b6"
+                  ],
+                  "subject_names": [
+                    "Birch"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-11-12T12:00:00.000Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "inference",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": "obs_f0b7d79265f2ac8cd1c5de4aa80ce51d",
+                  "sources": []
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item explicitly retracts the mistaken claim that the database was the cause of the Birch timeout. This is crucial for understanding the true cause of the timeout and directly informs the decision about replacing the database.",
+                  "limits": "This item only retracts a previous claim; it does not provide the correct cause of the timeout or suggest solutions."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This item describes a lesson learned from 'Cedar' about retrying timed-out payments and the use of idempotency keys. While it involves timeouts, the specific context of duplicate charges and idempotency keys is not directly applicable to the 'Birch' timeout cause (missing client deadline) or the decision to replace a database.",
+                  "limits": "This lesson is specific to payment retries and idempotency. Its applicability to the 'Birch' timeout depends on whether the 'Birch' timeout involves similar retry mechanisms or data integrity concerns that idempotency could address, which is not established by the current query."
+                }
+              }
+            ],
+            "subjects": [
+              {
+                "id": "sub_43bf6e37918dfce82d346f9c4161f0b6",
+                "name": "Birch"
+              }
+            ],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "changed-source",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "name",
+                  "terms",
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_274cbcb56d39d43ccde12b27c8cf0f88",
+                  "title": "Maple memory",
+                  "summary": "The old integration guide described an endpoint that the source now marks removed.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_791195efa126dd6757cc9fa31170c863"
+                  ],
+                  "subject_names": [
+                    "Maple"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "source-change"
+                      },
+                      "uri": "https://example.test/evidence/source-change",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal",
+                      "last_report": {
+                        "status": "changed",
+                        "checked_at": "2026-11-12T12:00:00.000Z"
+                      }
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly states that an endpoint for Maple has been marked as removed by the source. This directly answers the question about the reliability of the Maple integration endpoint.",
+                  "limits": "This item indicates the endpoint is removed, but does not provide details on when it was removed, if there are alternative endpoints, or the impact of its removal."
+                }
+              }
+            ],
+            "subjects": [
+              {
+                "id": "sub_791195efa126dd6757cc9fa31170c863",
+                "name": "Maple"
+              }
+            ],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "multiple-constraints",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "maintenance constraint",
+                  "current": {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly addresses the 'solo-maintained' aspect of the query by stating a preference to avoid components requiring routine manual administration for a single operator. This is a key constraint for infrastructure selection.",
+                  "limits": "This item establishes a preference for avoiding manual administration but does not specify particular infrastructure types or solutions. It also does not address the 'ongoing costs' aspect of the query."
+                }
+              },
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "cost constraint",
+                  "current": {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly addresses the 'without raising ongoing costs' aspect of the query by stating a decision that recurring infrastructure spending must stay within the previously agreed baseline. This is a critical constraint for infrastructure selection.",
+                  "limits": "This item establishes a cost constraint but does not specify particular infrastructure types or solutions. It also does not address the 'solo-maintained' aspect of the query."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This item describes a lesson learned from a previous project (Cedar) regarding retrying timed-out payments and the solution of using stable idempotency keys. While not directly about infrastructure selection, the concept of designing for robustness and avoiding data integrity issues (like duplicate charges) can be a consideration when choosing infrastructure components that support such patterns.",
+                  "limits": "This item provides a lesson about idempotency, which is a design pattern, not a direct infrastructure choice. Its applicability to infrastructure selection is indirect and depends on whether the chosen infrastructure can support or facilitate such patterns. It does not address solo-maintenance or ongoing costs."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "japanese-paraphrase",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "maintenance constraint",
+                  "current": {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_8039ebc3a078c8b96eed89c37b19287d",
+                    "title": "Prior project memory",
+                    "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+                    "nature": "state",
+                    "kind": "preference",
+                    "value": "single operator",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "maintenance constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "solo"
+                        },
+                        "uri": "https://example.test/evidence/solo",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "The query asks how to structure a new service without dedicated operations staff. This memory item states that a prior project (Prior project) was maintained by a single person and avoided components requiring routine manual administration. This directly addresses the constraint of not having dedicated operations staff.",
+                  "limits": "This item describes a constraint from a prior project. It does not provide specific architectural solutions or guarantees that the same constraint applies to the new service, only that it was a factor in a similar context."
+                }
+              },
+              {
+                "type": "topic",
+                "matched": [
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_41ab92b77f98f24d524d1fda9e8176d9",
+                    "name": "Prior project"
+                  },
+                  "aspect": "cost constraint",
+                  "current": {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_eba283b789461bde782d94c277d1a5e4",
+                    "title": "Prior project memory",
+                    "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+                    "nature": "state",
+                    "kind": "decision",
+                    "value": "no increased recurring spend",
+                    "subject_ids": [
+                      "sub_41ab92b77f98f24d524d1fda9e8176d9"
+                    ],
+                    "subject_names": [
+                      "Prior project"
+                    ],
+                    "effective_until": null,
+                    "aspect": "cost constraint",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "cost"
+                        },
+                        "uri": "https://example.test/evidence/cost",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "The query is about structuring a new service. This memory item indicates that recurring infrastructure spending for a prior project (Prior project) had to stay within an agreed baseline. If the new service also has a similar cost constraint, this item would be relevant to guide architectural decisions.",
+                  "limits": "This item applies to a prior project's cost constraint. It does not confirm that the new service has the same cost constraint or provide details on how to achieve cost efficiency."
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "lesson",
+                  "reason": "This memory item describes a past issue in the Cedar project where retrying timed-out payments led to duplicate charges, and stable idempotency keys prevented this. This is a general lesson about designing robust systems to handle retries, which is highly relevant for a service that might not have dedicated operations staff to manually resolve such issues.",
+                  "limits": "This item provides a general lesson on idempotency. It does not specify how to implement idempotency or guarantee that this specific issue will arise in the new service, but it highlights a design principle that can reduce operational burden."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "cross-language",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_850bdcc0b37c68497ca0bf3300ae72f6",
+                  "title": "Cedar memory",
+                  "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+                  "nature": "event",
+                  "kind": "lesson",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_a126a187f5182b7da9deb0e7108978f1"
+                  ],
+                  "subject_names": [
+                    "Cedar"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "retry"
+                      },
+                      "uri": "https://example.test/evidence/retry",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This memory directly addresses the problem of safely retrying payments after a timeout by suggesting the use of stable idempotency keys to prevent duplicate charges. This is a core mechanism for safe retries in payment systems.",
+                  "limits": "This memory provides a solution (idempotency keys) but does not detail how to implement them or what specific challenges might arise in their application. It also doesn't cover other potential strategies for safe retries beyond preventing duplicates."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        }
+      ],
+      "answers": [
+        {
+          "id": "paraphrase",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "To keep the new service easy to run without a dedicated operations team, we should aim for a system that can be maintained by a single person and avoids routine manual administration, similar to the constraint on a prior project (obs_8039ebc3a078c8b96eed89c37b19287d).\n\nAdditionally, consider lessons from past projects, such as implementing stable idempotency keys to prevent issues like duplicate charges from retried payments, which can reduce the need for manual intervention and make the system more robust (obs_850bdcc0b37c68497ca0bf3300ae72f6).\n\nIf the new service is also subject to the cost constraint of no increased recurring infrastructure spending, as was the case for a prior project (obs_eba283b789461bde782d94c277d1a5e4), then solutions should also be cost-effective.",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "mixed-name",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "Based on past project experience, adding several independently managed services for Cedar might be problematic if Cedar operates under similar constraints.\n\nSpecifically:\n*   **Maintenance Constraint:** A prior project had a \"single operator\" maintenance constraint, meaning components requiring routine manual administration were avoided (obs_8039ebc3a078c8b96eed89c37b19287d). Independently managed services often increase operational overhead, which could conflict with this.\n*   **Cost Constraint:** A prior project also had a \"no increased recurring spend\" decision for infrastructure (obs_eba283b789461bde782d94c277d1a5e4). Adding new services could potentially increase recurring costs.\n\nWhile not directly related to service management, a lesson from Cedar's past is that stable idempotency keys were crucial to prevent duplicate charges when retrying timed-out payments (obs_850bdcc0b37c68497ca0bf3300ae72f6). This highlights the importance of robust design when integrating new components.\n\nTo determine if these concerns apply to Cedar, we need to know if Cedar has similar maintenance and cost constraints as the \"Prior project.\"",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "cross-project",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "When a response never arrives in a new checkout system, consider the following:\n\n1.  **Identify the true cause of the timeout:** As learned from the Birch project, a timeout might stem from a missing client deadline rather than a database issue (obs_1ef2daecd25c464e4c49558c2e2c7a45). Understanding the root cause is crucial for implementing an effective solution.\n2.  **Prevent duplicate charges with idempotency keys:** If retries are part of the strategy for handling missing responses, ensure that stable idempotency keys are used to prevent duplicate charges, a lesson from the Cedar project (obs_850bdcc0b37c68497ca0bf3300ae72f6).\n3.  **Consider maintenance and cost constraints:**\n    *   If the new checkout system has a maintenance constraint similar to a prior project, where one person maintains the system and routine manual administration is to be avoided, then automated solutions for handling missing responses are preferred (obs_8039ebc3078c8b96eed89c37b19287d).\n    *   If there's a cost constraint against increased recurring infrastructure spending, as in a prior project, then any solution should not incur significant new recurring costs (obs_eba283b789461bde782d94c277d1a5e4).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": [
+            "obs_8039ebc3078c8b96eed89c37b19287d"
+          ]
+        },
+        {
+          "id": "current",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "The Cedar review is now on Tuesday (obs_4670f0ebb00e37b158654f9fffa54389). It moved from Monday on November 1st (obs_4670f0ebb00e37b158654f9fffa54389, obs_4b24a313254edde0db7f2b26a3b13ad3).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "historical-match",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "The Monday arrangement for reviews for Cedar changed to Tuesday, effective November 1 (observation_id: obs_4670f0ebb00e37b158654f9fffa54389).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "as-of",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "Based on the available information, Cedar reviews used to happen on Monday (obs_4b24a313254edde0db7f2b26a3b13ad3). Since October 15, 2026, is a Thursday, it is unlikely a review would have occurred on that day if the Monday schedule was still in effect. However, this information only states when reviews \"used to happen\" and does not confirm if this schedule was current as of October 15, 2026.",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "eligibility-crowding",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "To avoid maintenance overhead, especially when only one operator is available, it's important to avoid components that require routine manual administration. This approach was taken in a prior project where a single person maintained the system (observation_id: obs_8039ebc3a078c8b96eed89c37b19287d).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "forget",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "I don't have the specific former delivery address. However, I know that an old integration guide for Maple described an endpoint that has since been removed (obs_274cbcb56d39d43ccde12b27c8cf0f88).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "no-match",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "I don't have any information about the person's preferred airline seat.",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "correction",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "No, you should not replace the database to fix the Birch timeout. The timeout was caused by a missing client deadline, not the database (obs_1ef2daecd25c464e4c49558c2e2c7a45). A previous mistaken belief that the database was the cause has been retracted (obs_85e28984c4e811935f2c929af1c27b84).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "changed-source",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "No, you cannot rely on the Maple integration endpoint. The old integration guide described an endpoint that the source now marks as removed (obs_274cbcb56d39d43ccde12b27c8cf0f88).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "multiple-constraints",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "For a new solo-maintained project, infrastructure choices should prioritize minimizing ongoing costs and routine manual administration.\n\nBased on previous project experience:\n*   **Avoid increased recurring spending** (observation_id: obs_eba283b789461bde782d94c277d1a5e4). This means looking for cost-effective solutions, potentially serverless options, or platforms with generous free tiers that can scale without immediate cost increases.\n*   **Minimize routine manual administration** (observation_id: obs_8039ebc3a078c8b96eed89c37b19287d). This suggests favoring managed services, Platform-as-a-Service (PaaS) offerings, or infrastructure that requires minimal operational overhead, updates, and patching.\n\nWhile not directly about infrastructure, the lesson from the Cedar project about using stable idempotency keys to prevent duplicate charges (observation_id: obs_850bdcc0b37c68497ca0bf3300ae72f6) highlights the importance of choosing infrastructure components that support robust design patterns to reduce future operational issues and potential manual intervention.",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "japanese-paraphrase",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "専任の運用担当者を置けない新サービスを構成する際には、運用負荷を最小限に抑える設計が重要です。\n\n以前のプロジェクト（Prior project）では、システムは1人の担当者によって保守されており、日常的な手動管理を必要とするコンポーネントは避けるという制約がありました (observation_id: obs_8039ebc3a078c8b96eed89c37b19287d)。この経験から、以下の点を考慮すると良いでしょう。\n\n*   **自動化とシンプルさの追求**: 手動での介入が不要な、自動化されたプロセスとシンプルなアーキテクチャを優先します。\n*   **運用コストの抑制**: 以前のプロジェクトでは、インフラの継続的な支出を既存のベースライン内に抑えるという決定がありました (observation_id: obs_eba283b789461bde782d94c277d1a5e4)。新しいサービスでも同様のコスト制約がある場合、クラウドのマネージドサービスを活用するなど、運用コストを抑える構成を検討してください。\n*   **堅牢なエラーハンドリング**: Cedarプロジェクトの経験から、タイムアウトした支払いの再試行が重複請求を引き起こした問題があり、安定した冪等性キーによって解決されました (observation_id: obs_850bdcc0b37c68497ca0bf3300ae72f6)。手動での介入が難しい状況では、このような自動的なエラー回復メカニズムが不可欠です。\n\nこれらの点を踏まえ、以下のような構成が考えられます。\n\n1.  **サーバーレスアーキテクチャの活用**: AWS Lambda, Google Cloud Functions, Azure Functionsなどのサーバーレスサービスは、インフラの管理が不要で、使用した分だけ課金されるため、運用負荷とコストを削減できます。\n2.  **マネージドデータベースの利用**: Amazon RDS, Google Cloud SQL, Azure SQL Databaseなどのマネージドデータベースサービスは、バックアップ、パッチ適用、スケーリングなどの運用タスクを自動化します。\n3.  **コンテナ化とオーケストレーション**: DockerとKubernetesなどのコンテナ技術は、アプリケーションのデプロイとスケーリングを標準化し、運用を簡素化します。ただし、Kubernetes自体は運用に専門知識が必要な場合があるため、EKS, GKE, AKSなどのマネージドサービスを利用することが望ましいです。\n4.  **監視とアラートの自動化**: Prometheus, Grafana, Datadogなどのツールを使用して、システムの健全性を自動的に監視し、問題が発生した際には適切な担当者にアラートを送信する仕組みを構築します。\n5.  **CI/CDパイプラインの導入**: コードの変更からデプロイまでを自動化することで、手動での作業を減らし、デプロイミスを防ぎます。\n6.  **冪等性の設計**: 特に決済やデータ更新など、再試行が発生しうる処理では、重複処理を防ぐために冪等性を考慮した設計を導入します。\n\nこれらのアプローチは、専任の運用担当者がいない状況でも、サービスの安定稼働と効率的な運用を可能にするでしょう。",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "cross-language",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "決済の応答が途切れた際に安全に再試行するには、重複請求を防ぐために安定したべき等キーを使用することが重要です (obs_850bdcc0b37c68497ca0bf3300ae72f6)。",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        }
+      ],
+      "previous_item_count": 70,
+      "current_item_count": 27
+    },
+    "challenge": {
+      "report": {
+        "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+        "tool_schemas_sha256": "bb17023c0fff59f14ce3e6dff12a76abf680485a0cc936bb72e8924cac3e8305",
+        "client_flow": [],
+        "assessment_model": "gemini-2.5-flash",
+        "answer_model": "gemini-2.5-flash",
+        "generation": {
+          "temperature": 0,
+          "thinking_budget": 0
+        },
+        "dataset_sha256": "09a8ec1a1a638682c36859bed51c489c31b47e41c91030d9c0e2ae99f8f85856",
+        "embedding": {
+          "model": "gemini-embedding-001",
+          "dimension": 768,
+          "new_calls": 0
+        },
+        "storage": "loopback-firestore-emulator",
+        "evaluated_at": "2026-11-12T17:03:41.596Z",
+        "boundary": "Loopback HTTP/MCP tools and schemas with real Vertex embeddings; synthetic verified identities, not hosted OAuth.",
+        "cases": [
+          {
+            "id": "work-hours",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3588.9431310000004,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "publication",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3041.6161490000004,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "cause-unknown",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3429.1782869999997,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "latest-cap",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 2798.5859760000003,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "quote-status",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3387.354332000001,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "language",
+            "recall": 1,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 4332.131867,
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "unsupported",
+            "recall": null,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 3773.01958,
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          },
+          {
+            "id": "unrelated",
+            "recall": null,
+            "all_required": true,
+            "forbidden": [],
+            "latency_ms": 2892.038896000002,
+            "notes": [
+              "assessment-no-applicable-candidates",
+              "recall-assessment-applied"
+            ],
+            "answer_use": "not-measured"
+          }
+        ],
+        "macro_recall_at_5": 1,
+        "all_required_hit_rate": 1,
+        "prohibited_content_cases": 0,
+        "retrieval_passed": true,
+        "passed": null,
+        "limitation": "Retrieval judgments only; answer quality, abstention and client behavior are unmeasured."
+      },
+      "results": [
+        {
+          "id": "work-hours",
+          "items": [
+            [
+              "hours"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 3588.9431310000004
+        },
+        {
+          "id": "publication",
+          "items": [
+            [
+              "files"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 3041.6161490000004
+        },
+        {
+          "id": "cause-unknown",
+          "items": [
+            [
+              "cause"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 3429.1782869999997
+        },
+        {
+          "id": "latest-cap",
+          "items": [
+            [
+              "new-cap",
+              "old-cap"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 2798.5859760000003
+        },
+        {
+          "id": "quote-status",
+          "items": [
+            [
+              "currency"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 3387.354332000001
+        },
+        {
+          "id": "language",
+          "items": [
+            [
+              "files"
+            ],
+            [
+              "cause"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied",
+            "semantic-match-only"
+          ],
+          "latency_ms": 4332.131867
+        },
+        {
+          "id": "unsupported",
+          "items": [
+            [
+              "hours"
+            ]
+          ],
+          "notes": [
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 3773.01958
+        },
+        {
+          "id": "unrelated",
+          "items": [],
+          "notes": [
+            "assessment-no-applicable-candidates",
+            "recall-assessment-applied"
+          ],
+          "latency_ms": 2892.038896000002
+        }
+      ],
+      "raw": [
+        {
+          "id": "work-hours",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "terms",
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_f3138487c9e67c376affc16a646a368c",
+                    "name": "Evaluation owner"
+                  },
+                  "aspect": "meeting preference",
+                  "current": {
+                    "observation_id": "obs_21ea543ff84abb7b9a08272b81f98492",
+                    "title": "Evaluation owner observation",
+                    "summary": "I do focused work in the morning. Schedule routine discussions after 14:00 in my local time.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "after 14:00",
+                    "subject_ids": [
+                      "sub_f3138487c9e67c376affc16a646a368c"
+                    ],
+                    "subject_names": [
+                      "Evaluation owner"
+                    ],
+                    "effective_until": null,
+                    "aspect": "meeting preference",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "hours"
+                        },
+                        "uri": "https://example.test/evidence/hours",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_21ea543ff84abb7b9a08272b81f98492",
+                    "title": "Evaluation owner observation",
+                    "summary": "I do focused work in the morning. Schedule routine discussions after 14:00 in my local time.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "after 14:00",
+                    "subject_ids": [
+                      "sub_f3138487c9e67c376affc16a646a368c"
+                    ],
+                    "subject_names": [
+                      "Evaluation owner"
+                    ],
+                    "effective_until": null,
+                    "aspect": "meeting preference",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "hours"
+                        },
+                        "uri": "https://example.test/evidence/hours",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly states the meeting preference of the 'Evaluation owner', who is a subject in the query. It specifies that routine discussions should be scheduled after 14:00 in their local time.",
+                  "limits": "This item only provides the time preference for one specific individual ('Evaluation owner'). It does not provide information about other attendees' preferences, the specific day of the week, or any other constraints for the weekly routine catch-up."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "publication",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_0c8976b3c4d75b82e0855d62bd2dbaae",
+                  "title": "Juniper export observation",
+                  "summary": "An interrupted export exposed half a file to readers. Writing a temporary file and atomically renaming it after completion prevented partial reads.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_af33a03343f7b57c05b299a58467eac3"
+                  ],
+                  "subject_names": [
+                    "Juniper export"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "files"
+                      },
+                      "uri": "https://example.test/evidence/files",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This observation directly addresses the problem of users seeing unfinished output from a reporting job. It provides a solution (writing to a temporary file and atomically renaming) that prevents partial reads.",
+                  "limits": "The observation describes a solution for file-based output. It does not specify how this solution would apply to other forms of reporting output (e.g., database updates, API responses). The specific implementation details for atomic renaming are not provided."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "cause-unknown",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "terms",
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_1e3e8ffa97898627a8f568f92a300cfd",
+                  "title": "Juniper export observation",
+                  "summary": "The Juniper interruption was caused by a host restart. That cause was established for Juniper only.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_af33a03343f7b57c05b299a58467eac3"
+                  ],
+                  "subject_names": [
+                    "Juniper export"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "cause"
+                      },
+                      "uri": "https://example.test/evidence/cause",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "This item states that a host restart caused an interruption for the 'Juniper export'. The query asks if a host restart caused the 'new reporting job' to stop. If the 'new reporting job' is the 'Juniper export', then this item is directly applicable. Otherwise, it is not.",
+                  "limits": "This item only establishes a host restart as the cause for the 'Juniper export' interruption. It does not provide information about any 'new reporting job' or whether the 'Juniper export' is the 'new reporting job'. It also does not confirm if the 'Juniper export' stopped, only that it was interrupted."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "latest-cap",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "name",
+                  "terms",
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_e1b6ecfdc152bb255ec9d16295499137",
+                    "name": "Orchid"
+                  },
+                  "aspect": "spend cap",
+                  "current": {
+                    "observation_id": "obs_650e77dc4f783aa4543598ce698a7369",
+                    "title": "Orchid observation",
+                    "summary": "The monthly spend cap increased to 350 units on November 1.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "350",
+                    "subject_ids": [
+                      "sub_e1b6ecfdc152bb255ec9d16295499137"
+                    ],
+                    "subject_names": [
+                      "Orchid"
+                    ],
+                    "effective_until": null,
+                    "aspect": "spend cap",
+                    "at": "2026-11-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "new-cap"
+                        },
+                        "uri": "https://example.test/evidence/new-cap",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": {
+                    "observation_id": "obs_98697c9d880bee8a0a411da9bafdb50d",
+                    "title": "Orchid observation",
+                    "summary": "The monthly spend cap was 200 units.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "200",
+                    "subject_ids": [
+                      "sub_e1b6ecfdc152bb255ec9d16295499137"
+                    ],
+                    "subject_names": [
+                      "Orchid"
+                    ],
+                    "effective_until": null,
+                    "aspect": "spend cap",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old-cap"
+                        },
+                        "uri": "https://example.test/evidence/old-cap",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "changed": "yes",
+                  "changed_at": "2026-11-01T09:00:00Z",
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 2,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_650e77dc4f783aa4543598ce698a7369",
+                    "title": "Orchid observation",
+                    "summary": "The monthly spend cap increased to 350 units on November 1.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "350",
+                    "subject_ids": [
+                      "sub_e1b6ecfdc152bb255ec9d16295499137"
+                    ],
+                    "subject_names": [
+                      "Orchid"
+                    ],
+                    "effective_until": null,
+                    "aspect": "spend cap",
+                    "at": "2026-11-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "new-cap"
+                        },
+                        "uri": "https://example.test/evidence/new-cap",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  {
+                    "observation_id": "obs_98697c9d880bee8a0a411da9bafdb50d",
+                    "title": "Orchid observation",
+                    "summary": "The monthly spend cap was 200 units.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "200",
+                    "subject_ids": [
+                      "sub_e1b6ecfdc152bb255ec9d16295499137"
+                    ],
+                    "subject_names": [
+                      "Orchid"
+                    ],
+                    "effective_until": null,
+                    "aspect": "spend cap",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "old-cap"
+                        },
+                        "uri": "https://example.test/evidence/old-cap",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly states Orchid's monthly spend cap, which is the subject of the query, and the effective date of the change is before the query's 'at' timestamp.",
+                  "limits": "This item only provides the spend cap value and does not include any information about why the cap was set to this value or what factors might influence future changes."
+                }
+              }
+            ],
+            "subjects": [
+              {
+                "id": "sub_e1b6ecfdc152bb255ec9d16295499137",
+                "name": "Orchid"
+              }
+            ],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "quote-status",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "terms",
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_e03a905aa157ba1b7ce64688f2cacf0b",
+                  "title": "Cobalt quote observation",
+                  "summary": "The Cobalt supplier quoted 90 EUR per seat per year. This is a quote, not an accepted contract.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_6a8f4e52b877c03ed8d64c6144aaf747"
+                  ],
+                  "subject_names": [
+                    "Cobalt quote"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "currency"
+                      },
+                      "uri": "https://example.test/evidence/currency",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "This item directly states that Cobalt quoted 90 EUR per seat per year, which is relevant to the query about the Cobalt contract price. It also explicitly states that this is a quote, not an accepted contract.",
+                  "limits": "This item provides the price in EUR per year, not USD per month, so a currency and time unit conversion would be needed. It also explicitly states that this is a quote and not an agreed contract, which is a key part of the query."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "language",
+          "response": {
+            "items": [
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_0c8976b3c4d75b82e0855d62bd2dbaae",
+                  "title": "Juniper export observation",
+                  "summary": "An interrupted export exposed half a file to readers. Writing a temporary file and atomically renaming it after completion prevented partial reads.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_af33a03343f7b57c05b299a58467eac3"
+                  ],
+                  "subject_names": [
+                    "Juniper export"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "files"
+                      },
+                      "uri": "https://example.test/evidence/files",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "この候補は、中断されたエクスポートによってファイルの一部が読者に公開されたという過去のインシデントを説明しています。一時ファイルに書き込み、完了後にアトミックに名前を変更することで、部分的な読み取りを防いだという解決策が示されており、これは「書きかけのファイルを見せない」というクエリの目的に直接関連しています。",
+                  "limits": "この候補は、一時ファイルとアトミックな名前変更という具体的な解決策を提供しますが、新しいレポート処理の具体的な実装や環境については言及していません。また、この解決策が新しいレポート処理に適用可能であるか、または他の考慮事項があるかについては示していません。"
+                }
+              },
+              {
+                "type": "event",
+                "matched": [
+                  "semantic"
+                ],
+                "observation": {
+                  "observation_id": "obs_1e3e8ffa97898627a8f568f92a300cfd",
+                  "title": "Juniper export observation",
+                  "summary": "The Juniper interruption was caused by a host restart. That cause was established for Juniper only.",
+                  "nature": "event",
+                  "kind": "fact",
+                  "value": null,
+                  "subject_ids": [
+                    "sub_af33a03343f7b57c05b299a58467eac3"
+                  ],
+                  "subject_names": [
+                    "Juniper export"
+                  ],
+                  "effective_until": null,
+                  "aspect": null,
+                  "at": "2026-10-01T09:00:00Z",
+                  "recorded_at": "2026-11-12T12:00:00.000Z",
+                  "tier": "source",
+                  "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                  "speaker": null,
+                  "retracts": null,
+                  "sources": [
+                    {
+                      "provider": "other",
+                      "ids": {
+                        "resource_id": "cause"
+                      },
+                      "uri": "https://example.test/evidence/cause",
+                      "readAt": "2026-11-12T12:00:00.000Z",
+                      "sensitivity": "normal"
+                    }
+                  ]
+                },
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "conditional",
+                  "reason": "この候補は、Juniperのエクスポート中断がホストの再起動によって引き起こされたという原因を説明しています。これは、レポート処理が中断される可能性のある状況を示唆しており、中断時に書きかけのファイルが公開されないようにするための対策の必要性を裏付ける可能性があります。",
+                  "limits": "この候補は、中断の原因がJuniperに限定されていることを明記しており、新しいレポート処理にも同じ原因が適用されるとは限りません。また、中断の原因が分かったとしても、書きかけのファイルを見せないための具体的な解決策は提供していません。この情報が有用であるためには、新しいレポート処理も同様の中断リスクにさらされていることを確認する必要があります。"
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied",
+              "semantic-match-only"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "unsupported",
+          "response": {
+            "items": [
+              {
+                "type": "topic",
+                "matched": [
+                  "terms",
+                  "semantic"
+                ],
+                "topic": {
+                  "subject": {
+                    "id": "sub_f3138487c9e67c376affc16a646a368c",
+                    "name": "Evaluation owner"
+                  },
+                  "aspect": "meeting preference",
+                  "current": {
+                    "observation_id": "obs_21ea543ff84abb7b9a08272b81f98492",
+                    "title": "Evaluation owner observation",
+                    "summary": "I do focused work in the morning. Schedule routine discussions after 14:00 in my local time.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "after 14:00",
+                    "subject_ids": [
+                      "sub_f3138487c9e67c376affc16a646a368c"
+                    ],
+                    "subject_names": [
+                      "Evaluation owner"
+                    ],
+                    "effective_until": null,
+                    "aspect": "meeting preference",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "hours"
+                        },
+                        "uri": "https://example.test/evidence/hours",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  },
+                  "previous": null,
+                  "changed": "no",
+                  "changed_at": null,
+                  "agreeing": 1,
+                  "conflicts": [],
+                  "upcoming": 0,
+                  "observations": 1,
+                  "truncated": false
+                },
+                "evidence": [
+                  {
+                    "observation_id": "obs_21ea543ff84abb7b9a08272b81f98492",
+                    "title": "Evaluation owner observation",
+                    "summary": "I do focused work in the morning. Schedule routine discussions after 14:00 in my local time.",
+                    "nature": "state",
+                    "kind": "fact",
+                    "value": "after 14:00",
+                    "subject_ids": [
+                      "sub_f3138487c9e67c376affc16a646a368c"
+                    ],
+                    "subject_names": [
+                      "Evaluation owner"
+                    ],
+                    "effective_until": null,
+                    "aspect": "meeting preference",
+                    "at": "2026-10-01T09:00:00Z",
+                    "recorded_at": "2026-11-12T12:00:00.000Z",
+                    "tier": "source",
+                    "writer": "connection:5c088452207d3981600ed71b74200c108cdda276d83a0c9be18fd230b51cf23b",
+                    "speaker": null,
+                    "retracts": null,
+                    "sources": [
+                      {
+                        "provider": "other",
+                        "ids": {
+                          "resource_id": "hours"
+                        },
+                        "uri": "https://example.test/evidence/hours",
+                        "readAt": "2026-11-12T12:00:00.000Z",
+                        "sensitivity": "normal"
+                      }
+                    ]
+                  }
+                ],
+                "applicability_assessment": {
+                  "status": "unverified-model-interpretation",
+                  "role": "direct",
+                  "reason": "The evidence states that the 'Evaluation owner' schedules routine discussions 'after 14:00 in my local time'. This directly indicates that the owner has a local time, which implies they live in a specific time zone.",
+                  "limits": "The evidence confirms the existence of a local time for the owner but does not specify what that time zone is (e.g., PST, EST, GMT). It only provides a preference for meeting times relative to that unknown local time."
+                }
+              }
+            ],
+            "subjects": [],
+            "notes": [
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        },
+        {
+          "id": "unrelated",
+          "response": {
+            "items": [],
+            "subjects": [],
+            "notes": [
+              "assessment-no-applicable-candidates",
+              "recall-assessment-applied"
+            ],
+            "at": "2026-11-12T12:00:00.000Z",
+            "empty_meaning": "no-supported-match"
+          }
+        }
+      ],
+      "answers": [
+        {
+          "id": "work-hours",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "The Evaluation owner prefers routine discussions to be scheduled after 14:00 in their local time, as they do focused work in the morning (observation_id: obs_21ea543ff84abb7b9a08272b81f98492).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "publication",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "To prevent users from seeing unfinished output from a new reporting job, you can write the output to a temporary file and then, once the job is complete, atomically rename the temporary file to its final destination. This approach ensures that users only see the fully completed report.\n\nThis method was successfully used for a Juniper export where an interrupted export exposed half a file to readers (observation_id: obs_0c8976b3c4d75b82e0855d62bd2dbaae).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "cause-unknown",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "I don't have enough information to answer your question. The memory indicates that a host restart caused an interruption for the \"Juniper export\" (obs_1e3e8ffa97898627a8f568f92a300cfd). However, it does not specify if the \"new reporting job\" is the same as the \"Juniper export.\" Therefore, I cannot confirm if a host restart caused the new reporting job to stop.",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "latest-cap",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "Orchid can spend 350 units per month. This spend cap increased on November 1st (observation_id: obs_650e77dc4f783aa4543598ce698a7369).",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "quote-status",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "No, the Cobalt contract has not been agreed at 90 dollars per month. An observation from 2026-10-01 states that the Cobalt supplier quoted 90 EUR per seat per year (observation_id: obs_e03a905aa157ba1b7ce64688f2cacf0b). This was a quote, not an accepted contract.",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "language",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "新しいレポート処理で、利用者に書きかけのファイルを見せないようにするには、一時ファイルに書き込み、レポートの生成が完了した後にそのファイルをアトミックにリネームする方法が有効です。\n\n過去の事例として、Juniperのエクスポート処理において、中断されたエクスポートによってファイルの一部が読者に公開されてしまう問題がありました。この問題は、一時ファイルに書き込み、完了後にアトミックに名前を変更することで解決されました (observation_id: obs_0c8976b3c4d75b82e0855d62bd2dbaae)。\n\nこの方法は、レポート生成中に何らかの理由で処理が中断された場合でも、不完全なファイルが利用者に公開されることを防ぎます。Juniperの事例では、ホストの再起動が中断の原因でしたが (observation_id: obs_1e3e8ffa97898627a8f568f92a300cfd)、どのような中断要因であっても、このアプローチは有効です。",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "unsupported",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "The owner lives in a specific time zone, as indicated by their preference to schedule routine discussions after 14:00 in their local time (observation: obs_21ea543ff84abb7b9a08272b81f98492). However, the specific time zone (e.g., PST, EST, GMT) is not mentioned in the available information.",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        },
+        {
+          "id": "unrelated",
+          "server_instructions_sha256": "a7b761bfa4b0c42812a1e67679c9e3606d4b69988daff63da463b756dc6080b5",
+          "model_version": "gemini-2.5-flash",
+          "answer": "The French translation for \"apple\" is \"pomme\".",
+          "finish": "STOP",
+          "cited_ids_absent_from_response": []
+        }
+      ],
+      "previous_item_count": 40,
+      "current_item_count": 8
+    }
+  },
+  "reviewer": "Primary agent; not independent or blinded",
+  "judgments": {
+    "development": {
+      "mixed-name": "Conditional transfer improved; irrelevant payment lesson remains.",
+      "cross-project": "Scopes the other-project constraints conditionally, but misspells one observation ID.",
+      "as-of": "Still confuses effective schedule with an occurrence on the queried date.",
+      "forget": "Does not expose forgotten address; adds unrelated endpoint information.",
+      "no-match": "Empty selected evidence; correctly answers unknown.",
+      "changed-source": "Correct removed-endpoint warning; no explicit source verification step.",
+      "paraphrase": "Retains maintenance constraint and conditionally mentions cost; irrelevant payment lesson remains.",
+      "multiple-constraints": "Uses both given constraints; adds unrelated payment advice.",
+      "japanese-paraphrase": "Makes prior cost constraint conditional; still adds payment and broad technology advice.",
+      "current": "Correct Tuesday state.",
+      "historical-match": "Correct transition from Monday to Tuesday.",
+      "eligibility-crowding": "Uses accessible operations evidence; no prohibited fixture content.",
+      "correction": "Uses corrected deadline cause.",
+      "cross-language": "Uses idempotency lesson without transferring another incident cause."
+    },
+    "challenge": "All eight disclosed rubrics met on primary-agent review; one run, inspected development data."
+  },
+  "limits": [
+    "One configured provider/model; no independent holdout or hosted acceptance.",
+    "Current tests use actual MCP recall with synthetic verified principals and loopback Firestore.",
+    "Answer stage receives retrieved evidence; it does not measure spontaneous invocation.",
+    "Older counts are historical baselines, not randomized simultaneous comparisons.",
+    "Candidate selection and annotations can be wrong; full outcome remains unaccepted.",
+    "Docs graph lint unavailable because repository has no docs/.docs-config.yaml; language/link/secret/whitespace checks used."
+  ]
+}

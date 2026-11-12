@@ -92,7 +92,7 @@ export class VertexEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+export async function readBoundedJson(response: Response): Promise<unknown> {
   if (!response.ok) {
     await response.body?.cancel();
     throw new Error(`Vertex AI request failed with HTTP ${response.status}`);

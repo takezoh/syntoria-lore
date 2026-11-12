@@ -1,0 +1,333 @@
+{
+  "retrieval": {
+    "dataset_sha256": "a315f8614a32eb142a6e2e4deec5601adffae40e7a9e695835ae3b9611b84d7d",
+    "embedding": {
+      "model": "gemini-embedding-001",
+      "dimension": 768,
+      "new_calls": 4
+    },
+    "storage": "loopback-firestore-emulator",
+    "evaluated_at": "2026-11-12T12:51:03.838Z",
+    "boundary": "Domain-service retrieval with real Vertex embeddings; not hosted MCP or client-use acceptance.",
+    "cases": [
+      {
+        "id": "paraphrase",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 126.66770799999995,
+        "notes": [
+          "semantic-match-only"
+        ],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "mixed-name",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 81.98352,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "cross-project",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 92.08324300000004,
+        "notes": [
+          "semantic-match-only"
+        ],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "current",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 83.68833200000017,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "historical-match",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 86.71526600000016,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "as-of",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 79.70960000000014,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "eligibility-crowding",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 91.38289500000019,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "forget",
+        "recall": null,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 77.19653800000015,
+        "notes": [
+          "semantic-match-only"
+        ],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "no-match",
+        "recall": null,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 83.18292400000018,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "correction",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 86.4614760000004,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "changed-source",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 84.80007399999977,
+        "notes": [],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "multiple-constraints",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 89.75422299999991,
+        "notes": [
+          "semantic-match-only"
+        ],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "japanese-paraphrase",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 87.29050299999972,
+        "notes": [
+          "semantic-match-only"
+        ],
+        "answer_use": "not-measured"
+      },
+      {
+        "id": "cross-language",
+        "recall": 1,
+        "all_required": true,
+        "forbidden": [],
+        "latency_ms": 81.33798100000013,
+        "notes": [
+          "semantic-match-only"
+        ],
+        "answer_use": "not-measured"
+      }
+    ],
+    "macro_recall_at_5": 1,
+    "all_required_hit_rate": 1,
+    "prohibited_content_cases": 0,
+    "passed": true,
+    "limitation": "Retrieval judgments only; answer quality, abstention and client behavior are unmeasured."
+  },
+  "answer_model": "gemini-2.5-flash",
+  "answer_generation": "Evidence supplied to model; no autonomous tool use in this stage.",
+  "rubric_reviewer": "Primary agent; not an independent or blinded reviewer.",
+  "answer_results": [
+    {
+      "id": "paraphrase",
+      "answer": "To keep the new service easy to run without a dedicated operations team, you should avoid components that require routine manual administration (obs_8039ebc3a078c8b96eed89c37b19287d). Additionally, ensure that recurring infrastructure spending stays within the previously agreed baseline (obs_eba283b789461bde782d94c277d1a5e4).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "mixed-name",
+      "answer": "Unknown. I have no information about whether Cedar should add several independently managed services. I do know that for a prior project, the maintenance constraint was a single operator, and components requiring routine manual administration were to be avoided (obs_8039ebc3a078c8b96eed89c37b19287d). Also, recurring infrastructure spending for that project had to stay within the previously agreed baseline (obs_eba283b789461bde782d94c277d1a5e4).",
+      "finish": "STOP",
+      "rubric_result": "fail",
+      "rubric_note": "Mentions the old single-operator constraint but declines to apply it to the named-project recommendation."
+    },
+    {
+      "id": "cross-project",
+      "answer": "If a response never arrives, the new checkout should use stable idempotency keys to prevent duplicate charges if retries are attempted (obs_850bdcc0b37c68497ca0bf3300ae72f6). The timeout itself might be due to a missing client deadline, not necessarily a database issue (obs_1ef2daecd25c464e4c49558c2e2c7a45).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "current",
+      "answer": "Cedar reviews are now on Tuesday (obs_4670f0ebb00e37b158654f9fffa54389). They moved from Monday on November 1 (obs_4670f0ebb00e37b158654f9fffa54389, obs_4b24a313254edde0db7f2b26a3b13ad3).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "historical-match",
+      "answer": "The Monday arrangement for reviews changed to Tuesday on November 1 (obs_4670f0ebb00e37b158654f9fffa54389, obs_4b24a313254edde0db7f2b26a3b13ad3).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "as-of",
+      "answer": "Cedar reviews used to happen on Monday (obs_4b24a313254edde0db7f2b26a3b13ad3).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "eligibility-crowding",
+      "answer": "To avoid maintenance overhead, an operator should avoid components that require routine manual administration (obs_8039ebc3a078c8b96eed89c37b19287d).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "forget",
+      "answer": "Unknown.",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "no-match",
+      "answer": "Unknown.",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "correction",
+      "answer": "No, the database should not be replaced to fix the Birch timeout. A preliminary report incorrectly blamed the database (obs_f0b7d79265f2ac8cd1c5de4aa80ce51d), but this was later corrected. The timeout was caused by a missing client deadline, not the database (obs_1ef2daecd25c464e4c49558c2e2c7a45). The mistaken database cause has been retracted (obs_85e28974c4e811935f2c929af1c27b84).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "changed-source",
+      "answer": "No, the old integration guide described an endpoint that the source now marks removed (obs_274cbcb56d39d43ccde12b27c8cf0f88).",
+      "finish": "STOP",
+      "rubric_result": "fail",
+      "rubric_note": "Reports removal but omits the rubric's request for verification."
+    },
+    {
+      "id": "multiple-constraints",
+      "answer": "For a solo-maintained project, choose infrastructure that avoids routine manual administration (obs_8039ebc3a078c8b96eed89c37b19287d) and does not increase recurring spending (obs_eba283b789461bde782d94c277d1a5e4).",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "japanese-paraphrase",
+      "answer": "専任の運用担当を置けない新サービスを構成する場合、ルーチン的な手動管理を必要とするコンポーネントを避けるべきです (obs_8039ebc3a078c8b96eed89c37b19287d)。また、インフラストラクチャの経常的な支出は、以前合意されたベースライン内に収める必要があります (obs_eba283b789461bde782d94c277d1a5e4)。",
+      "finish": "STOP",
+      "rubric_result": "pass",
+      "rubric_note": "Meets the disclosed answer rubric on primary-agent inspection."
+    },
+    {
+      "id": "cross-language",
+      "answer": "決済の応答が途切れた際に安全に再試行するには、重複請求を防ぐために安定したべき等キーを使用する必要があります (obs_850bdcc0b37c68497ca0bf3300ae72f6)。タイムアウトの原因は、データベースではなくクライアントのデッドラインの欠落でした (obs_1ef2daecd25c464e4c49558c2e2c7a45)。",
+      "finish": "STOP",
+      "rubric_result": "fail",
+      "rubric_note": "States another project's missing-deadline cause as the cause of the current payment timeout."
+    }
+  ],
+  "client_model": "gemini-2.5-flash",
+  "client_boundary": "Fresh model conversations using actual SERVER_INSTRUCTIONS and domain-backed simplified memory tools, not hosted Claude or an HTTP/MCP client. The observe adapter records summaries as events and does not exercise full state/aspect mapping.",
+  "client_results": [
+    {
+      "run": 0,
+      "a_tools": [
+        "observe"
+      ],
+      "b_tools": [
+        "recall",
+        "recall"
+      ],
+      "saved_retrieved": true,
+      "observation_ids_cited": false,
+      "both_constraints_explicit": true,
+      "answer": "I understand you're looking for a new service architecture. I also recall that you are the sole operator of your software, and recurring infrastructure spending must not increase for this new project.\n\nTo propose a suitable architecture, I need a bit more information. Could you tell me:\n\n1.  **What is the purpose of this new service?** What problem does it solve or what functionality does it provide?\n2.  **What kind of data will it handle?** (e.g., text, images, real-time streams, transactional data)\n3.  **What are the expected performance requirements?** (e.g., latency, throughput, availability)\n4.  **Are there any specific technologies or platforms you prefer or want to avoid?**\n5.  **What is the expected scale of this service?** (e.g., number of users, data volume)\n\nOnce I have a better understanding of these aspects, I can suggest an architecture that aligns with your constraints and requirements."
+    },
+    {
+      "run": 1,
+      "a_tools": [
+        "observe"
+      ],
+      "b_tools": [
+        "recall",
+        "recall"
+      ],
+      "saved_retrieved": true,
+      "observation_ids_cited": false,
+      "both_constraints_explicit": true,
+      "answer": "Given that you are the sole operator of your software and recurring infrastructure spending must not increase, I propose an architecture that prioritizes simplicity, cost-effectiveness, and ease of maintenance.\n\nHere's a high-level proposal:\n\n**1. Serverless Functions (e.g., AWS Lambda, Google Cloud Functions, Azure Functions):**\n\n*   **Benefit:** Pay-per-execution model eliminates idle server costs. Automatic scaling handles fluctuating demand without manual intervention. Reduced operational overhead as the cloud provider manages the underlying infrastructure.\n*   **Use Case:** Ideal for event-driven tasks, API endpoints, and background processing.\n\n**2. Managed Database Service (e.g., AWS RDS, Google Cloud SQL, Azure SQL Database):**\n\n*   **Benefit:** Offloads database administration tasks like backups, patching, and scaling to the cloud provider. Offers high availability and durability.\n*   **Use Case:** Relational data storage. Consider a NoSQL option (e.g., DynamoDB, Firestore) if your data model is flexible and doesn't require strict relational integrity, as these can sometimes be more cost-effective for certain workloads.\n\n**3. Object Storage (e.g., AWS S3, Google Cloud Storage, Azure Blob Storage):**\n\n*   **Benefit:** Extremely cost-effective for storing large amounts of unstructured data (images, videos, documents, logs). Highly durable and scalable.\n*   **Use Case:** Storing user-generated content, backups, and static website assets.\n\n**4. API Gateway (e.g., AWS API Gateway, Google Cloud Endpoints, Azure API Management):**\n\n*   **Benefit:** Provides a single entry point for all API requests, enabling features like authentication, authorization, request/response transformation, and rate limiting.\n*   **Use Case:** Exposing your serverless functions as a unified API.\n\n**5. Content Delivery Network (CDN) (e.g., Cloudflare, AWS CloudFront, Google Cloud CDN):**\n\n*   **Benefit:** Caches static content closer to users, reducing latency and improving performance. Can also help reduce the load on your origin servers.\n*   **Use Case:** Delivering static assets (HTML, CSS, JavaScript, images) for your web application.\n\n**6. Infrastructure as Code (IaC) (e.g., Terraform, AWS CloudFormation, Azure Resource Manager):**\n\n*   **Benefit:** Defines your infrastructure in code, allowing for version control, automated deployments, and consistent environments. Reduces manual errors and simplifies infrastructure management.\n*   **Use Case:** Managing all your cloud resources from a single source of truth.\n\n**Why this approach aligns with your constraints:**\n\n*   **Sole Operator:** Serverless and managed services significantly reduce the operational burden, allowing you to focus on development rather than infrastructure management. IaC further streamlines deployments and changes.\n*   **No Increase in Recurring Infrastructure Spending:** The pay-per-use model of serverless functions and the cost-effectiveness of object storage help keep recurring costs low. You only pay for what you consume. Careful monitoring and optimization will be key here.\n\n**Next Steps:**\n\nTo refine this architecture, I would need more information about:\n\n*   The specific functionality of the new service.\n*   Expected traffic and data volume.\n*   Any existing technology stack or preferences.\n*   Specific compliance or security requirements.\n\nDo you have any initial thoughts or preferences on these components?"
+    },
+    {
+      "run": 2,
+      "a_tools": [
+        "observe"
+      ],
+      "b_tools": [
+        "recall",
+        "recall"
+      ],
+      "saved_retrieved": true,
+      "observation_ids_cited": false,
+      "both_constraints_explicit": true,
+      "answer": "Given that you are the sole operator of your software and recurring infrastructure spending must not increase, I recommend an architecture that prioritizes simplicity, cost-effectiveness, and ease of maintenance.\n\nHere's a proposed architecture:\n\n**1. Serverless Functions (e.g., AWS Lambda, Google Cloud Functions, Azure Functions):**\n\n*   **Benefit:** Pay-per-execution model eliminates idle server costs. Automatic scaling handles varying loads without manual intervention. Reduced operational overhead as the cloud provider manages the underlying infrastructure.\n*   **Use Case:** Ideal for event-driven tasks, API endpoints, background processing, and scheduled jobs.\n\n**2. Managed Database Service (e.g., AWS RDS, Google Cloud SQL, Azure SQL Database):**\n\n*   **Benefit:** Offloads database administration tasks like backups, patching, and scaling to the cloud provider. Ensures high availability and durability without complex setup.\n*   **Use Case:** Relational databases are suitable for structured data and transactional operations. Consider NoSQL options (e.g., DynamoDB, Firestore) if your data model is flexible and requires high scalability.\n\n**3. Object Storage (e.g., AWS S3, Google Cloud Storage, Azure Blob Storage):**\n\n*   **Benefit:** Highly scalable, durable, and cost-effective storage for static assets, user-generated content, backups, and logs.\n*   **Use Case:** Storing images, videos, documents, and other unstructured data.\n\n**4. API Gateway (e.g., AWS API Gateway, Google Cloud Endpoints, Azure API Management):**\n\n*   **Benefit:** Provides a single entry point for all API requests, enabling features like authentication, authorization, request/response transformation, and rate limiting.\n*   **Use Case:** Exposing your serverless functions as a unified API.\n\n**5. Content Delivery Network (CDN) (e.g., Cloudflare, AWS CloudFront, Google Cloud CDN):**\n\n*   **Benefit:** Caches static content closer to users, reducing latency and improving performance. Also helps offload traffic from your origin servers.\n*   **Use Case:** Delivering static assets (HTML, CSS, JavaScript, images) to users globally.\n\n**6. Infrastructure as Code (IaC) (e.g., Terraform, AWS CloudFormation, Azure Resource Manager):**\n\n*   **Benefit:** Defines your infrastructure in code, enabling version control, automated deployments, and consistent environments. Reduces manual errors and simplifies infrastructure management.\n*   **Use Case:** Managing all your cloud resources from a single source of truth.\n\n**Why this architecture fits your constraints:**\n\n*   **No increase in recurring infrastructure spending:** Serverless functions and managed services significantly reduce operational costs by eliminating the need for dedicated servers and extensive manual administration. You only pay for what you use.\n*   **Sole operator:** The managed nature of these services minimizes the operational burden, allowing you to focus on development rather than infrastructure management. IaC further streamlines deployments and updates.\n*   **Simplicity:** This architecture promotes a modular design, making it easier to understand, develop, and maintain individual components.\n\n**Next Steps:**\n\nTo further refine this architecture, consider the following:\n\n*   **Specific programming languages and frameworks:** Which ones are you most comfortable with?\n*   **Data access patterns:** How will your service interact with the database?\n*   **Security requirements:** What authentication and authorization mechanisms are needed?\n*   **Monitoring and logging:** How will you observe the health and performance of your service?\n\nBy leveraging these cloud-native services, you can build a robust, scalable, and cost-effective solution without increasing your recurring infrastructure spending or overwhelming your operational capacity."
+    },
+    {
+      "run": 3,
+      "a_tools": [
+        "observe"
+      ],
+      "b_tools": [
+        "recall"
+      ],
+      "saved_retrieved": true,
+      "observation_ids_cited": false,
+      "both_constraints_explicit": false,
+      "answer": "I need more information to propose a suitable architecture. Please tell me:\n\n*   **What is the purpose of this new service?** What problem does it solve, or what functionality does it provide?\n*   **What are the expected performance requirements?** (e.g., number of users, transactions per second, latency tolerance)\n*   **What kind of data will it handle?** (e.g., sensitive data, large volumes, real-time data)\n*   **What are the integration points?** Will it need to interact with existing systems?\n*   **What is the expected development timeline and team size?**\n*   **Are there any specific technology preferences or constraints?** (e.g., programming languages, cloud providers, existing infrastructure)\n*   **What are the budget constraints for infrastructure and ongoing maintenance?** I see that recurring infrastructure spending must not increase.\n*   **What are the security requirements?**\n\nOnce I have a better understanding of these aspects, I can propose a more concrete architecture."
+    },
+    {
+      "run": 4,
+      "a_tools": [
+        "observe"
+      ],
+      "b_tools": [
+        "recall"
+      ],
+      "saved_retrieved": true,
+      "observation_ids_cited": false,
+      "both_constraints_explicit": true,
+      "answer": "I understand that you are the sole operator of your software and that any new project should not increase recurring infrastructure spending.\n\nTo propose an architecture, I need more information about the service. Please tell me:\n\n*   **What is the purpose of this new service?** What problem does it solve or what functionality does it provide?\n*   **What kind of data will it handle?** (e.g., text, images, videos, structured data, etc.)\n*   **What is the expected scale of usage?** (e.g., number of users, requests per second, data volume)\n*   **Are there any specific technologies or platforms you prefer or want to avoid?**\n*   **Are there any existing systems it needs to integrate with?**\n\nOnce I have a better understanding of these aspects, I can suggest an architecture that aligns with your constraints."
+    }
+  ]
+}

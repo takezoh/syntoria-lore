@@ -2,6 +2,10 @@
 
 This document is the product contract for Release 1: the functional requirements, end-to-end acceptance contracts and service targets that implementation and verification are measured against. Positioning and claim boundaries are in [product design](product.md); the user-facing product explanation is in [PRODUCT](../../PRODUCT.md). These requirements are targets, not evidence that the targets have been met. Dated local and hosted results are in the [evaluation records](../eval/), and delivery status is summarized in the [development plan](../DEVELOPMENT_PLAN.md). Requirement IDs are stable and are referenced by the [local acceptance record](../eval/local-acceptance.md).
 
+## Current recall target
+
+The [situational recall contract](situational-recall.md) defines the current target for contextual retrieval and client use, with synthetic evaluation cases. The older release requirements below include superseded storage and approval assumptions; they are not a claim that those features currently run. Use the [architecture](../../ARCHITECTURE.md) for implementation status. Existing numerical targets have not been validated by the new dataset.
+
 ## Product principles
 
 1. **Outcome first**: the service exists to reduce re-explanation and mistakes, not to evaluate technologies. Architecture follows the finished product's requirements and operating load.

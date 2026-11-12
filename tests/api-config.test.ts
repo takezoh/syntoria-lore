@@ -34,6 +34,26 @@ function problems(overrides: Record<string, string | undefined>): readonly strin
 }
 
 describe('API configuration', () => {
+  it('requires explicit valid configuration to enable recall assessment', () => {
+    expect(loadConfig(environment()).recallAssessment).toBeUndefined();
+    expect(
+      loadConfig(environment({ RECALL_ASSESSMENT_MODEL: 'gemini-2.5-flash' })).recallAssessment,
+    ).toEqual({
+      projectId: 'example-project',
+      location: 'asia-southeast1',
+      model: 'gemini-2.5-flash',
+    });
+    expect(problems({ RECALL_ASSESSMENT_MODEL: '' })).toContain(
+      'RECALL_ASSESSMENT_MODEL is required',
+    );
+    expect(
+      problems({
+        RECALL_ASSESSMENT_MODEL: 'gemini-2.5-flash',
+        EMBEDDING_PROVIDER: 'deterministic',
+        NODE_ENV: 'test',
+      }),
+    ).toContain('RECALL_ASSESSMENT_MODEL requires Vertex configuration');
+  });
   it('reads a complete production environment', () => {
     const config = loadConfig(environment());
     expect(config).toMatchObject({

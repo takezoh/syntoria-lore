@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "status": "frozen-self-authored-challenge-not-independent",
+  "as_of": "2026-11-12T12:00:00Z",
+  "observations": [
+    {
+      "id": "hours",
+      "subjects": [
+        "Evaluation owner"
+      ],
+      "summary": "I do focused work in the morning. Schedule routine discussions after 14:00 in my local time.",
+      "title": "Evaluation owner observation",
+      "kind": "fact",
+      "nature": "state",
+      "aspect": "meeting preference",
+      "value": "after 14:00",
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "hours",
+          "url": "https://example.test/evidence/hours"
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "subjects": [
+        "Juniper export"
+      ],
+      "summary": "An interrupted export exposed half a file to readers. Writing a temporary file and atomically renaming it after completion prevented partial reads.",
+      "title": "Juniper export observation",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "files",
+          "url": "https://example.test/evidence/files"
+        }
+      ]
+    },
+    {
+      "id": "cause",
+      "subjects": [
+        "Juniper export"
+      ],
+      "summary": "The Juniper interruption was caused by a host restart. That cause was established for Juniper only.",
+      "title": "Juniper export observation",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "cause",
+          "url": "https://example.test/evidence/cause"
+        }
+      ]
+    },
+    {
+      "id": "old-cap",
+      "subjects": [
+        "Orchid"
+      ],
+      "summary": "The monthly spend cap was 200 units.",
+      "title": "Orchid observation",
+      "kind": "fact",
+      "nature": "state",
+      "aspect": "spend cap",
+      "value": "200",
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "old-cap",
+          "url": "https://example.test/evidence/old-cap"
+        }
+      ]
+    },
+    {
+      "id": "new-cap",
+      "subjects": [
+        "Orchid"
+      ],
+      "summary": "The monthly spend cap increased to 350 units on November 1.",
+      "title": "Orchid observation",
+      "kind": "fact",
+      "nature": "state",
+      "aspect": "spend cap",
+      "value": "350",
+      "effective_at": "2026-11-01T09:00:00Z",
+      "recorded_at": "2026-11-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "new-cap",
+          "url": "https://example.test/evidence/new-cap"
+        }
+      ]
+    },
+    {
+      "id": "currency",
+      "subjects": [
+        "Cobalt quote"
+      ],
+      "summary": "The Cobalt supplier quoted 90 EUR per seat per year. This is a quote, not an accepted contract.",
+      "title": "Cobalt quote observation",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "currency",
+          "url": "https://example.test/evidence/currency"
+        }
+      ]
+    },
+    {
+      "id": "noise",
+      "subjects": [
+        "Orchid"
+      ],
+      "summary": "The Orchid presentation uses purple headings.",
+      "title": "Orchid observation",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "noise",
+          "url": "https://example.test/evidence/noise"
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "work-hours",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "When should I arrange the weekly routine catch-up?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "hours"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "Apply the afternoon preference and retain the local-time qualification; do not invent a timezone.",
+      "expected_abstention": false
+    },
+    {
+      "id": "publication",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "How can a new reporting job keep users from seeing unfinished output?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "files"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "Transfer temporary-file/atomic-rename lesson; do not claim a host restart caused this new issue.",
+      "expected_abstention": false
+    },
+    {
+      "id": "cause-unknown",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "Did a host restart cause the new reporting job to stop?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "cause"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "State that the current cause is unknown; attribute the known restart only to Juniper.",
+      "expected_abstention": false
+    },
+    {
+      "id": "latest-cap",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "What can Orchid spend per month now?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "new-cap"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "350 is current; do not present 200 as current.",
+      "expected_abstention": false
+    },
+    {
+      "id": "quote-status",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "Has the Cobalt contract been agreed at 90 dollars per month?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "currency"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "No acceptance evidence; the quote is 90 EUR per seat per year, not USD per month.",
+      "expected_abstention": false
+    },
+    {
+      "id": "language",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "新しいレポート処理で、利用者に書きかけのファイルを見せない方法は？",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "files"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "Apply atomic publication; do not transfer the old incident cause as current fact.",
+      "expected_abstention": false
+    },
+    {
+      "id": "unsupported",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "What time zone does the owner live in?",
+      "allowed_compartments": [],
+      "required_evidence": [],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "Unknown; local-time scheduling preference does not identify a timezone.",
+      "expected_abstention": true
+    },
+    {
+      "id": "unrelated",
+      "split": "frozen-challenge",
+      "intent": "contextual",
+      "query": "Translate apple into French.",
+      "allowed_compartments": [],
+      "required_evidence": [],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_rubric": "Answer pomme without adding unrelated memory.",
+      "expected_abstention": true
+    }
+  ]
+}

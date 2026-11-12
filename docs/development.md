@@ -1,6 +1,6 @@
 # Development guide
 
-This guide gets a contributor from a checkout to a meaningful local verification and points to the contract each area owns. The PostgreSQL implementation was removed on 2026-11-09. The repository holds the Firestore Memory Records package and `apps/api`, a Remote MCP service over it. See the [architecture](../ARCHITECTURE.md) for what exists and what does not.
+This guide gets a contributor from a checkout to a meaningful local verification and points to the contract each area owns. The PostgreSQL implementation was removed on 2026-11-09. The repository holds the Firestore Memory Records package and `apps/api`, a Remote MCP service over it. See the [architecture](../ARCHITECTURE.md) for what exists, [operations](operations.md) for configuration and recovery, and the [evaluation guide](eval/README.md) for model-quality measurements.
 
 ## Set up
 
@@ -45,6 +45,7 @@ Local checks with deterministic doubles do not establish hosted behavior, extrac
 | User value and examples | [README](../README.md), [Product](../PRODUCT.md) |
 | Product positioning and claims | [Product design](design/product.md) |
 | Required behavior and measurable service targets | [Product requirements](design/requirements.md) |
+| Contextual recall outcomes, optional applicability assessment, retrieval contracts and client use | [Situational recall](design/situational-recall.md) and [evaluation fixtures](eval/fixtures/situational-recall.md) |
 | Observations, subjects, topics, trust, source references, reading, Forget and migration | [Observation ledger design](design/observation-ledger.md) |
 | The earlier Memory Records contracts and the decision-model evaluation | [Memory Records design](design/memory-records.md) |
 | Components and correctness boundaries | [Architecture](../ARCHITECTURE.md) |
@@ -55,7 +56,8 @@ Local checks with deterministic doubles do not establish hosted behavior, extrac
 | Reviewed source metadata maintenance | [`scripts/migrate-source-metadata.mjs`](../scripts/migrate-source-metadata.mjs): prepare, dry-run, apply and verify use private snapshot/plan/manifest files, explicit database targets and the reviewed manifest digest |
 | Test suites and runners | [Testing](technical/testing.md) |
 | Decisions and their reasons | [ADRs](adr/) |
-| Dated evidence | [Evaluation records](eval/) |
+| Operating configuration, rollout checks, diagnostics and rollback | [Operations](operations.md) |
+| Dated evidence and evaluation runners | [Evaluation guide](eval/README.md) |
 
 ## Historical pages
 

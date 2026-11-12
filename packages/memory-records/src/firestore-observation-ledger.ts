@@ -853,18 +853,22 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     scopeId: string,
     embedding: { readonly modelId: string; readonly values: readonly number[] },
     limit: number,
-  ): Promise<{ observationId: string; similarity: number }[]> {
+  ): Promise<{
+    hits: { observationId: string; similarity: number }[];
+    exhausted: boolean;
+    scanned: number;
+  }> {
     await this.readContext(actor, scopeId);
     const snapshot = await this.indexCollectionOfObservations(actor, scopeId)
       .findNearest({
         vectorField: 'embedding',
         queryVector: [...embedding.values],
-        limit,
+        limit: 1000,
         distanceMeasure: 'COSINE',
         distanceResultField: 'distance',
       })
       .get();
-    return snapshot.docs
+    const hits = snapshot.docs
       .filter(
         (document) =>
           document.get('embeddingModelId') === embedding.modelId &&
@@ -876,7 +880,9 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       .map((document) => ({
         observationId: String(document.get('observationId')),
         similarity: 1 - Number(document.get('distance')),
-      }));
+      }))
+      .slice(0, limit);
+    return { hits, exhausted: snapshot.size === 1000, scanned: snapshot.size };
   }
 
   // ---- Links, source reports, writer suppression ------------------------------------------

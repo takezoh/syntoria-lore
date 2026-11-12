@@ -4,10 +4,12 @@ import {
   createMemoryRecordsRuntime,
   ObservationService,
   type EmbeddingProvider,
+  type RecallAssessor,
   type MemoryRecordsRuntime,
 } from '@memory/memory-records';
 import type { ApiConfig } from './config.js';
 import { createEmbeddingProvider } from './embeddings.js';
+import { VertexRecallAssessor } from './recall-assessment.js';
 import { createAccessVerifier } from './access.js';
 import { createGateVerifier } from './gate.js';
 import { createRequestListener } from './server.js';
@@ -20,6 +22,7 @@ export interface ApiApp {
 
 export interface ApiAppOverrides {
   readonly embeddings?: EmbeddingProvider;
+  readonly recallAssessor?: RecallAssessor;
   readonly accessKeys?: JWTVerifyGetKey;
   readonly fetch?: typeof globalThis.fetch;
   readonly log?: (event: Readonly<Record<string, unknown>>) => void;
@@ -34,12 +37,19 @@ export function createApiApp(config: ApiConfig, overrides: ApiAppOverrides = {})
     ledgerDatabaseId: config.ledgerDatabaseId,
     cursorSecret: config.cursorSecret,
   });
+  const recallAssessor =
+    overrides.recallAssessor ??
+    (config.recallAssessment === undefined
+      ? undefined
+      : new VertexRecallAssessor(config.recallAssessment));
   const service = new ObservationService({
     ledger: runtime.observations,
     access: runtime.access,
     embeddings: overrides.embeddings ?? createEmbeddingProvider(config.embedding),
+    ...(recallAssessor === undefined ? {} : { recallAssessor }),
     log,
   });
+  service.startMaintenance();
   const accessVerifier =
     config.access === undefined
       ? undefined
@@ -89,5 +99,12 @@ export function createApiApp(config: ApiConfig, overrides: ApiAppOverrides = {})
     ready: () => runtime.checkReady(),
     log,
   });
-  return { listener, runtime, close: () => runtime.close() };
+  return {
+    listener,
+    runtime,
+    close: async () => {
+      await service.close();
+      await runtime.close();
+    },
+  };
 }

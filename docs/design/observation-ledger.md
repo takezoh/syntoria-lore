@@ -6,6 +6,8 @@ This document turns [ADR 0010](../adr/0010-record-observations-and-derive-the-cu
 
 AIs that observe a person's work write what matters to Lore as it happens. Later, any authorized AI asks about a person, customer, project or decision and gets the present state, how it came to be, who observed it and where the original is, without a person having reviewed anything and without Lore holding a copy of the original.
 
+The target for contextual retrieval and client use is extended by the [situational recall contract](situational-recall.md). The Reading section below describes the existing baseline; its ranking and response projection are not acceptance criteria for contextual recall.
+
 ## Conditions
 
 These come from the owner and are not open in this design.
@@ -250,7 +252,7 @@ Each unit is verified on the emulator. Where the implementation settled a detail
 
 ## Evaluation
 
-Three measurements decide whether this model works for the owner. They use real writes and the owner's own questions, and their results go to dated records under `docs/eval/`.
+The following three measurements assess ledger organization and temporal reads. They are necessary but insufficient for the memory outcome; also apply the [situational recall evaluation](../eval/fixtures/situational-recall.md). They use real writes and the owner's own questions, and their results go to dated records under `docs/eval/`.
 
 | Measurement | Method | What it decides |
 | --- | --- | --- |

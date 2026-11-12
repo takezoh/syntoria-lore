@@ -1,0 +1,852 @@
+{
+  "schema_version": 1,
+  "status": "synthetic-development-data-not-results",
+  "as_of": "2026-11-12T12:00:00Z",
+  "observations": [
+    {
+      "id": "solo",
+      "subjects": [
+        "Prior project"
+      ],
+      "summary": "One person maintains the system. Avoid components that require routine manual administration.",
+      "title": "Prior project memory",
+      "kind": "preference",
+      "nature": "state",
+      "aspect": "maintenance constraint",
+      "value": "single operator",
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "solo",
+          "url": "https://example.test/evidence/solo"
+        }
+      ]
+    },
+    {
+      "id": "cost",
+      "subjects": [
+        "Prior project"
+      ],
+      "summary": "Recurring infrastructure spending must stay within the previously agreed baseline.",
+      "title": "Prior project memory",
+      "kind": "decision",
+      "nature": "state",
+      "aspect": "cost constraint",
+      "value": "no increased recurring spend",
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "cost",
+          "url": "https://example.test/evidence/cost"
+        }
+      ]
+    },
+    {
+      "id": "retry",
+      "subjects": [
+        "Cedar"
+      ],
+      "summary": "Retrying timed-out payments created duplicate charges. Stable idempotency keys prevented duplicates.",
+      "title": "Cedar memory",
+      "kind": "lesson",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "retry",
+          "url": "https://example.test/evidence/retry"
+        }
+      ]
+    },
+    {
+      "id": "old",
+      "subjects": [
+        "Cedar"
+      ],
+      "summary": "Reviews used to happen on Monday.",
+      "title": "Cedar memory",
+      "kind": "fact",
+      "nature": "state",
+      "aspect": "review day",
+      "value": "Monday",
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "old",
+          "url": "https://example.test/evidence/old"
+        }
+      ]
+    },
+    {
+      "id": "new",
+      "subjects": [
+        "Cedar"
+      ],
+      "summary": "Reviews moved to Tuesday on November 1.",
+      "title": "Cedar memory",
+      "kind": "fact",
+      "nature": "state",
+      "aspect": "review day",
+      "value": "Tuesday",
+      "effective_at": "2026-11-01T09:00:00Z",
+      "recorded_at": "2026-11-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "new",
+          "url": "https://example.test/evidence/new"
+        }
+      ]
+    },
+    {
+      "id": "name-noise",
+      "subjects": [
+        "Cedar"
+      ],
+      "summary": "The Cedar logo uses green lettering.",
+      "title": "Cedar memory",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "name-noise",
+          "url": "https://example.test/evidence/name-noise"
+        }
+      ]
+    },
+    {
+      "id": "retracted",
+      "subjects": [
+        "Birch"
+      ],
+      "summary": "A preliminary report incorrectly blamed the database for a timeout.",
+      "title": "Birch memory",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "retracted",
+          "url": "https://example.test/evidence/retracted"
+        }
+      ],
+      "status": "retracted"
+    },
+    {
+      "id": "corrected",
+      "subjects": [
+        "Birch"
+      ],
+      "summary": "The timeout came from a missing client deadline, not the database.",
+      "title": "Birch memory",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "corrected",
+          "url": "https://example.test/evidence/corrected"
+        }
+      ]
+    },
+    {
+      "id": "forgotten",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "The former delivery address was 10 Sample Street.",
+      "title": "Private project memory",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "forgotten",
+          "url": "https://example.test/evidence/forgotten"
+        }
+      ],
+      "status": "forgotten"
+    },
+    {
+      "id": "source-change",
+      "subjects": [
+        "Maple"
+      ],
+      "summary": "The old integration guide described an endpoint that the source now marks removed.",
+      "title": "Maple memory",
+      "kind": "fact",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "source-change",
+          "url": "https://example.test/evidence/source-change"
+        }
+      ],
+      "source_status": "changed"
+    },
+    {
+      "id": "private-0",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-0",
+          "url": "https://example.test/evidence/private-0"
+        }
+      ]
+    },
+    {
+      "id": "private-1",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-1",
+          "url": "https://example.test/evidence/private-1"
+        }
+      ]
+    },
+    {
+      "id": "private-2",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-2",
+          "url": "https://example.test/evidence/private-2"
+        }
+      ]
+    },
+    {
+      "id": "private-3",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-3",
+          "url": "https://example.test/evidence/private-3"
+        }
+      ]
+    },
+    {
+      "id": "private-4",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-4",
+          "url": "https://example.test/evidence/private-4"
+        }
+      ]
+    },
+    {
+      "id": "private-5",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-5",
+          "url": "https://example.test/evidence/private-5"
+        }
+      ]
+    },
+    {
+      "id": "private-6",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-6",
+          "url": "https://example.test/evidence/private-6"
+        }
+      ]
+    },
+    {
+      "id": "private-7",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-7",
+          "url": "https://example.test/evidence/private-7"
+        }
+      ]
+    },
+    {
+      "id": "private-8",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-8",
+          "url": "https://example.test/evidence/private-8"
+        }
+      ]
+    },
+    {
+      "id": "private-9",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-9",
+          "url": "https://example.test/evidence/private-9"
+        }
+      ]
+    },
+    {
+      "id": "private-10",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-10",
+          "url": "https://example.test/evidence/private-10"
+        }
+      ]
+    },
+    {
+      "id": "private-11",
+      "subjects": [
+        "Private project"
+      ],
+      "summary": "One operator needs a low-maintenance architecture with few moving parts.",
+      "title": "Private project memory",
+      "kind": "preference",
+      "nature": "event",
+      "aspect": null,
+      "value": null,
+      "effective_at": "2026-10-01T09:00:00Z",
+      "recorded_at": "2026-10-01T09:00:00Z",
+      "tier": "source",
+      "writer": "synthetic-client-a",
+      "compartments": [
+        "private"
+      ],
+      "sources": [
+        {
+          "provider": "other",
+          "resource_id": "private-11",
+          "url": "https://example.test/evidence/private-11"
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "paraphrase",
+      "split": "development",
+      "intent": "contextual",
+      "query": "How can we keep this new service easy to run without a dedicated operations team?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "solo"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [
+        "Use the required evidence in the recommendation and cite its source."
+      ],
+      "answer_must_not": [
+        "Claim that a different project has already experienced the same event."
+      ]
+    },
+    {
+      "id": "mixed-name",
+      "split": "development",
+      "intent": "contextual",
+      "query": "For Cedar, should we add several independently managed services?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "solo"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [
+        "Use the required evidence in the recommendation and cite its source."
+      ],
+      "answer_must_not": [
+        "Claim that a different project has already experienced the same event."
+      ],
+      "answer_rubric": "Apply the single-operator constraint; the logo must not drive the recommendation."
+    },
+    {
+      "id": "cross-project",
+      "split": "development",
+      "intent": "contextual",
+      "query": "How should a new checkout handle a response that never arrives?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "retry"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [
+        "Use the required evidence in the recommendation and cite its source."
+      ],
+      "answer_must_not": [
+        "Claim that a different project has already experienced the same event."
+      ],
+      "answer_rubric": "Recommend stable idempotency across retries; do not claim the new checkout already failed."
+    },
+    {
+      "id": "current",
+      "split": "development",
+      "intent": "contextual",
+      "query": "When is the Cedar review now?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "new"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "answer_rubric": "Tuesday is current; Monday may appear only as the earlier schedule."
+    },
+    {
+      "id": "historical-match",
+      "split": "development",
+      "intent": "contextual",
+      "query": "What did the earlier Monday arrangement change to?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "old",
+        "new"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "answer_rubric": "Return the matched old observation and the current Tuesday state."
+    },
+    {
+      "id": "as-of",
+      "split": "development",
+      "intent": "contextual",
+      "query": "When was the Cedar review on October 15?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "old"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "as_of": "2026-10-15T12:00:00Z",
+      "answer_rubric": "Answer Monday; do not use November knowledge as the state on October 15."
+    },
+    {
+      "id": "eligibility-crowding",
+      "split": "development",
+      "intent": "contextual",
+      "query": "How can one operator avoid maintenance overhead?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "solo"
+      ],
+      "forbidden_evidence": [
+        "private-0",
+        "private-1",
+        "private-2",
+        "private-3",
+        "private-4",
+        "private-5",
+        "private-6",
+        "private-7",
+        "private-8",
+        "private-9",
+        "private-10",
+        "private-11"
+      ],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "candidate_order_override": [
+        "private-0",
+        "private-1",
+        "private-2",
+        "private-3",
+        "private-4",
+        "private-5",
+        "private-6",
+        "private-7",
+        "private-8",
+        "private-9",
+        "private-10",
+        "private-11",
+        "solo"
+      ],
+      "answer_rubric": "Use accessible evidence or explicitly report candidate-budget exhaustion; never expose private candidates."
+    },
+    {
+      "id": "forget",
+      "split": "development",
+      "intent": "contextual",
+      "query": "What was the former delivery address?",
+      "allowed_compartments": [],
+      "required_evidence": [],
+      "forbidden_evidence": [
+        "forgotten"
+      ],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "expected_abstention": true
+    },
+    {
+      "id": "no-match",
+      "split": "development",
+      "intent": "contextual",
+      "query": "Which airline seat does the person prefer?",
+      "allowed_compartments": [],
+      "required_evidence": [],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "expected_abstention": true
+    },
+    {
+      "id": "correction",
+      "split": "development",
+      "intent": "contextual",
+      "query": "Should we replace the database to fix the Birch timeout?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "corrected"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "answer_rubric": "Explain the client deadline cause; do not treat the retracted database claim as current."
+    },
+    {
+      "id": "changed-source",
+      "split": "development",
+      "intent": "contextual",
+      "query": "Can we rely on the Maple integration endpoint?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "source-change"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "answer_rubric": "State that the source changed and verification is needed; do not assert the endpoint still works."
+    },
+    {
+      "id": "multiple-constraints",
+      "split": "development",
+      "intent": "contextual",
+      "query": "How should we choose infrastructure for a new solo-maintained project without raising ongoing costs?",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "solo",
+        "cost"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": []
+    },
+    {
+      "id": "japanese-paraphrase",
+      "split": "development",
+      "intent": "contextual",
+      "query": "専任の運用担当を置けない新サービスは、どう構成すべき？",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "solo"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "language": "ja"
+    },
+    {
+      "id": "cross-language",
+      "split": "development",
+      "intent": "contextual",
+      "query": "決済の応答が途切れたとき、安全に再試行するには？",
+      "allowed_compartments": [],
+      "required_evidence": [
+        "retry"
+      ],
+      "forbidden_evidence": [],
+      "top_k": 5,
+      "answer_must": [],
+      "answer_must_not": [],
+      "language": "ja"
+    }
+  ],
+  "client_scenarios": [
+    {
+      "id": "fresh-client",
+      "setup": "Client A receives a conversation stating that one person operates the system and recurring costs cannot increase. Do not ask it to remember.",
+      "next_session": "Client B receives only: Propose an architecture for a new service.",
+      "expected": [
+        "A writes both constraints with provenance.",
+        "B recalls before recommending.",
+        "B applies both constraints with evidence."
+      ],
+      "forbidden": [
+        "Inject expected memory IDs into the second client prompt."
+      ]
+    },
+    {
+      "id": "unrelated-task",
+      "setup": "Load the same constraints.",
+      "next_session": "Translate the word apple into French.",
+      "expected": [
+        "Answer the translation without forcing irrelevant memory into the response."
+      ]
+    }
+  ],
+  "indexing_scenarios": [
+    {
+      "id": "recover-without-write",
+      "steps": [
+        "Commit an observation while embedding generation fails.",
+        "Restore embedding availability without any further observation writes.",
+        "Wait within the configured indexing recovery deadline.",
+        "Issue a paraphrased recall query."
+      ],
+      "expected": [
+        "Committed observation remains readable by ID.",
+        "Index lag is reported while pending.",
+        "Independent retry makes the observation semantically discoverable."
+      ]
+    }
+  ]
+}

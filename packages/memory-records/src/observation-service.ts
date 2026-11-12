@@ -1,3 +1,9 @@
+import {
+  assessRecall,
+  recallEvidenceIds,
+  type RecallAssessment,
+  type RecallAssessor,
+} from './recall-assessment.js';
 import { createHash } from 'node:crypto';
 import { AccessDeniedError, type ConnectionAccess, type MemoryAccess } from './access.js';
 import type { Embedding, EmbeddingProvider } from './derived-recall.js';
@@ -22,7 +28,6 @@ import {
 } from './observations.js';
 import {
   lookupTerms,
-  MAX_SEMANTIC_ONLY_BESIDE_MATCHES,
   MIN_TERM_COVERAGE,
   nameCandidates,
   termWeights,
@@ -69,6 +74,9 @@ export interface ObservationView {
   readonly kind: Observation['kind'];
   readonly value: string | null;
   readonly subject_ids: readonly string[];
+  /** Names attached to this evidence, not inferred from the current question. */
+  readonly subject_names: readonly string[];
+  readonly effective_until: string | null;
   readonly aspect: string | null;
   /** When it was the case, if known; otherwise when it was recorded. */
   readonly at: string;
@@ -101,17 +109,23 @@ export interface TopicStateView {
 
 export type RecallMatch = 'name' | 'terms' | 'semantic';
 
-export type RecallItemView =
+export type RecallItemView = {
+  readonly applicability_assessment?: Omit<RecallAssessment, 'index'> & {
+    readonly status: 'unverified-model-interpretation';
+  };
+} & (
   | {
       readonly type: 'topic';
       readonly matched: readonly RecallMatch[];
       readonly topic: TopicStateView;
+      readonly evidence: readonly ObservationView[];
     }
   | {
       readonly type: 'event';
       readonly matched: readonly RecallMatch[];
       readonly observation: ObservationView;
-    };
+    }
+);
 
 export interface ObservationRecallView {
   readonly items: readonly RecallItemView[];
@@ -139,6 +153,7 @@ export interface ObservationServiceOptions {
   readonly ledger: FirestoreObservationLedger;
   readonly access: MemoryAccess;
   readonly embeddings: EmbeddingProvider;
+  readonly recallAssessor?: RecallAssessor;
   readonly indexBatchSize?: number;
   readonly now?: () => Date;
   readonly log?: (event: Readonly<Record<string, unknown>>) => void;
@@ -173,6 +188,7 @@ export class ObservationService {
   private readonly ledger: FirestoreObservationLedger;
   private readonly access: MemoryAccess;
   private readonly embeddings: EmbeddingProvider;
+  private readonly recallAssessor: RecallAssessor | undefined;
   private readonly indexBatchSize: number;
   private readonly now: () => Date;
   private readonly log: (event: Readonly<Record<string, unknown>>) => void;
@@ -181,9 +197,58 @@ export class ObservationService {
     this.ledger = options.ledger;
     this.access = options.access;
     this.embeddings = options.embeddings;
+    this.recallAssessor = options.recallAssessor;
     this.indexBatchSize = options.indexBatchSize ?? 20;
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? ((event) => console.log(JSON.stringify(event)));
+  }
+
+  private readonly maintenanceScopes = new Map<
+    string,
+    { access: ConnectionAccess; next: number; delay: number }
+  >();
+  private maintenanceTimer: ReturnType<typeof setInterval> | undefined;
+  private maintenanceRun: Promise<void> | undefined;
+
+  /** Retry durable queues for authenticated scopes while this process is running. */
+  startMaintenance(intervalMs = 1000): void {
+    if (this.maintenanceTimer !== undefined) return;
+    this.maintenanceTimer = setInterval(() => {
+      if (this.maintenanceRun !== undefined) return;
+      this.maintenanceRun = this.maintain().finally(() => {
+        this.maintenanceRun = undefined;
+      });
+    }, intervalMs);
+    this.maintenanceTimer.unref();
+  }
+
+  async close(): Promise<void> {
+    clearInterval(this.maintenanceTimer);
+    this.maintenanceTimer = undefined;
+    await this.maintenanceRun;
+    this.maintenanceScopes.clear();
+  }
+
+  private async maintain(): Promise<void> {
+    for (const [key, entry] of [...this.maintenanceScopes.entries()]) {
+      if (entry.next > Date.now()) continue;
+      try {
+        const worker = await this.access.worker(entry.access);
+        if (!(await this.ledger.isRestoreReady(worker, entry.access.scopeId))) {
+          await this.ledger.reconcileRestore(worker, entry.access.scopeId);
+        }
+        await this.afterWrite(entry.access);
+        const pending = await this.ledger.hasPendingIndex(worker, entry.access.scopeId);
+        if (!pending) {
+          this.maintenanceScopes.delete(key);
+          continue;
+        }
+        entry.delay = Math.min(entry.delay * 2, 60_000);
+      } catch {
+        entry.delay = Math.min(entry.delay * 2, 60_000);
+      }
+      entry.next = Date.now() + entry.delay;
+    }
   }
 
   describeAccess(access: ConnectionAccess): AccessView {
@@ -274,7 +339,12 @@ export class ObservationService {
    */
   async recall(
     access: ConnectionAccess,
-    input: { readonly query: string; readonly limit?: number; readonly at?: string },
+    input: {
+      readonly query: string;
+      readonly limit?: number;
+      readonly at?: string;
+      readonly intent?: 'contextual' | 'entity' | 'historical';
+    },
   ): Promise<ObservationRecallView> {
     return this.run(access, async () => {
       const limit = input.limit ?? DEFAULT_RECALL_LIMIT;
@@ -282,6 +352,7 @@ export class ObservationService {
         throw new MemoryServiceError('invalid_input', 'limit must be between 1 and 30');
       if (input.at !== undefined && !Number.isFinite(Date.parse(input.at)))
         throw new MemoryServiceError('invalid_input', 'at must be an ISO time');
+      const intent = input.intent ?? 'contextual';
       const now = this.now().toISOString();
       const { actor } = access;
       const scopeId = access.scopeId;
@@ -371,11 +442,19 @@ export class ObservationService {
           .map((observation) => observation.id),
       ];
 
+      const evidenceReports = await this.ledger.latestSourceReports(
+        actor,
+        scopeId,
+        searched.map((item) => item.id),
+      );
       const topicViews = await this.topicViews(access, [...topicByKey.values()]);
       const topicItems: RecallItemView[] = [...topicByKey.values()].map((topic, index) => ({
         type: 'topic',
         matched: matchedOf(stateIdsOf(topic), namedTopicKeys.has(topic.topicKey)),
         topic: topicViews[index]!,
+        evidence: searched
+          .filter((item) => item.topicKey === topic.topicKey)
+          .map((item) => this.observationView(item, evidenceReports)),
       }));
       const namedEvents = timeline.filter(
         (observation) => observation.nature === 'event' && withinCut(observation),
@@ -400,14 +479,24 @@ export class ObservationService {
 
       const rank = (item: RecallItemView): number =>
         item.matched.includes('name') ? 0 : item.matched.includes('terms') ? 1 : 2;
-      const termShare = new Map(byTerms.map((hit) => [hit.observationId, hit.share]));
-      const similarity = new Map(vectorHits.map((hit) => [hit.observationId, hit.similarity]));
+      const termRanks = new Map(byTerms.map((hit, index) => [hit.observationId, index + 1]));
+      const vectorRanks = new Map(vectorHits.map((hit, index) => [hit.observationId, index + 1]));
       const strength = (item: RecallItemView): number => {
-        const observationId =
+        const ids =
           item.type === 'topic'
-            ? item.topic.current.observation_id
-            : item.observation.observation_id;
-        return (termShare.get(observationId) ?? 0) * 10 + (similarity.get(observationId) ?? 0);
+            ? [
+                item.topic.current.observation_id,
+                ...item.evidence.map((entry) => entry.observation_id),
+              ]
+            : [item.observation.observation_id];
+        return Math.max(
+          0,
+          ...ids.map(
+            (id) =>
+              (termRanks.has(id) ? 1 / (60 + termRanks.get(id)!) : 0) +
+              (vectorRanks.has(id) ? 1 / (60 + vectorRanks.get(id)!) : 0),
+          ),
+        );
       };
       const when = (item: RecallItemView): string =>
         item.type === 'topic'
@@ -415,21 +504,68 @@ export class ObservationService {
           : item.observation.at;
       const ordered = [...topicItems, ...eventItems].sort(
         (left, right) =>
-          rank(left) - rank(right) ||
+          (intent === 'entity' ? rank(left) - rank(right) : 0) ||
           // For a named subject, where things stand comes before what happened.
-          (rank(left) === 0 ? Number(left.type === 'event') - Number(right.type === 'event') : 0) ||
+          (intent === 'entity' && rank(left) === 0
+            ? Number(left.type === 'event') - Number(right.type === 'event')
+            : 0) ||
           strength(right) - strength(left) ||
           when(right).localeCompare(when(left)),
       );
-      // Next to results that a name or term supports, only a few found by meaning alone.
       const supported = ordered.some((item) => rank(item) < 2);
-      let semanticOnly = 0;
-      const selected = ordered
-        .filter(
-          (item) =>
-            !supported || rank(item) < 2 || (semanticOnly += 1) <= MAX_SEMANTIC_ONLY_BESIDE_MATCHES,
-        )
-        .slice(0, limit);
+      let selected = ordered.slice(0, limit);
+      if (this.recallAssessor !== undefined && intent === 'contextual' && ordered.length > 0) {
+        const candidates = ordered.slice(0, Math.min(30, limit * 3));
+        if (candidates.length < ordered.length) notes.add('assessment-candidates-truncated');
+        let assessments: readonly RecallAssessment[] | undefined;
+        try {
+          assessments = await assessRecall(this.recallAssessor, {
+            query: input.query,
+            at: input.at ?? now,
+            candidates,
+          });
+        } catch {
+          notes.add('recall-assessment-unavailable');
+          this.log({ event: 'observation.recall.assessment_unavailable' });
+        }
+        // Slow inference must not return data forgotten or made inaccessible while it ran.
+        // If any input disappeared, discard all annotations: they may refer to other candidates.
+        const ids = [...new Set(candidates.flatMap(recallEvidenceIds))];
+        const stillVisible = new Set(
+          (await this.ledger.getObservations(actor, scopeId, ids)).map((entry) => entry.id),
+        );
+        const changed = ids.some((id) => !stillVisible.has(id));
+        if (changed) {
+          assessments = undefined;
+          notes.add('assessment-evidence-changed');
+        }
+        const visible = candidates.filter((item) =>
+          recallEvidenceIds(item).every((id) => stillVisible.has(id)),
+        );
+        if (assessments === undefined) {
+          selected = visible.slice(0, limit);
+        } else {
+          selected = candidates
+            .flatMap((item, index) => {
+              const assessment = assessments.find((entry) => entry.index === index)!;
+              if (assessment.role === 'irrelevant') return [];
+              return [
+                {
+                  ...item,
+                  applicability_assessment: {
+                    status: 'unverified-model-interpretation' as const,
+                    role: assessment.role,
+                    reason: assessment.reason,
+                    limits: assessment.limits,
+                  },
+                },
+              ];
+            })
+            .slice(0, limit);
+          notes.add('recall-assessment-applied');
+          if (selected.length === 0) notes.add('assessment-no-applicable-candidates');
+        }
+      }
       if (selected.length > 0 && !supported) notes.add('semantic-match-only');
 
       const subjects = await this.subjectNames(access, namedIds);
@@ -446,7 +582,8 @@ export class ObservationService {
         Buffer.byteLength(JSON.stringify(view(items)), 'utf8') > RECALL_BYTE_BUDGET
       ) {
         const dropped = items.pop()!;
-        if (!supported || rank(dropped) < 2) notes.add('byte-budget-dropped-matches');
+        void dropped;
+        notes.add('byte-budget-dropped-matches');
       }
       return view(items);
     });
@@ -748,7 +885,15 @@ export class ObservationService {
       return [];
     }
     try {
-      return await this.ledger.searchByVector(access.actor, access.scopeId, embedding, 10);
+      const result = await this.ledger.searchByVector(access.actor, access.scopeId, embedding, 100);
+      if (result.exhausted) notes.add('semantic-candidate-budget-exhausted');
+      this.log({
+        event: 'observation.recall.candidates',
+        scanned: result.scanned,
+        eligible: result.hits.length,
+        exhausted: result.exhausted,
+      });
+      return result.hits;
     } catch (error) {
       if (error instanceof MemoryRepositoryError) throw error;
       // A missing vector index must not take name and term search down with it.
@@ -825,6 +970,8 @@ export class ObservationService {
       kind: observation.kind,
       value: observation.value,
       subject_ids: observation.subjectIds,
+      subject_names: observation.subjectNames,
+      effective_until: observation.effectiveUntil,
       aspect: observation.aspect,
       at: observation.effectiveAt ?? observation.recordedAt,
       recorded_at: observation.recordedAt,
@@ -898,6 +1045,13 @@ export class ObservationService {
   }
 
   private async run<T>(access: ConnectionAccess, operation: () => Promise<T>): Promise<T> {
+    const key = access.tenantId + ':' + access.scopeId;
+    if (!this.maintenanceScopes.has(key) && this.maintenanceScopes.size >= 100) {
+      this.log({ event: 'observation.maintenance.scope_limit' });
+    } else {
+      const existing = this.maintenanceScopes.get(key);
+      this.maintenanceScopes.set(key, existing ?? { access, next: 0, delay: 1000 });
+    }
     try {
       if (!(await this.ledger.isRestoreReady(access.actor, access.scopeId))) {
         const worker = await this.access.worker(access);

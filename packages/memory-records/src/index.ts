@@ -730,3 +730,5 @@ export {
   type SourceInput,
   type TopicStateView,
 } from './observation-service.js';
+
+export * from './recall-assessment.js';

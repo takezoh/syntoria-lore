@@ -32,6 +32,18 @@ The Memory Records model of [ADR 0007](docs/adr/0007-store-memories-as-firestore
 
 The ledger and the service were verified against the Firestore emulator with a fake Gate and deterministic embeddings. What was observed on the hosted service is in the dated [evaluation records](docs/eval/); nothing here claims hosted behaviour.
 
+## Recall responsibility
+
+The outcome is relevant accumulated evidence being used in a new situation without repeated explanation. The domain service retrieves and selects authorized evidence; the MCP adapter exposes that contract, and the client initiates recall and uses the evidence. Retrieval success and client use must be evaluated separately.
+
+Observation views retain original subject names and effective-until timestamps alongside provenance, aspect and source references. Client instructions request scoped application and supporting citations; they cannot enforce client tool initiation. The [full MCP evaluation](docs/eval/situational-recall-mcp-20261112.md) separates retrieval success from that client obligation.
+
+## Contextual recall changes
+
+The [situational recall contract](docs/design/situational-recall.md) defines intent-aware retrieval, eligible candidate recovery and matched historical evidence alongside current state; durable independent index recovery remains a release requirement. Contextual recall now fuses lexical and vector ranks without a semantic-only cap, preserves matched observations beside current topic state, and accepts full situational queries. Entity intent retains name precedence. Vector retrieval examines up to 1,000 candidates before eligibility filtering and retains up to 100 eligible candidates; this finite bound can still miss authorized evidence. Candidate exhaustion is reported. A process-local maintenance loop retries queues for authenticated scopes without further writes, backs off to 60 seconds, and drains before shutdown. Drained scopes are removed; at most 100 active scopes are tracked. It does not discover scopes after restart or guarantee progress while Cloud Run suspends CPU. Durable scheduled recovery and measured quality acceptance remain planned.
+
+Optional contextual applicability assessment now runs in the domain after authorized candidate retrieval. The Vertex transport classifies bounded candidates; the domain validates complete assessments, retains conditional evidence, removes irrelevant items, and rechecks ledger visibility after inference. Annotations are fallible model interpretations and cannot alter source facts or authority. Failure explicitly falls back to unannotated retrieval. `RECALL_ASSESSMENT_MODEL` opts in with existing Vertex configuration; it is disabled when unset. Entity and historical intents bypass it. The [assessment contract](docs/design/situational-recall.md#optional-applicability-assessment-contract) defines limits and diagnostics. This is implemented capability, not hosted enablement or quality acceptance.
+
 ## Model
 
 ```mermaid
@@ -54,19 +66,21 @@ An observation states something about named subjects: a `state` that holds until
 | `packages/memory-records/src/observations.ts` | The observation value model as pure functions: validation, tiers, and the course and view of a topic, which depend only on the set of observations and not on their order of arrival |
 | `packages/memory-records/src/firestore-observation-ledger.ts` | The ledger on Firestore, a subclass of the repository: the write transaction (observation, subjects and aliases, topic view, change-feed entry), reads by subject, topic and time, bounded term and vector queries, links, source reports, writer suppression, Forget and purge of observations, and conversion of Memory Records |
 | `packages/memory-records/src/observation-service.ts` | The operations adapters call: observe, recall, timeline, read, link, source report, Forget and change feed. Assembles recall from named subjects, term hits and vector hits, and after each write purges recorded Forgets, converts old records and indexes waiting observations without failing the write |
+| `packages/memory-records/src/recall-assessment.ts` | Assessment contract, bounded execution, complete output validation and source-evidence enumeration; no model-generated authority or rewritten observations |
+| `apps/api/src/recall-assessment.ts` | Vertex structured-output transport for applicability assessment; the domain owns filtering and fallback |
 | `packages/memory-records/src/search-terms.ts` | Term derivation by script, name candidates of a query, selection of lookup terms and rarity-weighted term coverage |
 | `packages/memory-records/src/firestore-repository.ts` | The Memory Records repository the ledger extends: authorization checks, idempotent request pins, per-scope sequence, change feed with signed cursors, Forget, purge, restore checkpoint. Its record commits and recall are no longer reachable from the service |
 | `packages/memory-records/src/index.ts`, `derived-recall.ts`, `service.ts`, `capture.ts` | The Memory Records value model, recall, service and capture, kept for the conversion and for tests; not served |
 | `packages/memory-records/src/access.ts` | Reads admissions (`memoryAdmissions`, keyed by a digest of Gate issuer and subject), creates a missing connection, person or worker authorization with an empty allowance and never widens one, and is the only code that mints a verified actor capability. Applies the admission's approval policy: `automatic` records a `policy` approval for the exact request digest; any other policy returns `user_required` |
 | `packages/memory-records/src/firestore-deletion-ledger.ts` | The deletion ledger on its own Firestore database: append-only entries and a head that moves in the same transaction |
 | `packages/memory-records/src/firestore-client.ts`, `runtime.ts` | Firestore client construction (Application Default Credentials, or a loopback emulator) and wiring of the two databases |
-| `apps/api` | Node.js 24 HTTP service: `/healthz`, `/readyz` (both databases answer), protected-resource metadata, and stateless Streamable HTTP MCP at `POST /mcp` with Gate introspection for exactly `MCP_RESOURCE_URL`, admission (403 without one), body and rate limits, and the Vertex AI embedding provider. Configuration is environment-only and fails fast |
+| `apps/api` | Node.js 24 HTTP service: `/healthz`, `/readyz`, stateless Streamable HTTP MCP at `POST /mcp`, admission checks, body/rate limits, Access assertion or legacy Gate verification, the Vertex embedding provider and optional recall assessor. Legacy Gate mode also serves protected-resource metadata and introspects for the exact `MCP_RESOURCE_URL`; Access owns its OAuth discovery. Configuration is environment-only and fails fast |
 | `scripts/admit-subject.mjs` | Operator tool that creates or reactivates one admission with the `automatic` policy; it refuses to move an existing admission to another tenant or scope |
 | `scripts/migrate-source-metadata.mjs` | Private, reviewed operator path for appending evidenced source metadata; its audit uses the credential-derived IAM identity and it is not exported through the API, service or runtime |
 
 Each admitted connection writes as its own principal, set by the server. The tier of an observation is derived from the write path: `person` when the approval policy grants the person's authority to a write that asks for it, `source` when it cites an original outside Lore, otherwise `inference`. Nothing waits for approval.
 
-Not built: the REST adapter, the private worker (indexing, purge, conversion and restore reconciliation run in the API process after a write), person confirmation at Gate, a reviewed way to widen compartment allowances or revoke sources, an operator tool for writer suppression, and tracked deployment configuration.
+Not built: the REST adapter, a durable external worker (indexing, purge and conversion use in-process maintenance; restore reconciliation runs before protected operations), person confirmation at Gate, a reviewed way to widen compartment allowances or revoke sources, an operator tool for writer suppression, and tracked deployment configuration.
 
 ## Correctness boundaries
 
@@ -81,10 +95,10 @@ Not built: the REST adapter, the private worker (indexing, purge, conversion and
 
 ## Runtime boundary
 
-Provisioned on 2026-11-09: Memory Records live in a dedicated Firestore Native database, `lore-memory-records`, and the deletion ledger in a second one, `lore-deletion-ledger`, in the shared Syntoria GCP project in `asia-southeast1`; an IAM condition limits the API service account to those two databases. The API runs on Cloud Run as `lore-api`, a private worker will follow, following the Cloud Run parts of [ADR 0001](docs/adr/0001-gcp-cloud-run-neon.md). Gate owns sign-in, approvals and sessions. Production identifiers stay out of the repository.
+The runtime uses separate named Firestore databases for memory and the deletion ledger. Deployment accounts, project coordinates, service URLs and IAM bindings remain in ignored private configuration. Access mode uses verified assertions and an existing owner admission; legacy Gate mode remains a separate configuration path. The repository's implementation does not establish which revision or configuration is currently hosted. Follow [operations](docs/operations.md) for release checks, monitoring and rollback. A durable external maintenance worker remains unimplemented.
 
 Syntoria Weave is a separate service for current shared state. Lore has no shared storage or required API dependency on Weave.
 
 ## Verification boundary
 
-Unit tests check the value models, the service configuration and Gate token verification. The emulator suite checks the ledger through a real MCP client against a fake Gate, and the Memory Records repository it extends. The emulator does not enforce composite or vector indexes and does not show managed IAM, transaction contention, latency, cost, managed restore or search quality; deterministic embedding doubles do not measure recall quality. The indexes the queries need are declared in [firestore.indexes.json](firestore.indexes.json). The [development guide](docs/development.md) lists the commands, and dated results live in [evaluation records](docs/eval/).
+Unit tests check the value models, the service configuration and Gate token verification. The emulator suite checks the ledger through a real MCP client against a fake Gate, and the Memory Records repository it extends. The emulator does not enforce composite or vector indexes and does not show managed IAM, transaction contention, latency, cost, managed restore or search quality; deterministic embedding doubles do not measure recall quality. The indexes the queries need are declared in [firestore.indexes.json](firestore.indexes.json). The [development guide](docs/development.md) lists verification commands, [operations](docs/operations.md) covers configuration and recovery, and the [evaluation guide](docs/eval/README.md) separates dated observations from acceptance.

@@ -33,6 +33,12 @@ export interface ApiConfig {
   /** The active cursor signing key. */
   readonly cursorSecret: Buffer;
   readonly embedding: EmbeddingConfig;
+  readonly recallAssessment?: {
+    readonly projectId: string;
+    readonly location: string;
+    readonly model: string;
+  };
+
   /** Plain HTTP on loopback for local tests; never in production. */
   readonly allowLoopbackHttp: boolean;
 }
@@ -223,6 +229,13 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
     problems.push('EMBEDDING_PROVIDER must be vertex or deterministic');
   }
 
+  let recallAssessment: ApiConfig['recallAssessment'];
+  if (env['RECALL_ASSESSMENT_MODEL'] !== undefined) {
+    const model = matching('RECALL_ASSESSMENT_MODEL', MODEL, 'a Vertex model ID');
+    if (embedding.provider !== 'vertex')
+      problems.push('RECALL_ASSESSMENT_MODEL requires Vertex configuration');
+    else recallAssessment = { projectId: embedding.projectId, location: embedding.location, model };
+  }
   if (problems.length > 0) throw new ConfigError(problems);
   return {
     ...(access === undefined ? {} : { access }),
@@ -238,6 +251,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
     cursorKeyId: cursor.keyId,
     cursorSecret: cursor.secret,
     embedding,
+    ...(recallAssessment === undefined ? {} : { recallAssessment }),
     allowLoopbackHttp,
   };
 }

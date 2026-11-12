@@ -44,6 +44,7 @@ let app: ApiApp;
 let issuer: string;
 let baseUrl: string;
 let resourceUrl: string;
+let failEmbeddingText: string | undefined;
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -175,7 +176,17 @@ beforeAll(async () => {
     CURSOR_HMAC_ACTIVE_KEY: 'test',
     EMBEDDING_PROVIDER: 'deterministic',
   });
-  app = createApiApp(config, { log: (event) => logs.push(event) });
+  const deterministic = new DeterministicEmbeddingProvider();
+  app = createApiApp(config, {
+    log: (event) => logs.push(event),
+    embeddings: {
+      async embed(text) {
+        if (failEmbeddingText !== undefined && text.includes(failEmbeddingText))
+          throw new Error('Synthetic embedding outage');
+        return deterministic.embed(text);
+      },
+    },
+  });
   appServer.on('request', app.listener);
 }, 30_000);
 
@@ -187,6 +198,43 @@ afterAll(async () => {
 });
 
 describe('Lore API over Remote MCP', () => {
+  it('retries a failed index without another observation write', async () => {
+    const subject = 'github:recovery';
+    await admit(subject, 'tenant-recovery', 'personal');
+    const client = await connect(grant(subject, 'connection-recovery'));
+    failEmbeddingText = 'recoverable-index-marker';
+    try {
+      const written = await ok(client, 'observe', {
+        title: 'Index recovery',
+        summary: 'recoverable-index-marker: retain stable retry keys.',
+        nature: 'event',
+        subjects: ['Recovery fixture'],
+        idempotency_key: 'recovery-one',
+      });
+      const before = await ok(client, 'recall', { query: 'Recovery fixture' });
+      expect(before.notes).toContain('index-pending');
+      failEmbeddingText = undefined;
+      let recovered = false;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const result = await ok(client, 'recall', { query: 'Recovery fixture' });
+        if (!result.notes.includes('index-pending')) {
+          expect(
+            result.items.some(
+              (item: Item) =>
+                item.type === 'event' && item.observation.observation_id === written.observation_id,
+            ),
+          ).toBe(true);
+          recovered = true;
+          break;
+        }
+      }
+      expect(recovered).toBe(true);
+    } finally {
+      failEmbeddingText = undefined;
+    }
+  });
+
   it('serves health, readiness and resource metadata and challenges calls without a token', async () => {
     expect((await fetch(`${baseUrl}/healthz`)).status).toBe(200);
     const ready = await fetch(`${baseUrl}/readyz`);
@@ -393,7 +441,10 @@ describe('Lore API over Remote MCP', () => {
     expect(visit).toMatchObject({ tier: 'inference', relation: null, topic: null });
 
     // A question written without spaces finds the subject through its katakana alias.
-    const recalled = await ok(client, 'recall', { query: 'アクメーロジックの案件の進捗を教えて' });
+    const recalled = await ok(client, 'recall', {
+      query: 'アクメーロジックの案件の進捗を教えて',
+      intent: 'entity',
+    });
     expect(recalled.subjects).toEqual([{ id: first.subject_ids[0], name: 'Acme Corp' }]);
     expect(recalled.items[0]).toMatchObject({
       type: 'topic',
@@ -405,6 +456,21 @@ describe('Lore API over Remote MCP', () => {
       },
     });
     expect(recalled.items[0].matched).toContain('name');
+    expect(recalled.items[0].evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: '800,000 yen total',
+          subject_names: ['Acme Corp'],
+          effective_until: null,
+        }),
+      ]),
+    );
+    const contextual = await ok(client, 'recall', {
+      query: 'Acme Corp quoted price',
+      intent: 'contextual',
+    });
+    expect(contextual.items.some((item: Item) => item.type === 'topic')).toBe(true);
+    expect(contextual.notes).not.toContain('semantic-search-unavailable');
     expect(
       recalled.items.some(
         (item: Item) => item.type === 'event' && item.observation.title === 'Visit to Acme',
