@@ -1,5 +1,6 @@
 import { deriveAuthority, type MemoryRecord } from './index.js';
 import {
+  hasNameOrTermMatch,
   normalizeSearchText,
   searchableText,
   SEARCH_TERMS_VERSION,
@@ -187,6 +188,11 @@ export class MemoryRecallService {
       limit: query.limit ?? 10,
     });
     const insufficiencies = new Set(result.insufficiencies);
+    // Dropping a result that only similarity supports loses nothing the query asked for when
+    // other results matched it by name or term, so the caller is not warned about it.
+    const anyMatch = result.items.some((item) => hasNameOrTermMatch(item.matched));
+    const isLoss = (item: { readonly matched: readonly RecallMatchReason[] }): boolean =>
+      !anyMatch || hasNameOrTermMatch(item.matched);
     const items: RecallItem[] = [];
     for (const item of result.items) {
       const candidate = {
@@ -204,15 +210,15 @@ export class MemoryRecallService {
         measuredPack([...items, candidate], [...insufficiencies], result.indexLag).byteLength >
         query.byteBudget
       ) {
-        insufficiencies.add('byte-budget-dropped-matches');
+        if (isLoss(candidate)) insufficiencies.add('byte-budget-dropped-matches');
         continue;
       }
       items.push(candidate);
     }
     let pack = measuredPack(items, [...insufficiencies], result.indexLag);
     while (pack.byteLength > query.byteBudget && items.length > 0) {
-      items.pop();
-      insufficiencies.add('byte-budget-dropped-matches');
+      const dropped = items.pop()!;
+      if (isLoss(dropped)) insufficiencies.add('byte-budget-dropped-matches');
       pack = measuredPack(items, [...insufficiencies], result.indexLag);
     }
     if (pack.byteLength > query.byteBudget)

@@ -10,6 +10,8 @@ import {
 } from '@google-cloud/firestore';
 import { createFirestoreClient } from './firestore-client.js';
 import {
+  hasNameOrTermMatch,
+  MAX_SEMANTIC_ONLY_BESIDE_MATCHES,
   MIN_TERM_COVERAGE,
   normalizeSearchText,
   searchableText,
@@ -1590,9 +1592,19 @@ export class FirestoreMemoryRecordRepository {
         authorityRank(right.record) - authorityRank(left.record) ||
         left.record.id.localeCompare(right.record.id),
     );
-    const items = visible.slice(0, query.limit);
-    if (items.length > 0 && items.every((item) => item.matched.every((m) => m === 'semantic')))
-      insufficiencies.add('semantic-match-only');
+    // Next to results that a name or term supports, results supported by similarity alone are
+    // context at most: a few are kept, so they neither fill the pack nor crowd out a match.
+    const supported = visible.some((item) => hasNameOrTermMatch(item.matched));
+    let semanticOnly = 0;
+    const items = visible
+      .filter(
+        (item) =>
+          !supported ||
+          hasNameOrTermMatch(item.matched) ||
+          (semanticOnly += 1) <= MAX_SEMANTIC_ONLY_BESIDE_MATCHES,
+      )
+      .slice(0, query.limit);
+    if (items.length > 0 && !supported) insufficiencies.add('semantic-match-only');
     return {
       items,
       insufficiencies: [...insufficiencies].sort(),

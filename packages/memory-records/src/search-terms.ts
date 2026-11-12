@@ -56,6 +56,17 @@ export function searchableText(record: {
 
 export type RecallMatchReason = 'record-id' | 'subject' | 'alias' | 'terms' | 'semantic';
 
+/**
+ * How many results supported by similarity alone are returned next to results that a name or
+ * term of the query supports. Without any such support, similarity results are not limited.
+ */
+export const MAX_SEMANTIC_ONLY_BESIDE_MATCHES = 2;
+
+/** True when something other than similarity matched: a record ID, subject, alias or terms. */
+export function hasNameOrTermMatch(matched: readonly RecallMatchReason[]): boolean {
+  return matched.some((reason) => reason !== 'semantic');
+}
+
 /** Share of the query's weighted terms a record must contain before terms count as a match. */
 export const MIN_TERM_COVERAGE = 0.15;
 

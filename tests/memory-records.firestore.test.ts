@@ -970,7 +970,18 @@ describe('Firestore Memory Record repository', () => {
     const byName = await recall.recall(actor, 'scope-demo', { ...at, text: 'Acme' });
     expect(byName.items[0]?.record.id).toBe('named');
     expect(byName.items[0]?.matched).toContain('terms');
-    expect(byName.items.slice(1).every((item) => !item.matched.includes('terms'))).toBe(true);
+    // Of the three records that only similarity supports, two accompany the match.
+    expect(byName.items.slice(1).map((item) => item.matched)).toEqual([['semantic'], ['semantic']]);
+    // A pack too small for them still holds the match and does not warn about what it left out.
+    const matchBytes = (await recall.recall(actor, 'scope-demo', { ...at, text: 'Acme', limit: 1 }))
+      .byteLength;
+    const tight = await recall.recall(actor, 'scope-demo', {
+      ...at,
+      text: 'Acme',
+      byteBudget: matchBytes + 100,
+    });
+    expect(tight.items.map((item) => item.record.id)).toEqual(['named']);
+    expect(tight.insufficiencies).not.toContain('byte-budget-dropped-matches');
 
     const question = await recall.recall(actor, 'scope-demo', {
       ...at,
@@ -981,8 +992,15 @@ describe('Firestore Memory Record repository', () => {
     expect(question.insufficiencies).not.toContain('semantic-match-only');
 
     const unknown = await recall.recall(actor, 'scope-demo', { ...at, text: 'Globex' });
-    expect(unknown.items.every((item) => item.matched.join() === 'semantic')).toBe(true);
+    // Without any name or term match, similarity results are not limited and losses are reported.
+    expect(unknown.items.map((item) => item.matched)).toEqual(Array(4).fill(['semantic']));
     expect(unknown.insufficiencies).toContain('semantic-match-only');
+    const tightUnknown = await recall.recall(actor, 'scope-demo', {
+      ...at,
+      text: 'Globex',
+      byteBudget: matchBytes + 100,
+    });
+    expect(tightUnknown.insufficiencies).toContain('byte-budget-dropped-matches');
 
     // The same questions give the same answers from the current index, one entry per record.
     // Entries written before the current index existed are rebuilt from the per-revision
