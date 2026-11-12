@@ -75,6 +75,14 @@ The owner then chose to correct the remaining records with `as_user` as well. Fo
 - The index watermark stayed at 58 with the latest change at 100, and the service logged 42 `memory.index.failed` events with the reason `repository-rejected-index`. One added subject contained a slash. The index entry validator rejected it as if it were an identifier, so that record's job failed on every attempt and held the watermark back while later jobs completed. Recall kept answering through the overlay of unindexed changes and reported `index-lag`.
 - Commit `8a5679f` checks an entry's terms, subjects and aliases as text and lets the watermark pass jobs that finished earlier. It was built and deployed the same way. Replaying an earlier correction with its idempotency key ran the maintenance pass without a new change; afterwards a recall of the slash-containing subject returned its record first with `subject` and `terms`, freshness `current`, no notes, and the watermark and latest change both at 100. No failure or warning was logged on that revision.
 
+## Filler results and a misleading loss note, 2026-11-12
+
+On 2026-11-12 an AI client searched for the same customer again and reported one match, correctly, but added that results had been omitted and that completeness could not be assured. A read-only recall with a limit of ten reproduced it: one result matched by subject, alias and terms with a score above 180, five followed that only similarity supported with scores under 1, and the note `byte-budget-dropped-matches` appeared because further results of that kind did not fit the pack of about 15.5 KB.
+
+Commit `82beb56` returns at most two similarity-only results next to results that a name or term supports and does not report leaving such a result out. It was built and deployed the same way. The same recall then returned the match and two similarity-only results in about 7.8 KB with no notes, and a name that no record contains still returned similarity-only results with `semantic-match-only`.
+
+After the client was made to read the server instructions again, its report used short name queries, cited the `matched` reasons and described the watermark as a change number.
+
 ## Limits
 
-This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. Supersede has not been exercised on the hosted service, and a Forget was checked only on a record written minutes earlier. The names added to the 42 records were chosen from each record's text by an AI and were not reviewed one by one.
+This is one scope with 51 records and a handful of queries. It does not measure recall quality, latency or cost. Supersede has not been exercised on the hosted service, and a Forget was checked only on a record written minutes earlier. The names added to the 42 records were chosen from each record's text by an AI and were not reviewed one by one. Nothing about the customer's visit or the progress of the deal has been saved, so no recall can return it.
