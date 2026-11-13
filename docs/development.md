@@ -42,6 +42,7 @@ Local checks with deterministic doubles do not establish hosted behavior, extrac
 
 | Concern | Primary document or source |
 | --- | --- |
+| Client setup, persistent instructions, everyday use and troubleshooting | [User guide](user-guide.md) |
 | User value and examples | [README](../README.md), [Product](../PRODUCT.md) |
 | Product positioning and claims | [Product design](design/product.md) |
 | Required behavior and measurable service targets | [Product requirements](design/requirements.md) |

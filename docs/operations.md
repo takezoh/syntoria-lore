@@ -1,6 +1,8 @@
-# Lore operations
+# Lore service operations
 
 This guide covers the current observation ledger and Remote MCP service. It replaces historical PostgreSQL and Gate cutover pages as the operating entry point. It describes procedures; it does not assert that the latest code is deployed or authorize a hosted change.
+
+For client setup, everyday use and checking saved or recalled memories, use the [user guide](user-guide.md). This page is for service operators.
 
 ## Operating boundaries
 

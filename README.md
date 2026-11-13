@@ -30,6 +30,8 @@ The current service exposes Remote MCP. It has no memory browser, self-service s
 
 Lore does not fetch chat histories or source documents itself. Connected AIs submit observations and attach source references. Policy controls whether a requested action can proceed; there is no implemented user-confirmation UI or pending-review queue. See [Product](PRODUCT.md) for the current behavior and limits.
 
+For connection setup, a copyable initialization prompt, persistent instructions and everyday workflows, see the [user guide](docs/user-guide.md).
+
 ## Try these requests
 
 - “Record that I operate the service alone and cannot increase recurring infrastructure spending.”
