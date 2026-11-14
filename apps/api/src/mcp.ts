@@ -464,6 +464,12 @@ export async function handleMcpRequest(
               a: text(128).describe('A subject name or ID, or for same-topic an aspect'),
               b: text(128).describe('The other subject, or the other aspect'),
               revoke: z.boolean().optional(),
+              workspace: workspaceId
+                .nullable()
+                .optional()
+                .describe(
+                  "The workspace the link belongs to; omit for this connection's default, null for the Inbox",
+                ),
             })
             .strict(),
           annotations: append,
@@ -475,13 +481,20 @@ export async function handleMcpRequest(
             const result = await service.link(
               access,
               input.kind === 'same-subject'
-                ? { kind: 'same-subject', a: input.a, b: input.b, revoke: input.revoke === true }
+                ? {
+                    kind: 'same-subject',
+                    a: input.a,
+                    b: input.b,
+                    revoke: input.revoke === true,
+                    ...(input.workspace === undefined ? {} : { workspaceId: input.workspace }),
+                  }
                 : {
                     kind: 'same-topic',
                     subject: input.subject!,
                     a: input.a,
                     b: input.b,
                     revoke: input.revoke === true,
+                    ...(input.workspace === undefined ? {} : { workspaceId: input.workspace }),
                   },
             );
             return summarize(result, result.active ? 'Linked.' : 'Link revoked.');

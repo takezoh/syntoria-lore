@@ -250,6 +250,12 @@ describe('placement of observations', () => {
     expect(await failure(observe(cedarOnly, 'cedar-into-inbox', { workspaceId: null }))).toEqual(
       UNAVAILABLE,
     );
+    // A Shared lesson without a workspace is an Inbox item too, so it needs the Inbox grant.
+    expect(
+      await failure(
+        observe(cedarOnly, 'cedar-shared-inbox', { workspaceId: null, scope: 'shared' }),
+      ),
+    ).toEqual(UNAVAILABLE);
     expect(
       await failure(
         observe(cedarOnly, 'cedar-derived', { scope: 'shared', derivedFrom: [ids['price']!] }),
@@ -327,5 +333,97 @@ describe('placement of observations', () => {
     } finally {
       await admission.update({ approvalPolicy: 'automatic' });
     }
+  });
+});
+
+describe('subjects, aliases and links across workspaces', () => {
+  async function named(
+    access: ConnectionAccess,
+    key: string,
+    subjects: string[],
+    extra: Partial<ObserveInput> = {},
+  ) {
+    const saved = await service.observe(access, {
+      title: key,
+      summary: `Observation ${key}.`,
+      nature: 'event',
+      subjects,
+      asUser: false,
+      idempotencyKey: key,
+      ...extra,
+    });
+    return saved.subject_ids;
+  }
+
+  it("resolves names only through aliases a reader may see and never overwrites another workspace's", async () => {
+    const [quartz] = await named(owner, 'alias-northwind', ['Quartz Holdings'], {
+      workspaceId: northwind,
+      aliases: ['QH'],
+    });
+    const runtimeLedger = runtime.observations;
+    const resolve = async (access: ConnectionAccess, name: string) =>
+      (await runtimeLedger.resolveNames(access.actor, access.scopeId, [name])).get(name) ?? [];
+    expect(await resolve(owner, 'QH')).toEqual([quartz]);
+    expect(await resolve(cedarOnly, 'QH')).toEqual([]);
+    expect(await resolve(cedarOnly, 'Quartz Holdings')).toEqual([]);
+    const recalled = await service.recall(cedarOnly, { query: 'Quartz Holdings QH' });
+    expect(JSON.stringify(recalled)).not.toContain(quartz!);
+
+    // Cedar gives the same short name to another subject; Northwind's entry stays.
+    const [hydro] = await named(cedarOnly, 'alias-cedar', ['Quebec Hydro'], { aliases: ['QH'] });
+    expect(await resolve(cedarOnly, 'QH')).toEqual([hydro]);
+    expect(new Set(await resolve(owner, 'QH'))).toEqual(new Set([quartz, hydro]));
+
+    // A subject ID outside the allowance is as unknown as one that does not exist.
+    expect(await failure(named(cedarOnly, 'id-probe', [quartz!]))).toEqual({
+      code: 'invalid_input',
+      message: 'Unknown subject ID',
+    });
+    expect(await failure(named(cedarOnly, 'id-probe-none', [`sub_${'0'.repeat(32)}`]))).toEqual({
+      code: 'invalid_input',
+      message: 'Unknown subject ID',
+    });
+    expect(await runtimeLedger.getSubjects(cedarOnly.actor, cedarOnly.scopeId, [quartz!])).toEqual(
+      [],
+    );
+    expect(
+      (await runtimeLedger.getSubjects(owner.actor, owner.scopeId, [quartz!])).map(
+        (item) => item.name,
+      ),
+    ).toEqual(['Quartz Holdings']);
+  });
+
+  it('keeps a link inside the workspace it was written in', async () => {
+    const [acme] = await named(owner, 'link-acme-northwind', ['Acme'], { workspaceId: northwind });
+    await named(cedarOnly, 'link-acme-cedar', ['Acme']);
+    const [acmeCorp] = await named(owner, 'link-acme-corp', ['Acme Corporation'], {
+      workspaceId: northwind,
+    });
+    await service.link(owner, {
+      kind: 'same-subject',
+      a: 'Acme',
+      b: 'Acme Corporation',
+      revoke: false,
+      workspaceId: northwind,
+    });
+    const linked = (access: ConnectionAccess) =>
+      runtime.observations.linkedSubjects(access.actor, access.scopeId, [acme!]);
+    expect(new Set(await linked(owner))).toEqual(new Set([acme, acmeCorp]));
+    expect(await linked(cedarOnly)).toEqual([acme]);
+
+    // Cedar cannot link to a subject it may not see, and learns no more than for a missing one.
+    const hidden = await failure(
+      service.link(cedarOnly, { kind: 'same-subject', a: acme!, b: acmeCorp!, revoke: false }),
+    );
+    const missing = await failure(
+      service.link(cedarOnly, {
+        kind: 'same-subject',
+        a: acme!,
+        b: `sub_${'0'.repeat(32)}`,
+        revoke: false,
+      }),
+    );
+    expect(hidden).toEqual(missing);
+    expect(hidden.code).toBe('not_found');
   });
 });

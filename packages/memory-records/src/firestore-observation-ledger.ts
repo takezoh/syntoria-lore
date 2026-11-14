@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import {
   FieldPath,
   FieldValue,
+  type DocumentData,
   type DocumentReference,
   type DocumentSnapshot,
   type Transaction,
@@ -68,6 +69,8 @@ const SUBJECT_ID = /^sub_[a-f0-9]{32}$/u;
 const MAX_TOPIC_OBSERVATIONS = 500;
 const MAX_IN = 30;
 const MAX_TERM_CANDIDATES = 200;
+/** Observations read to decide whether a reader may see a subject or a topic. */
+const MEMBER_VISIBILITY_SCAN = 50;
 
 export interface ObserveRequest {
   readonly observationId: string;
@@ -121,6 +124,38 @@ interface StoredObservation extends Omit<Observation, 'label' | 'placement'> {
 /** The current label of a stored observation (ADR 0012). */
 function labelOf(stored: Pick<StoredObservation, 'label' | 'compartmentIds'>): string[] {
   return storedLabel(stored.label, stored.compartmentIds);
+}
+
+/** A label as one string, for alias and link records: `shared` for `[]`. */
+function labelKey(label: readonly string[]): string {
+  return label.length === 0 ? 'shared' : [...label].sort().join('|');
+}
+
+function keyLabel(key: string): string[] {
+  return key === 'shared' ? [] : key.split('|');
+}
+
+/**
+ * The subjects an alias names that a reader may see. Each subject of an alias keeps the labels
+ * of the writes that gave the alias that subject; an entry written before labels existed reads
+ * as the Inbox.
+ */
+function visibleAliasSubjects(
+  data: DocumentData | undefined,
+  allowance: readonly string[],
+): string[] {
+  const subjectIds: unknown = data?.['subjectIds'];
+  if (!Array.isArray(subjectIds)) return [];
+  const labels: unknown = data?.['labels'];
+  return (subjectIds as unknown[]).filter((subjectId): subjectId is string => {
+    if (typeof subjectId !== 'string') return false;
+    const keys: unknown =
+      typeof labels === 'object' && labels !== null
+        ? (labels as Record<string, unknown>)[subjectId]
+        : undefined;
+    if (!Array.isArray(keys)) return labelVisible(['inbox'], allowance);
+    return keys.some((key) => typeof key === 'string' && labelVisible(keyLabel(key), allowance));
+  });
 }
 
 /** The placement of a stored observation; one stored before placements existed is in the Inbox. */
@@ -435,9 +470,9 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     if (
       (placement.workspaceId !== null &&
         !labelVisible([placement.workspaceId], actor.compartmentAllowance)) ||
-      (placement.workspaceId === null &&
-        placement.scope.kind === 'inbox' &&
-        !labelVisible(label, actor.compartmentAllowance))
+      // Without a workspace an observation belongs to the Inbox, Shared or not, so writing it
+      // needs the Inbox grant.
+      (placement.workspaceId === null && !labelVisible(['inbox'], actor.compartmentAllowance))
     )
       throw new MemoryRepositoryError('invalid_change_set', PLACEMENT_UNAVAILABLE);
     const approval = actor.protectedChangeApproval;
@@ -511,6 +546,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         input.subjects,
         request.aliases,
         request.recordedAt,
+        label,
       );
       const primary = subjects.resolved[0];
       if (!subjects.primaryResolved || primary === undefined)
@@ -690,6 +726,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     names: readonly string[],
     aliases: readonly string[],
     now: string,
+    label: readonly string[],
   ): Promise<{
     resolved: string[];
     primaryResolved: boolean;
@@ -697,26 +734,37 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     aliasConflicts: string[];
     writes: { ref: DocumentReference; data: Record<string, unknown> }[];
   }> {
+    const key = labelKey(label);
+    const allowance = actor.compartmentAllowance;
     const writes: { ref: DocumentReference; data: Record<string, unknown> }[] = [];
     const resolved: string[] = [];
     const ambiguous: string[] = [];
     const aliasConflicts: string[] = [];
+    // An alias entry is added, never replaced, so entries of other workspaces stay as they are.
+    const aliasWrite = (normalized: string, subjectId: string) => ({
+      ref: this.aliasRef(actor, scopeId, normalized),
+      data: {
+        name: normalized,
+        subjectIds: FieldValue.arrayUnion(subjectId),
+        labels: { [subjectId]: FieldValue.arrayUnion(key) },
+      },
+    });
     const lookups = await Promise.all(
       names.map(async (name) => {
         const trimmed = name.trim();
         if (SUBJECT_ID.test(trimmed)) {
-          const subject = await transaction.get(this.subjectRef(actor, scopeId, trimmed));
-          if (!subject.exists)
+          // A subject ID names a subject only where a visible observation names it, so an ID
+          // reveals nothing about subjects outside the allowance.
+          if (!(await this.subjectVisible(actor, scopeId, trimmed, transaction)))
             throw new MemoryRepositoryError('invalid_change_set', 'Unknown subject ID');
           return { name: trimmed, subjectIds: [trimmed], normalized: null as string | null };
         }
         const normalized = normalizeLabel(trimmed);
         const alias = await transaction.get(this.aliasRef(actor, scopeId, normalized));
-        const subjectIds: unknown = alias.get('subjectIds');
         return {
           name: trimmed,
           normalized,
-          subjectIds: Array.isArray(subjectIds) ? (subjectIds as string[]) : [],
+          subjectIds: visibleAliasSubjects(alias.data(), allowance),
         };
       }),
     );
@@ -724,20 +772,35 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     const extraDocs = await Promise.all(
       extra.map((alias) => transaction.get(this.aliasRef(actor, scopeId, alias))),
     );
+    const created = lookups.filter(
+      (lookup) => lookup.subjectIds.length === 0 && lookup.normalized !== null,
+    );
+    const existingSubjects = await Promise.all(
+      created.map((lookup) =>
+        transaction.get(
+          this.subjectRef(
+            actor,
+            scopeId,
+            `sub_${digest(['subject', actor.tenantId, scopeId, lookup.normalized!]).slice(0, 32)}`,
+          ),
+        ),
+      ),
+    );
     let primaryResolved = false;
     lookups.forEach((lookup, index) => {
       let subjectId: string | undefined;
-      if (lookup.subjectIds.length === 1) subjectId = lookup.subjectIds[0];
-      else if (lookup.subjectIds.length === 0 && lookup.normalized !== null) {
+      if (lookup.subjectIds.length === 1) {
+        subjectId = lookup.subjectIds[0];
+        if (lookup.normalized !== null) writes.push(aliasWrite(lookup.normalized, subjectId!));
+      } else if (lookup.subjectIds.length === 0 && lookup.normalized !== null) {
         subjectId = `sub_${digest(['subject', actor.tenantId, scopeId, lookup.normalized]).slice(0, 32)}`;
-        writes.push({
-          ref: this.subjectRef(actor, scopeId, subjectId),
-          data: { id: subjectId, name: lookup.name, createdAt: now },
-        });
-        writes.push({
-          ref: this.aliasRef(actor, scopeId, lookup.normalized),
-          data: { name: lookup.normalized, subjectIds: [subjectId] },
-        });
+        // The subject document is an identity shared by every label; an existing one is kept.
+        if (existingSubjects[created.indexOf(lookup)]?.exists !== true)
+          writes.push({
+            ref: this.subjectRef(actor, scopeId, subjectId),
+            data: { id: subjectId, name: lookup.name, createdAt: now },
+          });
+        writes.push(aliasWrite(lookup.normalized, subjectId));
       } else ambiguous.push(lookup.name);
       if (subjectId !== undefined) {
         if (index === 0) primaryResolved = true;
@@ -747,18 +810,43 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     const primary = primaryResolved ? resolved[0] : undefined;
     if (primary !== undefined)
       extra.forEach((alias, index) => {
-        const subjectIds: unknown = extraDocs[index]?.get('subjectIds');
-        const current = Array.isArray(subjectIds) ? (subjectIds as string[]) : [];
+        const current = visibleAliasSubjects(extraDocs[index]?.data(), allowance);
         // Writes queued above for the same alias already point at the primary subject.
         if (writes.some((write) => write.data['name'] === alias)) return;
-        if (current.length === 0)
-          writes.push({
-            ref: this.aliasRef(actor, scopeId, alias),
-            data: { name: alias, subjectIds: [primary] },
-          });
-        else if (!current.includes(primary)) aliasConflicts.push(alias);
+        if (current.length === 0 || current.includes(primary))
+          writes.push(aliasWrite(alias, primary));
+        else aliasConflicts.push(alias);
       });
     return { resolved, primaryResolved, ambiguous, aliasConflicts, writes };
+  }
+
+  /**
+   * Whether a visible observation names a subject, or, for a topic key, belongs to the topic.
+   * The scan is bounded; a subject named only beyond it reads as not visible.
+   */
+  private async subjectVisible(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    member: string,
+    transaction?: Transaction,
+    kind: LinkKind = 'same-subject',
+  ): Promise<boolean> {
+    const query = this.observationCollection(actor, scopeId)
+      .where(
+        kind === 'same-subject' ? 'subjectIds' : 'topicKey',
+        kind === 'same-subject' ? 'array-contains' : '==',
+        member,
+      )
+      .limit(MEMBER_VISIBILITY_SCAN);
+    const snapshot = transaction === undefined ? await query.get() : await transaction.get(query);
+    return snapshot.docs.some((document) => {
+      const stored: unknown = document.data();
+      return (
+        isStoredObservation(stored) &&
+        stored.suppressed !== true &&
+        labelVisible(labelOf(stored), actor.compartmentAllowance)
+      );
+    });
   }
 
   // ---- Reading by key ---------------------------------------------------------------------
@@ -806,9 +894,8 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       ...lookups.map((name) => this.aliasRef(actor, scopeId, normalizeLabel(name))),
     );
     documents.forEach((document, index) => {
-      const subjectIds: unknown = document.get('subjectIds');
-      if (Array.isArray(subjectIds) && subjectIds.length > 0)
-        result.set(lookups[index]!, subjectIds as string[]);
+      const subjectIds = visibleAliasSubjects(document.data(), actor.compartmentAllowance);
+      if (subjectIds.length > 0) result.set(lookups[index]!, subjectIds);
     });
     return result;
   }
@@ -824,8 +911,14 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     const documents = await this.firestore.getAll(
       ...ids.map((subjectId) => this.subjectRef(actor, scopeId, subjectId)),
     );
+    // A subject is named only where a visible observation names it.
+    const visible = await Promise.all(
+      documents.map((document) =>
+        document.exists ? this.subjectVisible(actor, scopeId, document.id) : Promise.resolve(false),
+      ),
+    );
     return documents
-      .filter((document) => document.exists)
+      .filter((document, index) => document.exists && visible[index] === true)
       .map((document) => ({
         id: String(document.get('id')),
         name: String(document.get('name')),
@@ -1417,6 +1510,8 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       readonly members: readonly [string, string];
       readonly at: string;
       readonly revoke: boolean;
+      /** The label of the write; it decides who reads through the link. */
+      readonly label: readonly string[];
     },
   ): Promise<{ linkId: string; active: boolean }> {
     assertActor(actor, scopeId);
@@ -1431,7 +1526,13 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         ? this.subjectRef(actor, scopeId, member)
         : this.topicRef(actor, scopeId, member),
     );
-    const linkId = digest([request.kind, members]).slice(0, 40);
+    if (!request.label.every(nonempty) || !labelVisible(request.label, actor.compartmentAllowance))
+      throw new MemoryRepositoryError('invalid_change_set', PLACEMENT_UNAVAILABLE);
+    const key = labelKey(request.label);
+    // An Inbox link keeps the ID links had before labels existed, so it stays one document.
+    const linkId = (
+      key === 'inbox' ? digest([request.kind, members]) : digest([request.kind, members, key])
+    ).slice(0, 40);
     const linkRef = this.scopeRef(actor, scopeId).collection('links').doc(linkId);
     return this.firestore.runTransaction(async (transaction) => {
       const [auth, ...targets] = await Promise.all([
@@ -1439,13 +1540,20 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         ...refs.map((ref) => transaction.get(ref)),
       ]);
       this.assertCurrentAuthorization(actor, auth.data() as AuthorizationDocument | undefined);
-      if (targets.some((target) => !target.exists))
+      const visible = await Promise.all(
+        members.map((member) =>
+          this.subjectVisible(actor, scopeId, member, transaction, request.kind),
+        ),
+      );
+      // A member outside the allowance reads exactly like one that does not exist.
+      if (targets.some((target) => !target.exists) || visible.some((item) => !item))
         throw new MemoryRepositoryError('not_found', 'A member of the link was not found');
       transaction.set(
         linkRef,
         {
           kind: request.kind,
           members,
+          label: [...request.label],
           active: !request.revoke,
           history: FieldValue.arrayUnion({
             action: request.revoke ? 'revoke' : 'link',
@@ -1878,6 +1986,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         input.subjects,
         record.aliases.map((alias) => alias.value),
         recordedAt,
+        labelForCompartments(record.compartmentIds),
       );
       if (!subjects.primaryResolved) return 'skipped';
       for (const write of subjects.writes) transaction.set(write.ref, write.data, { merge: true });
@@ -2054,6 +2163,11 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         .get();
       for (const document of snapshot.docs) {
         if (document.get('kind') !== kind || document.get('active') !== true) continue;
+        // A link written before labels existed reads as an Inbox link.
+        if (
+          !labelVisible(storedLabel(document.get('label'), undefined), actor.compartmentAllowance)
+        )
+          continue;
         for (const member of (document.get('members') as string[] | undefined) ?? [])
           result.add(member);
       }

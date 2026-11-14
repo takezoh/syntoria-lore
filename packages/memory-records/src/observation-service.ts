@@ -771,6 +771,8 @@ export class ObservationService {
           readonly a: string;
           readonly b: string;
           readonly revoke: boolean;
+          /** The workspace the link belongs to; omitted means the default, `null` the Inbox. */
+          readonly workspaceId?: string | null;
         }
       | {
           readonly kind: 'same-topic';
@@ -778,6 +780,7 @@ export class ObservationService {
           readonly a: string;
           readonly b: string;
           readonly revoke: boolean;
+          readonly workspaceId?: string | null;
         },
   ): Promise<{ readonly link_id: string; readonly active: boolean }> {
     return this.run(access, async () => {
@@ -811,11 +814,14 @@ export class ObservationService {
         );
         members = [keys[0]!, keys[1]!];
       }
+      const workspaceId =
+        input.workspaceId === undefined ? access.defaultWorkspace : input.workspaceId;
       const result = await this.ledger.link(actor, scopeId, {
         kind,
         members,
         at: this.now().toISOString(),
         revoke: input.revoke,
+        label: workspaceId === null ? [INBOX] : [workspaceId],
       });
       return { link_id: result.linkId, active: result.active };
     });
