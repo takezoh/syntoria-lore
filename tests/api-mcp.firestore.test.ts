@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { promisify } from 'node:util';
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createApiApp, type ApiApp } from '../apps/api/src/app.js';
 import { loadConfig } from '../apps/api/src/config.js';
@@ -16,13 +17,17 @@ const emulatorHost = process.env['FIRESTORE_EMULATOR_HOST'];
 const projectId = `demo-api-${process.pid}-${randomUUID().slice(0, 8)}`;
 const memoryDatabase = 'lore-memory-records';
 const ledgerDatabase = 'lore-deletion-ledger';
-const resourceClientId = 'lore-mcp-resource';
-const resourceClientSecret = 'synthetic-resource-secret';
+const accessIssuer = 'https://access.example.com';
+const accessAudience = 'synthetic-access-app';
+const ownerEmail = 'owner@example.com';
+/** The admission issuer the service maps the owner to; every test admits its own subject. */
+const issuer = 'https://identity.example.com';
 
+/** A client credential: the admission it reaches and the connection it uses. */
 interface Grant {
   readonly subject: string;
-  readonly connectionId: string;
-  readonly clientId: string;
+  /** `undefined` is the default connection at `/mcp`; otherwise a provisioned `con_…` ID. */
+  readonly connection: string | undefined;
 }
 
 // Tool results are checked field by field, so they are read loosely here.
@@ -35,15 +40,20 @@ interface ToolResult {
   readonly content: Array<{ type: string; text?: string }>;
 }
 
-const tokens = new Map<string, Grant>();
+/** One service instance per admission, as Access mode maps one owner to one admission. */
+interface Instance {
+  readonly app: ApiApp;
+  readonly server: Server;
+  readonly baseUrl: string;
+  readonly resourceUrl: string;
+}
+
+const grants = new Map<string, Grant>();
+const instances = new Map<string, Instance>();
 const clients: Client[] = [];
 const logs: Readonly<Record<string, unknown>>[] = [];
-let gate: Server;
-let appServer: Server;
-let app: ApiApp;
-let issuer: string;
-let baseUrl: string;
-let resourceUrl: string;
+let keys: Awaited<ReturnType<typeof generateKeyPair>>;
+let publicJwk: JWK;
 let failEmbeddingText: string | undefined;
 
 async function listen(server: Server): Promise<number> {
@@ -51,16 +61,74 @@ async function listen(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-async function body(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
+/** Starts, once per admission subject, a service configured for that owner admission. */
+async function instance(subject: string): Promise<Instance> {
+  const existing = instances.get(subject);
+  if (existing) return existing;
+  const server = createServer();
+  const baseUrl = `http://127.0.0.1:${await listen(server)}`;
+  const resourceUrl = `${baseUrl}/mcp`;
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    ALLOW_LOOPBACK_HTTP: '1',
+    FIRESTORE_PROJECT_ID: projectId,
+    FIRESTORE_DATABASE_ID: memoryDatabase,
+    LEDGER_DATABASE_ID: ledgerDatabase,
+    ACCESS_ISSUER: accessIssuer,
+    ACCESS_AUDIENCE: accessAudience,
+    ACCESS_OWNER_EMAIL: ownerEmail,
+    OWNER_ADMISSION_ISSUER: issuer,
+    OWNER_ADMISSION_SUBJECT: subject,
+    MCP_RESOURCE_URL: resourceUrl,
+    CURSOR_HMAC_KEYS: `test=${Buffer.alloc(32, 9).toString('base64url')}`,
+    CURSOR_HMAC_ACTIVE_KEY: 'test',
+    EMBEDDING_PROVIDER: 'deterministic',
+  });
+  const deterministic = new DeterministicEmbeddingProvider();
+  const app = createApiApp(config, {
+    accessKeys: createLocalJWKSet({ keys: [{ ...publicJwk, kid: 'local' }] }),
+    log: (event) => logs.push(event),
+    embeddings: {
+      async embed(text) {
+        if (failEmbeddingText !== undefined && text.includes(failEmbeddingText))
+          throw new Error('Synthetic embedding outage');
+        return deterministic.embed(text);
+      },
+    },
+  });
+  server.on('request', app.listener);
+  const created = { app, server, baseUrl, resourceUrl };
+  instances.set(subject, created);
+  return created;
 }
 
-function grant(subject: string, connectionId: string, clientId = 'test-ai-client'): string {
-  const token = randomUUID().replaceAll('-', '');
-  tokens.set(token, { subject, connectionId, clientId });
+async function assertion(email = ownerEmail): Promise<string> {
+  return new SignJWT({ email })
+    .setProtectedHeader({ alg: 'RS256', kid: 'local' })
+    .setIssuer(accessIssuer)
+    .setAudience(accessAudience)
+    .setSubject('synthetic-access-user')
+    .setIssuedAt()
+    .setExpirationTime('5m')
+    .sign(keys.privateKey);
+}
+
+/** A handle for a client of the admission's default connection or of a further connection. */
+function grant(subject: string, connection?: string): string {
+  const token = randomUUID();
+  grants.set(token, { subject, connection });
   return token;
+}
+
+/** The endpoint and Access header a handle uses. */
+async function endpoint(token: string): Promise<{ url: string; headers: Record<string, string> }> {
+  const found = grants.get(token);
+  if (!found) throw new Error('Unknown grant');
+  const { resourceUrl } = await instance(found.subject);
+  return {
+    url: found.connection === undefined ? resourceUrl : `${resourceUrl}/c/${found.connection}`,
+    headers: { 'cf-access-jwt-assertion': await assertion() },
+  };
 }
 
 async function admit(subject: string, tenant: string, scope: string) {
@@ -86,12 +154,37 @@ async function admit(subject: string, tenant: string, scope: string) {
   return JSON.parse(stdout) as { action: string; documentId: string };
 }
 
+/** Provisions a further connection of the admission with every workspace and the Inbox. */
+async function provision(subject: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      'scripts/manage-connections.mjs',
+      'set-connection',
+      '--connection',
+      'new',
+      '--workspaces',
+      'all',
+      '--inbox',
+      '--project',
+      projectId,
+      '--database',
+      memoryDatabase,
+      '--issuer',
+      issuer,
+      '--subject',
+      subject,
+    ],
+    { env: process.env },
+  );
+  return String((JSON.parse(stdout) as { result: { id: string } }).result.id);
+}
+
 async function connect(token: string): Promise<Client> {
+  const { url, headers } = await endpoint(token);
   const client = new Client({ name: 'lore-api-test', version: '1.0.0' });
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(resourceUrl), {
-      authProvider: { token: async () => token },
-    }),
+    new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }),
   );
   clients.push(client);
   return client;
@@ -119,89 +212,23 @@ function errorCode(result: ToolResult): unknown {
 
 beforeAll(async () => {
   if (!emulatorHost) throw new Error('FIRESTORE_EMULATOR_HOST is required');
-  gate = createServer((request, response) => {
-    void (async () => {
-      const send = (status: number, value: unknown) => {
-        response.writeHead(status, { 'content-type': 'application/json' });
-        response.end(JSON.stringify(value));
-      };
-      if (request.method === 'GET' && request.url === '/.well-known/openid-configuration') {
-        send(200, { issuer, introspection_endpoint: `${issuer}/oauth/introspect` });
-        return;
-      }
-      if (request.method === 'POST' && request.url === '/oauth/introspect') {
-        const expected = `Basic ${Buffer.from(`${resourceClientId}:${resourceClientSecret}`).toString('base64')}`;
-        if (request.headers.authorization !== expected) {
-          send(401, { error: 'invalid_client' });
-          return;
-        }
-        const token = new URLSearchParams(await body(request)).get('token') ?? '';
-        const found = tokens.get(token);
-        if (!found) {
-          send(200, { active: false });
-          return;
-        }
-        send(200, {
-          active: true,
-          token_type: 'Bearer',
-          gate_approved: true,
-          iss: issuer,
-          sub: found.subject,
-          connection_id: found.connectionId,
-          client_id: found.clientId,
-          aud: resourceUrl,
-          exp: Math.floor(Date.now() / 1000) + 3600,
-        });
-        return;
-      }
-      send(404, { error: 'not_found' });
-    })();
-  });
-  issuer = `http://127.0.0.1:${await listen(gate)}`;
-  appServer = createServer();
-  const port = await listen(appServer);
-  baseUrl = `http://127.0.0.1:${port}`;
-  resourceUrl = `${baseUrl}/mcp`;
-  const config = loadConfig({
-    NODE_ENV: 'test',
-    ALLOW_LOOPBACK_HTTP: '1',
-    FIRESTORE_PROJECT_ID: projectId,
-    FIRESTORE_DATABASE_ID: memoryDatabase,
-    LEDGER_DATABASE_ID: ledgerDatabase,
-    GATE_ISSUER: issuer,
-    MCP_RESOURCE_URL: resourceUrl,
-    GATE_MCP_CLIENT_ID: resourceClientId,
-    GATE_MCP_CLIENT_SECRET: resourceClientSecret,
-    CURSOR_HMAC_KEYS: `test=${Buffer.alloc(32, 9).toString('base64url')}`,
-    CURSOR_HMAC_ACTIVE_KEY: 'test',
-    EMBEDDING_PROVIDER: 'deterministic',
-  });
-  const deterministic = new DeterministicEmbeddingProvider();
-  app = createApiApp(config, {
-    log: (event) => logs.push(event),
-    embeddings: {
-      async embed(text) {
-        if (failEmbeddingText !== undefined && text.includes(failEmbeddingText))
-          throw new Error('Synthetic embedding outage');
-        return deterministic.embed(text);
-      },
-    },
-  });
-  appServer.on('request', app.listener);
+  keys = await generateKeyPair('RS256');
+  publicJwk = await exportJWK(keys.publicKey);
 }, 30_000);
 
 afterAll(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close().catch(() => undefined)));
-  await new Promise((resolve) => appServer?.close(resolve));
-  await new Promise((resolve) => gate?.close(resolve));
-  await app?.close();
+  for (const { server, app } of instances.values()) {
+    await new Promise((resolve) => server.close(resolve));
+    await app.close();
+  }
 });
 
 describe('Lore API over Remote MCP', () => {
   it('retries a failed index without another observation write', async () => {
     const subject = 'github:recovery';
     await admit(subject, 'tenant-recovery', 'personal');
-    const client = await connect(grant(subject, 'connection-recovery'));
+    const client = await connect(grant(subject));
     failEmbeddingText = 'recoverable-index-marker';
     try {
       const written = await ok(client, 'observe', {
@@ -235,17 +262,14 @@ describe('Lore API over Remote MCP', () => {
     }
   });
 
-  it('serves health, readiness and resource metadata and challenges calls without a token', async () => {
+  it('serves health and readiness and refuses calls without a valid Access assertion', async () => {
+    const { baseUrl, resourceUrl } = await instance('github:health');
     expect((await fetch(`${baseUrl}/healthz`)).status).toBe(200);
     const ready = await fetch(`${baseUrl}/readyz`);
     expect(ready.status).toBe(200);
     expect(await ready.json()).toEqual({ status: 'ready' });
-    const metadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
-    expect(await metadata.json()).toMatchObject({
-      resource: resourceUrl,
-      authorization_servers: [issuer],
-      bearer_methods_supported: ['header'],
-    });
+    // The service no longer advertises protected-resource metadata; Access owns discovery.
+    expect((await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`)).status).toBe(404);
 
     const initialize = {
       jsonrpc: '2.0',
@@ -261,32 +285,147 @@ describe('Lore API over Remote MCP', () => {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
     };
-    const anonymous = await fetch(resourceUrl, {
+    for (const extra of [
+      {},
+      { authorization: 'Bearer opaque-legacy-token' },
+      { 'cf-access-jwt-assertion': 'not.a.jwt' },
+    ]) {
+      const response = await fetch(resourceUrl, {
+        method: 'POST',
+        headers: { ...headers, ...extra },
+        body: JSON.stringify(initialize),
+      });
+      expect(response.status).toBe(401);
+      expect(response.headers.get('www-authenticate')).toBeNull();
+    }
+    const other = await fetch(resourceUrl, {
       method: 'POST',
-      headers,
+      headers: { ...headers, 'cf-access-jwt-assertion': await assertion('other@example.com') },
       body: JSON.stringify(initialize),
     });
-    expect(anonymous.status).toBe(401);
-    expect(anonymous.headers.get('www-authenticate')).toBe(
-      `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource/mcp"`,
-    );
-    const unknown = await fetch(resourceUrl, {
-      method: 'POST',
-      headers: { ...headers, authorization: 'Bearer not-a-gate-token' },
-      body: JSON.stringify(initialize),
-    });
-    expect(unknown.status).toBe(401);
-    await expect(connect('not-a-gate-token')).rejects.toThrow();
+    expect(other.status).toBe(403);
   });
+
+  it('serves a further connection only when provisioned and hides every other connection path', async () => {
+    const subject = 'github:connections';
+    await admit(subject, 'tenant-connections', 'personal');
+    const provisioned = await provision(subject);
+    const client = await connect(grant(subject, provisioned));
+    const access = await ok(client, 'get_access');
+    expect(access).toMatchObject({ compartment_allowance: ['inbox', 'workspaces:all'] });
+    const own = await ok(await connect(grant(subject)), 'get_access');
+    expect(access['principal_id']).not.toBe(own['principal_id']);
+
+    const { resourceUrl } = await instance(subject);
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'raw', version: '1.0.0' },
+      },
+    });
+    const responses = [];
+    for (const path of [`c/con_${'0'.repeat(32)}`, 'c/not-a-connection', `c/${provisioned}/x`]) {
+      const response = await fetch(`${resourceUrl}/${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'cf-access-jwt-assertion': await assertion(),
+        },
+        body,
+      });
+      responses.push({ status: response.status, body: await response.json() });
+    }
+    for (const response of responses) {
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({ error: { code: 'not_found', message: 'Not found' } });
+    }
+    // A connection of another admission is not found either.
+    const otherSubject = 'github:connections-other';
+    await admit(otherSubject, 'tenant-connections-other', 'personal');
+    const foreign = await provision(otherSubject);
+    await expect(connect(grant(subject, foreign))).rejects.toThrow();
+  }, 60_000);
+
+  it('lists and manages the projects of a workspace through MCP', async () => {
+    const subject = 'github:projects';
+    await admit(subject, 'tenant-projects', 'personal');
+    const manage = (...args: string[]) =>
+      execFileAsync(
+        process.execPath,
+        [
+          'scripts/manage-connections.mjs',
+          ...args,
+          '--project',
+          projectId,
+          '--database',
+          memoryDatabase,
+          '--issuer',
+          issuer,
+          '--subject',
+          subject,
+        ],
+        { env: process.env },
+      ).then(({ stdout }) => JSON.parse(stdout).result as Item);
+    await manage('init');
+    const workspace = await manage('create-workspace', '--name', 'Northwind');
+    const client = await connect(grant(subject));
+    const created = await ok(client, 'manage_project', {
+      action: 'create',
+      workspace: workspace.id,
+      name: 'Retail',
+      description: 'Business X',
+    });
+    expect(created.project).toMatchObject({ path: ['Retail'], depth: 1 });
+    const child = await ok(client, 'manage_project', {
+      action: 'create',
+      workspace: workspace.id,
+      parent: created.project.id,
+      name: 'Quartz deal',
+    });
+    expect(child.project.path).toEqual(['Retail', 'Quartz deal']);
+    const listed = await ok(client, 'list_projects');
+    expect(listed.workspaces).toEqual([
+      expect.objectContaining({
+        id: workspace.id,
+        name: 'Northwind',
+        revision: 2,
+        projects: [
+          expect.objectContaining({ name: 'Retail', description: 'Business X' }),
+          expect.objectContaining({ name: 'Quartz deal', parentId: created.project.id }),
+        ],
+      }),
+    ]);
+    expect(
+      errorCode(
+        await call(client, 'manage_project', { action: 'delete', project: created.project.id }),
+      ),
+    ).toBe('project_in_use');
+    expect(
+      errorCode(
+        await call(client, 'manage_project', { action: 'update', project: child.project.id }),
+      ),
+    ).toBe('invalid_input');
+    const moved = await ok(client, 'manage_project', {
+      action: 'update',
+      project: child.project.id,
+      parent: null,
+    });
+    expect(moved.project.path).toEqual(['Quartz deal']);
+  }, 60_000);
 
   it('provides concise, current server instructions in MCP initialization', async () => {
     const subject = 'github:404405';
     await admit(subject, 'tenant-instructions', 'personal');
-    const token = grant(subject, 'connection-instructions');
-    const response = await fetch(resourceUrl, {
+    const target = await endpoint(grant(subject));
+    const response = await fetch(target.url, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${token}`,
+        ...target.headers,
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
       },
@@ -324,12 +463,13 @@ describe('Lore API over Remote MCP', () => {
       expect(instructions).toEqual(expect.stringContaining(phrase));
   }, 60_000);
 
-  it('refuses a verified Gate account without an admission with 403', async () => {
-    const token = grant('github:404404', 'connection-unadmitted');
-    const response = await fetch(resourceUrl, {
+  it('refuses the owner with 403 when the configured admission does not exist', async () => {
+    const token = grant('github:404404');
+    const target = await endpoint(token);
+    const response = await fetch(target.url, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${token}`,
+        ...target.headers,
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
       },
@@ -352,7 +492,7 @@ describe('Lore API over Remote MCP', () => {
   it('keeps the earlier state when a new one is written and reads the present, the course and a past date', async () => {
     const subject = 'github:2001';
     await admit(subject, 'tenant-course', 'personal');
-    const client = await connect(grant(subject, 'connection-course'));
+    const client = await connect(grant(subject));
     expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
       'forget',
       'get_access',
@@ -360,6 +500,8 @@ describe('Lore API over Remote MCP', () => {
       'get_observation',
       'get_timeline',
       'link',
+      'list_projects',
+      'manage_project',
       'observe',
       'recall',
       'report_source',
@@ -530,8 +672,8 @@ describe('Lore API over Remote MCP', () => {
   it('derives trust from who wrote an observation and keeps a disagreeing lower tier as a conflict', async () => {
     const subject = 'github:2002';
     await admit(subject, 'tenant-trust', 'personal');
-    const first = await connect(grant(subject, 'connection-trust-a'));
-    const second = await connect(grant(subject, 'connection-trust-b'));
+    const first = await connect(grant(subject));
+    const second = await connect(grant(subject, await provision(subject)));
     const status = {
       title: 'Contract status',
       nature: 'state',
@@ -599,7 +741,7 @@ describe('Lore API over Remote MCP', () => {
       },
     });
 
-    // A connection starts with General only and cannot write into a compartment.
+    // A connection cannot write into a compartment outside its allowance.
     expect(
       errorCode(
         await call(first, 'observe', {
@@ -616,7 +758,7 @@ describe('Lore API over Remote MCP', () => {
   it('resolves names without merging subjects and reads linked subjects and topics together', async () => {
     const subject = 'github:2003';
     await admit(subject, 'tenant-subjects', 'personal');
-    const client = await connect(grant(subject, 'connection-subjects'));
+    const client = await connect(grant(subject));
     const east = await ok(client, 'observe', {
       title: 'East office headcount',
       summary: 'Globex East has forty people.',
@@ -695,7 +837,7 @@ describe('Lore API over Remote MCP', () => {
   it('forgets an observation, a source and a subject, and rebuilds what was derived', async () => {
     const subject = 'github:2004';
     await admit(subject, 'tenant-forget-obs', 'personal');
-    const client = await connect(grant(subject, 'connection-forget-obs'));
+    const client = await connect(grant(subject));
     const plan = { title: 'Launch date', nature: 'state', subjects: ['Hooli'], aspect: 'launch' };
     const old = await ok(client, 'observe', {
       ...plan,
@@ -771,11 +913,12 @@ describe('Lore API over Remote MCP', () => {
     const subject = 'github:2005';
     await admit(subject, 'tenant-legacy', 'personal');
     // Records written by the previous service, before any observation exists in the scope.
+    const { app } = await instance(subject);
     const access = await app.runtime.access.resolve({
       issuer,
       subject,
-      connectionId: 'connection-legacy',
-      clientId: 'test-ai-client',
+      connectionId: 'shared-ai',
+      clientId: 'shared-ai',
     });
     const legacy = new MemoryService({
       repository: app.runtime.repository,
@@ -801,7 +944,7 @@ describe('Lore API over Remote MCP', () => {
       asUser: false,
       idempotencyKey: 'legacy-1',
     });
-    const client = await connect(grant(subject, 'connection-legacy'));
+    const client = await connect(grant(subject));
     // The first write to the scope carries the conversion along.
     await ok(client, 'observe', {
       title: 'Unrelated note',
@@ -859,7 +1002,7 @@ describe('Lore API over Remote MCP', () => {
       },
     );
     expect(response.ok).toBe(true);
-    const client = await connect(grant(subject, 'connection-confirm'));
+    const client = await connect(grant(subject));
     expect(await ok(client, 'get_access')).toMatchObject({ approval_policy: 'confirm' });
     const note = {
       title: 'A note',
@@ -889,8 +1032,8 @@ describe('Lore API over Remote MCP', () => {
   it('takes a misled writer out of every read and hides what a restored backup would bring back', async () => {
     const subject = 'github:2007';
     await admit(subject, 'tenant-suppress', 'personal');
-    const trusted = await connect(grant(subject, 'connection-suppress-a'));
-    const misled = await connect(grant(subject, 'connection-suppress-b'));
+    const trusted = await connect(grant(subject));
+    const misled = await connect(grant(subject, await provision(subject)));
     const owner = { title: 'Owner', nature: 'state', subjects: ['Pied Piper'], aspect: 'owner' };
     const good = await ok(trusted, 'observe', {
       ...owner,
@@ -908,11 +1051,12 @@ describe('Lore API over Remote MCP', () => {
     });
     expect(bad.topic.current.value).toBe('Gavin');
 
+    const { app } = await instance(subject);
     const access = await app.runtime.access.resolve({
       issuer,
       subject,
-      connectionId: 'connection-suppress-a',
-      clientId: 'test-ai-client',
+      connectionId: 'shared-ai',
+      clientId: 'shared-ai',
     });
     const worker = await app.runtime.access.worker(access);
     const misledPrincipal = String((await ok(misled, 'get_access'))['principal_id']);

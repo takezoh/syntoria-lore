@@ -80,6 +80,11 @@ export interface Observation {
   readonly speaker: string | null;
   readonly sources: readonly ObservationSource[];
   readonly compartmentIds: readonly string[];
+  /**
+   * The current label the ledger checks (ADR 0012): `[workspaceId]`, `["inbox"]`, or `[]` for
+   * Shared. An observation stored before labels existed reads as its compartments or the Inbox.
+   */
+  readonly label: readonly string[];
   readonly retracts: string | null;
 }
 

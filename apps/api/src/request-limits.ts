@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export interface RequestLimitOptions {
-  /** Requests per window for one authenticated Gate connection. */
+  /** Requests per window for one authenticated connection. */
   readonly connectionLimit: number;
   /** Failed authentications per window for one client address. */
   readonly unauthenticatedLimit: number;
@@ -19,7 +19,7 @@ interface Window {
 
 /**
  * Request budgets that keep unauthenticated traffic from spending the budget of an authenticated
- * connection. Authenticated requests count per Gate connection. Failed authentications count per
+ * connection. Authenticated requests count per connection. Failed authentications count per
  * client address; once an address has used its budget, only a credential that verified recently
  * is still sent for verification. Admission never authorizes: every admitted request is verified.
  */

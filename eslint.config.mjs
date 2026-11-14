@@ -27,14 +27,16 @@ export default typescriptEslint.config(
   ...typescriptEslint.configs.recommended,
   {
     files: ['apps/**/*.ts', 'packages/**/*.ts', 'tests/**/*.ts'],
-    // The Firestore boundary: the repository, the client factory, the deletion ledger and the
-    // access module that reads admissions and provisions authorizations.
+    // The Firestore boundary: the repository, the client factory, the deletion ledger, the
+    // access module that reads admissions and provisions authorizations, and the workspace
+    // registry that the operator tool uses to change grants.
     ignores: [
       'packages/memory-records/src/firestore-repository.ts',
       'packages/memory-records/src/firestore-observation-ledger.ts',
       'packages/memory-records/src/firestore-client.ts',
       'packages/memory-records/src/firestore-deletion-ledger.ts',
       'packages/memory-records/src/access.ts',
+      'packages/memory-records/src/workspaces.ts',
     ],
     rules: {
       'no-restricted-imports': [

@@ -1,4 +1,5 @@
-// Creates or reactivates the Lore admission of one Gate subject. Operator tool: it runs with
+// Creates or reactivates the Lore admission of one subject. The Access-mode service maps the
+// owner to this admission through OWNER_ADMISSION_ISSUER and OWNER_ADMISSION_SUBJECT. Operator tool: it runs with
 // Application Default Credentials, or against a loopback FIRESTORE_EMULATOR_HOST when set.
 // The admission document ID must match admissionDocumentId in packages/memory-records/src/access.ts.
 import { createHash, generateKeyPairSync } from 'node:crypto';
@@ -7,7 +8,7 @@ import { Firestore } from '@google-cloud/firestore';
 
 const USAGE =
   'Usage: node scripts/admit-subject.mjs --project <project-id> --database <database-id> ' +
-  '--issuer <gate-origin> --subject <gate-subject> --tenant <tenant-id> --scope <scope-id>';
+  '--issuer <issuer-origin> --subject <subject> --tenant <tenant-id> --scope <scope-id>';
 const COLLECTION = 'memoryAdmissions';
 const APPROVAL_POLICY = 'automatic';
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -56,7 +57,7 @@ let issuerUrl;
 try {
   issuerUrl = new URL(issuer ?? '');
 } catch {
-  fail('--issuer must be the Gate issuer origin');
+  fail('--issuer must be the admission issuer origin');
 }
 const loopbackIssuer = ['127.0.0.1', 'localhost', '[::1]'].includes(issuerUrl.hostname);
 if (
@@ -66,10 +67,10 @@ if (
     (emulator && loopbackIssuer && issuerUrl.protocol === 'http:')
   )
 ) {
-  fail('--issuer must be the exact HTTPS Gate origin, as configured in GATE_ISSUER');
+  fail('--issuer must be the exact HTTPS origin, as configured in OWNER_ADMISSION_ISSUER');
 }
 if (!subject || Buffer.byteLength(subject, 'utf8') > 1024 || hasControlCharacter(subject)) {
-  fail('--subject must be the Gate subject, such as github:<numeric id>');
+  fail('--subject must be the admission subject, as configured in OWNER_ADMISSION_SUBJECT');
 }
 if (!tenant || !IDENTIFIER.test(tenant)) fail('--tenant must match [A-Za-z0-9][A-Za-z0-9._:-]*');
 if (!scope || !IDENTIFIER.test(scope)) fail('--scope must match [A-Za-z0-9][A-Za-z0-9._:-]*');

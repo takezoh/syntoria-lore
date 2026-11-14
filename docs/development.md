@@ -20,15 +20,16 @@ export FIRESTORE_EMULATOR_HOST=127.0.0.1:8085
 
 Tests use synthetic `demo-` project IDs; never point them at a real project.
 
-## Access migration checks
+## Access authentication checks
 
 `tests/access-jwt.test.ts` signs synthetic assertions and verifies owner admission,
 wrong audience, expiry, signature rejection, service-token rejection and key-service
-outages. `tests/access-mcp.firestore.test.ts` drives the real HTTP/MCP and Firestore
-path with independently signed client assertions: both share the existing owner's
-admission, a write is visible through the other client, and old Bearers and forged
-gateway user-info do not authenticate. These tests establish local boundaries,
-not Cloudflare login, Google gateway forwarding or hosted acceptance.
+outages. `tests/access-mcp.firestore.test.ts` and `tests/api-mcp.firestore.test.ts`
+drive the real HTTP/MCP and Firestore path with locally signed assertions: clients of
+`/mcp` share the existing owner's admission, a provisioned further connection at
+`/mcp/c/<id>` has its own principal, other connection paths return `404`, and opaque
+Bearers and forged gateway user-info do not authenticate. These tests establish local
+boundaries, not Cloudflare login, Google gateway forwarding or hosted acceptance.
 
 ## Verify a code change
 
@@ -48,12 +49,14 @@ Local checks with deterministic doubles do not establish hosted behavior, extrac
 | Required behavior and measurable service targets | [Product requirements](design/requirements.md) |
 | Contextual recall outcomes, optional applicability assessment, retrieval contracts and client use | [Situational recall](design/situational-recall.md) and [evaluation fixtures](eval/fixtures/situational-recall.md) |
 | Observations, subjects, topics, trust, source references, reading, Forget and migration | [Observation ledger design](design/observation-ledger.md) |
+| Workspaces granted per connection, projects, scope, lessons, Inbox, queries and classification (accepted, partly implemented) | [Memory workspaces design](design/memory-workspaces.md) |
 | The earlier Memory Records contracts and the decision-model evaluation | [Memory Records design](design/memory-records.md) |
 | Components and correctness boundaries | [Architecture](../ARCHITECTURE.md) |
 | Observation value model, ledger, service operations and access; the Memory Records code they extend | `packages/memory-records/src/` |
 | Composite and vector indexes the queries need | [`firestore.indexes.json`](../firestore.indexes.json) |
-| MCP adapter, Gate verification, configuration and embeddings | `apps/api/src/` |
-| Admitting a Gate subject | `scripts/admit-subject.mjs` |
+| MCP adapter, Access verification, configuration and embeddings | `apps/api/src/` |
+| Admitting a subject | `scripts/admit-subject.mjs` |
+| Workspaces and connection grants | `scripts/manage-connections.mjs` and [operations](operations.md#workspaces-and-connection-grants) |
 | Reviewed source metadata maintenance | [`scripts/migrate-source-metadata.mjs`](../scripts/migrate-source-metadata.mjs): prepare, dry-run, apply and verify use private snapshot/plan/manifest files, explicit database targets and the reviewed manifest digest |
 | Test suites and runners | [Testing](technical/testing.md) |
 | Decisions and their reasons | [ADRs](adr/) |

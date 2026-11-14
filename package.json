@@ -20,6 +20,7 @@
     "format:write": "prettier --write \"package.json\" \"tsconfig*.json\" \"apps/**/*.json\" \"apps/**/*.ts\" \"packages/**/*.json\" \"packages/**/*.ts\" \"scripts/**/*.mjs\" \"tests/**/*.ts\" \"eslint.config.mjs\" \"vitest.config.ts\" \".prettierrc.json\"",
     "start:api": "npm run start --workspace @memory/api",
     "admit:subject": "node scripts/admit-subject.mjs",
+    "manage:connections": "node scripts/manage-connections.mjs",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:firestore": "node scripts/require-firestore-emulator.mjs && VITEST_FIRESTORE=1 vitest run tests/*.firestore.test.ts",

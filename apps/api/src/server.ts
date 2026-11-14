@@ -2,34 +2,37 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http';
 import {
   AccessDeniedError,
+  CONNECTION_ID,
+  type AuthenticatedPrincipal,
   type ConnectionAccess,
-  type GatePrincipal,
   type ObservationService,
 } from '@memory/memory-records';
 import { AccessVerificationError } from './access.js';
-import { GateVerificationError, type GateVerifier } from './gate.js';
 import { handleMcpRequest } from './mcp.js';
 import { RequestLimits } from './request-limits.js';
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const DEFAULT_RATE_LIMIT = 120;
-const METADATA_PATH = '/.well-known/oauth-protected-resource/mcp';
 
 export interface ApiServerOptions {
-  /** The exact public `/mcp` URL, also the token audience. */
+  /** The exact public `/mcp` URL; further connections are served at `/mcp/c/<id>` below it. */
   readonly mcpResourceUrl: string;
-  readonly gateIssuer: string;
   /** Hosts accepted in the Host header of `/mcp` requests. */
   readonly mcpAllowedHosts: readonly string[];
-  readonly verifier: GateVerifier;
-  /** Access mode consumes only this header; Authorization is the gateway's IAM token. */
-  readonly authenticateAssertion?: (assertion: string | undefined) => Promise<GatePrincipal>;
-  readonly resolveAccess: (principal: GatePrincipal) => Promise<ConnectionAccess>;
+  /**
+   * Verifies the Access assertion, the only credential this service consumes; Authorization is
+   * the gateway's IAM token. `connectionId` is the further connection the path names, if any.
+   */
+  readonly authenticateAssertion: (
+    assertion: string | undefined,
+    connectionId: string | undefined,
+  ) => Promise<AuthenticatedPrincipal>;
+  readonly resolveAccess: (principal: AuthenticatedPrincipal) => Promise<ConnectionAccess>;
   readonly service: ObservationService;
   /** Fails unless every backing store answers. */
   readonly ready: () => Promise<void>;
   readonly maxBodyBytes?: number;
-  /** Requests per minute for one Gate connection, and failed authentications per address. */
+  /** Requests per minute for one connection, and failed authentications per address. */
   readonly rateLimit?: number;
   readonly log?: (event: Readonly<Record<string, unknown>>) => void;
 }
@@ -45,7 +48,7 @@ class HttpError extends Error {
   }
 }
 
-/** The HTTP listener: health and readiness, protected-resource metadata and Remote MCP. */
+/** The HTTP listener: health and readiness, and Remote MCP for the default and further connections. */
 export function createRequestListener(options: ApiServerOptions): RequestListener {
   const limits = new RequestLimits({
     connectionLimit: options.rateLimit ?? DEFAULT_RATE_LIMIT,
@@ -53,7 +56,7 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
   });
   const log = options.log ?? ((event) => console.log(JSON.stringify(event)));
   const resource = new URL(options.mcpResourceUrl);
-  const metadataUrl = new URL(METADATA_PATH, resource.origin).toString();
+  const connectionPrefix = `${resource.pathname}/c/`;
   const allowedHosts = new Set(options.mcpAllowedHosts.map((host) => host.toLowerCase()));
   return (request, response) => {
     void handle(request, response).catch(() => {
@@ -104,22 +107,21 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
       }
       return;
     }
-    if (options.authenticateAssertion === undefined && method === 'GET' && path === METADATA_PATH) {
-      route = 'GET /.well-known/*';
-      sendJson(response, 200, {
-        resource: options.mcpResourceUrl,
-        authorization_servers: [options.gateIssuer],
-        scopes_supported: ['openid'],
-        bearer_methods_supported: ['header'],
-      });
-      return;
-    }
-    if (path !== resource.pathname) {
-      sendError(response, new HttpError(404, 'not_found', 'Not found'));
+    // `/mcp` is the default connection; `/mcp/c/<id>` names a further connection. Any other
+    // path, and a malformed connection ID, is not found.
+    let connectionId: string | undefined;
+    if (path.startsWith(connectionPrefix)) {
+      connectionId = path.slice(connectionPrefix.length);
+      if (!CONNECTION_ID.test(connectionId)) {
+        sendError(response, notFound());
+        return;
+      }
+    } else if (path !== resource.pathname) {
+      sendError(response, notFound());
       return;
     }
 
-    route = `${method} /mcp`;
+    route = connectionId === undefined ? `${method} /mcp` : `${method} /mcp/c/*`;
     const host = (request.headers.host ?? '').toLowerCase();
     if (!allowedHosts.has(host)) {
       sendError(response, new HttpError(403, 'mcp_host_forbidden', 'MCP Host is not allowed'));
@@ -147,15 +149,10 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
       return;
     }
     try {
-      if (
-        countHeader(
-          request,
-          options.authenticateAssertion === undefined ? 'authorization' : 'cf-access-jwt-assertion',
-        ) > 1
-      ) {
-        throw new HttpError(401, 'unauthorized', 'Duplicate Authorization headers are not allowed');
+      if (countHeader(request, 'cf-access-jwt-assertion') > 1) {
+        throw new HttpError(401, 'unauthorized', 'Duplicate Access assertions are not allowed');
       }
-      const principal = await authenticate(request);
+      const principal = await authenticate(request, connectionId);
       if (!limits.admitConnection(`${principal.subject}\u0000${principal.connectionId}`)) {
         throw rateLimited();
       }
@@ -163,6 +160,9 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
       try {
         access = await options.resolveAccess(principal);
       } catch (error) {
+        // An unknown, inactive or foreign connection reads exactly like a path that does not
+        // exist, so a connection ID reveals nothing.
+        if (error instanceof AccessDeniedError && connectionId !== undefined) throw notFound();
         if (error instanceof AccessDeniedError) {
           throw new HttpError(403, 'forbidden', 'This account is not admitted to Lore');
         }
@@ -194,38 +194,28 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
           ? error
           : new HttpError(500, 'internal_error', 'MCP request could not be completed', true);
       if (failure.status === 429) response.setHeader('retry-after', '60');
-      if (failure.status === 401) {
-        response.setHeader('www-authenticate', `Bearer resource_metadata="${metadataUrl}"`);
-      }
       sendError(response, failure);
     }
   }
 
   /**
-   * Verifies the bearer within the request budgets: a failed verification counts against the
-   * client address, so unauthenticated traffic cannot spend an authenticated connection's budget.
+   * Verifies the Access assertion within the request budgets: a failed verification counts
+   * against the client address, so unauthenticated traffic cannot spend a connection's budget.
    */
-  async function authenticate(request: IncomingMessage): Promise<GatePrincipal> {
+  async function authenticate(
+    request: IncomingMessage,
+    connectionId: string | undefined,
+  ): Promise<AuthenticatedPrincipal> {
     const address = request.socket.remoteAddress ?? 'unknown';
-    const rawAssertion = request.headers['cf-access-jwt-assertion'];
-    const assertion = typeof rawAssertion === 'string' ? rawAssertion : undefined;
-    const credential =
-      options.authenticateAssertion === undefined
-        ? /^Bearer (\S+)$/iu.exec(request.headers.authorization ?? '')?.[1]
-        : assertion;
-    if (!limits.admitCredential(address, credential)) throw rateLimited();
+    const raw = request.headers['cf-access-jwt-assertion'];
+    const assertion = typeof raw === 'string' ? raw : undefined;
+    if (!limits.admitCredential(address, assertion)) throw rateLimited();
     try {
-      const principal =
-        options.authenticateAssertion === undefined
-          ? await options.verifier.authenticate(request.headers.authorization)
-          : await options.authenticateAssertion(assertion);
-      if (credential !== undefined) limits.recordVerified(credential);
+      const principal = await options.authenticateAssertion(assertion, connectionId);
+      if (assertion !== undefined) limits.recordVerified(assertion);
       return principal;
     } catch (error) {
-      if (
-        (error instanceof GateVerificationError || error instanceof AccessVerificationError) &&
-        error.status === 503
-      ) {
+      if (error instanceof AccessVerificationError && error.status === 503) {
         throw new HttpError(503, 'authorization_unavailable', 'Authorization is unavailable', true);
       }
       if (error instanceof AccessVerificationError && error.status === 403) {
@@ -235,6 +225,10 @@ export function createRequestListener(options: ApiServerOptions): RequestListene
       throw new HttpError(401, 'unauthorized', 'A valid access credential is required');
     }
   }
+}
+
+function notFound(): HttpError {
+  return new HttpError(404, 'not_found', 'Not found');
 }
 
 function rateLimited(): HttpError {

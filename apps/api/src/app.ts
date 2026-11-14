@@ -3,6 +3,7 @@ import type { RequestListener } from 'node:http';
 import {
   createMemoryRecordsRuntime,
   ObservationService,
+  SHARED_AI_CONNECTION,
   type EmbeddingProvider,
   type RecallAssessor,
   type MemoryRecordsRuntime,
@@ -11,7 +12,6 @@ import type { ApiConfig } from './config.js';
 import { createEmbeddingProvider } from './embeddings.js';
 import { VertexRecallAssessor } from './recall-assessment.js';
 import { createAccessVerifier } from './access.js';
-import { createGateVerifier } from './gate.js';
 import { createRequestListener } from './server.js';
 
 export interface ApiApp {
@@ -24,11 +24,10 @@ export interface ApiAppOverrides {
   readonly embeddings?: EmbeddingProvider;
   readonly recallAssessor?: RecallAssessor;
   readonly accessKeys?: JWTVerifyGetKey;
-  readonly fetch?: typeof globalThis.fetch;
   readonly log?: (event: Readonly<Record<string, unknown>>) => void;
 }
 
-/** Wires the Firestore runtime, the memory service, Gate verification and the HTTP listener. */
+/** Wires the Firestore runtime, the memory service, Access verification and the HTTP listener. */
 export function createApiApp(config: ApiConfig, overrides: ApiAppOverrides = {}): ApiApp {
   const log = overrides.log ?? ((event) => console.log(JSON.stringify(event)));
   const runtime = createMemoryRecordsRuntime({
@@ -50,50 +49,22 @@ export function createApiApp(config: ApiConfig, overrides: ApiAppOverrides = {})
     log,
   });
   service.startMaintenance();
-  const accessVerifier =
-    config.access === undefined
-      ? undefined
-      : createAccessVerifier(config.access, overrides.accessKeys);
-  const verifier =
-    config.access !== undefined
-      ? {
-          verifyToken: async () => {
-            throw new Error('Legacy credentials disabled');
-          },
-          authenticate: async () => {
-            throw new Error('Legacy credentials disabled');
-          },
-        }
-      : createGateVerifier(
-          {
-            issuer: config.gateIssuer,
-            audience: config.mcpResourceUrl,
-            clientId: config.gateClientId,
-            clientSecret: config.gateClientSecret,
-            ...(config.allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
-          },
-          overrides.fetch === undefined ? {} : { fetch: overrides.fetch },
-        );
+  const accessVerifier = createAccessVerifier(config.access, overrides.accessKeys);
   const listener = createRequestListener({
     mcpResourceUrl: config.mcpResourceUrl,
-    gateIssuer: config.gateIssuer,
     mcpAllowedHosts: config.mcpAllowedHosts,
-    verifier,
-    ...(config.access === undefined || accessVerifier === undefined
-      ? {}
-      : {
-          authenticateAssertion: async (assertion: string | undefined) => {
-            await accessVerifier.authenticate(assertion);
-            // The mapping selects an existing owner admission. No client identity or
-            // admission coordinate is accepted from the request or JWT payload.
-            return {
-              issuer: config.access!.admissionIssuer,
-              subject: config.access!.admissionSubject,
-              connectionId: 'shared-ai',
-              clientId: 'shared-ai',
-            };
-          },
-        }),
+    authenticateAssertion: async (assertion, connectionId) => {
+      await accessVerifier.authenticate(assertion);
+      // The mapping selects an existing owner admission. No admission coordinate is accepted
+      // from the request or JWT payload; the path selects only which of the admission's
+      // connections is used, and an unprovisioned connection is denied by MemoryAccess.
+      return {
+        issuer: config.access.admissionIssuer,
+        subject: config.access.admissionSubject,
+        connectionId: connectionId ?? SHARED_AI_CONNECTION,
+        clientId: SHARED_AI_CONNECTION,
+      };
+    },
     resolveAccess: (principal) => runtime.access.resolve(principal),
     service,
     ready: () => runtime.checkReady(),

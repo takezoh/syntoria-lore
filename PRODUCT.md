@@ -35,7 +35,7 @@ The authenticated connection and controlled approval policy determine authority.
 
 Automatic approval records that the policy approved the exact change; it does not establish that a person reviewed it. A lower-authority observation cannot retract a higher-authority one. An AI recommendation is not a user decision merely because it was saved.
 
-Access mode maps authorized clients to one shared AI principal. The stored writer then identifies that shared principal, not the individual client product. The legacy Gate path and test configurations can have different connection identities; their results must not be generalized to Access mode.
+Clients of the default connection share one AI principal, so the stored writer identifies that shared principal, not the individual client product. A further connection that the operator provisions has its own principal and its own workspace grant; the path selects it, so it separates what each configured client can see but does not authenticate the client itself.
 
 A source link and a reader's report about that source help explain a claim. They do not independently verify it. Lore does not fetch originals or continuously check whether they changed.
 

@@ -9,6 +9,7 @@ import {
   type Transaction,
 } from '@google-cloud/firestore';
 import { createFirestoreClient } from './firestore-client.js';
+import { labelVisible, storedLabel } from './labels.js';
 import {
   hasNameOrTermMatch,
   MAX_SEMANTIC_ONLY_BESIDE_MATCHES,
@@ -96,6 +97,8 @@ export interface ChangeFeedEntry {
   readonly recordIds: readonly string[];
   readonly revisionNumbers: readonly number[];
   readonly compartmentIds: readonly string[];
+  /** The observation's label (ADR 0012); absent on entries written before labels existed. */
+  readonly label?: readonly string[];
 }
 
 export interface ChangeFeedPage {
@@ -273,7 +276,9 @@ export class MemoryRepositoryError extends Error {
       | 'conflict'
       | 'idempotency_conflict'
       | 'resync_required'
-      | 'not_found',
+      | 'not_found'
+      | 'project_conflict'
+      | 'project_in_use',
     message: string,
   ) {
     super(message);
@@ -3443,7 +3448,13 @@ export class FirestoreMemoryRecordRepository {
       const entries: ChangeFeedEntry[] = [];
       for (const document of selected) {
         const entry = document.data() as ChangeFeedEntry;
-        if (!containsOnly(entry.compartmentIds, actor.compartmentAllowance)) continue;
+        // Observation entries carry a label, and one written before labels existed reads as the
+        // Inbox; record entries keep their compartments.
+        const entryLabel =
+          entry.operation === 'observe'
+            ? storedLabel(entry.label, entry.compartmentIds)
+            : entry.compartmentIds;
+        if (!labelVisible(entryLabel, actor.compartmentAllowance)) continue;
         if (entry.operation === 'deletion' || entry.recordIds.length === 0) {
           entries.push(entry);
           continue;
@@ -3464,7 +3475,10 @@ export class FirestoreMemoryRecordRepository {
                 observation.exists &&
                 !suppression.exists &&
                 Array.isArray(compartments) &&
-                containsOnly(compartments as string[], actor.compartmentAllowance)
+                labelVisible(
+                  storedLabel(observation.get('label'), compartments),
+                  actor.compartmentAllowance,
+                )
               );
             }),
           );

@@ -44,6 +44,7 @@ export type MemoryServiceErrorCode =
   | 'resync_required'
   | 'stale_authorization'
   | 'too_large'
+  | 'project_in_use'
   | 'unavailable';
 
 /** A stable, client-facing error. Messages never name records outside the caller's view. */
@@ -260,7 +261,7 @@ type Content = Pick<
 /**
  * The memory operations a connected AI client can request. Adapters validate input shape and
  * call this service; authority comes only from the {@link ConnectionAccess} that the access
- * module issued for a verified Gate principal and from the admission's approval policy.
+ * module issued for a verified principal and from the admission's approval policy.
  */
 export class MemoryService {
   private readonly repository: FirestoreMemoryRecordRepository;

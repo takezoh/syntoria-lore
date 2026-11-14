@@ -12,8 +12,11 @@ import {
   observationSourceKey,
   type FirestoreObservationLedger,
   type LinkKind,
+  type ProjectChange,
+  type ProjectView,
   type SourceReport,
   type TopicResult,
+  type WorkspaceProjects,
 } from './firestore-observation-ledger.js';
 import {
   MemoryRepositoryError,
@@ -730,6 +733,26 @@ export class ObservationService {
   }
 
   /** Records what the caller found when it opened a source of an observation. */
+  /** The granted workspaces with their project hierarchies. */
+  async listProjects(access: ConnectionAccess): Promise<{
+    readonly workspaces: readonly WorkspaceProjects[];
+  }> {
+    return this.run(access, async () => ({
+      workspaces: await this.ledger.listProjects(access.actor, access.scopeId),
+    }));
+  }
+
+  /**
+   * Creates, updates, moves or deletes a project. Projects classify observations; they disclose
+   * nothing, so a change needs no approval and is recorded in the access history.
+   */
+  async changeProject(
+    access: ConnectionAccess,
+    change: ProjectChange,
+  ): Promise<{ readonly project: ProjectView | null; readonly revision: number }> {
+    return this.run(access, () => this.ledger.changeProject(access.actor, access.scopeId, change));
+  }
+
   async reportSource(
     access: ConnectionAccess,
     input: {
@@ -1027,7 +1050,7 @@ export class ObservationService {
             topicKey: observation.topicKey,
             nature: observation.nature,
             at: observation.effectiveAt ?? observation.recordedAt,
-            compartmentIds: observation.compartmentIds,
+            label: observation.label,
             embedding: await this.embeddings.embed(text),
           });
           indexed += 1;
@@ -1110,6 +1133,11 @@ export class ObservationService {
         return new MemoryServiceError('invalid_input', error.message);
       case 'change_set_too_large':
         return new MemoryServiceError('too_large', 'The request is too large');
+      case 'project_conflict':
+        // These messages describe the requested hierarchy within a granted workspace.
+        return new MemoryServiceError('conflict', error.message);
+      case 'project_in_use':
+        return new MemoryServiceError('project_in_use', error.message);
       default:
         return new MemoryServiceError(
           'forbidden',

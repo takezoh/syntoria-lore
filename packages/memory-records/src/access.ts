@@ -6,18 +6,35 @@ import {
   type FirestoreMemoryRecordRepository,
   type VerifiedActorCapability,
 } from './firestore-repository.js';
+import { ALL_WORKSPACES, INBOX } from './labels.js';
 
-/** Admissions, one per Gate subject, keyed by {@link admissionDocumentId}. */
+/** Admissions, one per admitted subject, keyed by {@link admissionDocumentId}. */
 export const MEMORY_ADMISSIONS_COLLECTION = 'memoryAdmissions';
 
 /** The approval policy that lets a protected change apply at once with `policy` provenance. */
 export const AUTOMATIC_APPROVAL_POLICY = 'automatic';
 
-const WORKER_PRINCIPAL_ID = 'worker:lore-api';
-const WORKER_CONNECTION_ID = 'lore-api';
+export const WORKER_PRINCIPAL_ID = 'worker:lore-api';
 
-/** A principal whose Gate token was introspected for this resource. */
-export interface GatePrincipal {
+/**
+ * The allowance of the default connection and the worker (ADR 0012): every workspace, including
+ * ones created later, and the Inbox. Shared observations need no grant.
+ */
+export const FULL_ALLOWANCE: readonly string[] = Object.freeze([INBOX, ALL_WORKSPACES].sort());
+
+/**
+ * Further connections are opaque: `con_` and 32 lower-case hexadecimal digits. Their
+ * authorization documents are written only by the operator tool; a request for one that was
+ * never provisioned is denied, never created.
+ */
+export const CONNECTION_ID = /^con_[a-f0-9]{32}$/u;
+export const WORKER_CONNECTION_ID = 'lore-api';
+
+/**
+ * A verified principal: the existing admission's issuer and subject, which the service maps an
+ * authenticated Access assertion to, and the connection the request uses.
+ */
+export interface AuthenticatedPrincipal {
   readonly issuer: string;
   readonly subject: string;
   readonly connectionId: string;
@@ -25,7 +42,7 @@ export interface GatePrincipal {
 }
 
 /**
- * What an admitted Gate connection may do. Issued only by {@link MemoryAccess.resolve}; the other
+ * What an admitted connection may do. Issued only by {@link MemoryAccess.resolve}; the other
  * access methods refuse an object they did not issue.
  */
 export interface ConnectionAccess {
@@ -34,7 +51,7 @@ export interface ConnectionAccess {
   readonly approvalPolicy: string;
   /** The connection's own actor: it writes AI proposals and reads within its allowance. */
   readonly actor: VerifiedActorCapability;
-  /** The stable pseudonymous key of the admitted Gate subject. */
+  /** The stable pseudonymous key of the admitted subject. */
   readonly subjectKey: string;
   /** The principal that holds the person's authority when it acts through this connection. */
   readonly personPrincipalId: string;
@@ -75,13 +92,31 @@ function isDerivedIdentifier(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z]+_[a-f0-9]{16,64}$/u.test(value);
 }
 
-/** The admission document ID for one Gate subject. */
+/** The admission document ID for one admitted subject. */
 export function admissionDocumentId(issuer: string, subject: string): string {
   return sha256('lore-admission-v1', issuer, subject);
 }
 
-/** Gate identifiers are opaque; any value that is not a short plain token is stored as a digest. */
-function gateKey(value: string): string {
+/**
+ * The principal IDs of one connection of an admitted subject. The default connection uses the
+ * connection ID the authenticated request carries (`shared-ai` in Access mode); a further
+ * connection uses its own `con_…` ID.
+ */
+export function connectionPrincipalIds(
+  issuer: string,
+  subject: string,
+  connectionId: string,
+): { readonly connection: string; readonly person: string } {
+  const key = sha256('lore-connection-v1', issuer, subject, connectionId);
+  return { connection: `connection:${key}`, person: `person:${key}` };
+}
+
+/**
+ * Connection and client identifiers are stored as given when they are short plain tokens, and as
+ * a digest otherwise. The stored fields keep their earlier names, `connectionId` and
+ * `gateClientId`.
+ */
+export function gateKey(value: string): string {
   return /^[A-Za-z0-9._:@-]{1,128}$/u.test(value)
     ? value
     : `sha256:${sha256('lore-gate-id-v1', value)}`;
@@ -118,8 +153,11 @@ interface AuthorizationTemplate {
   readonly actorKind: VerifiedActorCapability['actorKind'];
   readonly connectionId: string;
   readonly gateClientId: string;
-  /** The allowance a new document starts with; an existing document is never changed here. */
-  readonly initialAllowance: readonly string[];
+  /**
+   * The allowance a missing document is created with, or `null` when a missing document denies
+   * access. An existing document is never changed here.
+   */
+  readonly initialAllowance: readonly string[] | null;
 }
 
 interface StoredAuthorization {
@@ -161,7 +199,7 @@ function sameSet(left: readonly string[], right: readonly string[]): boolean {
 
 /**
  * The one place that turns verified identity into a {@link VerifiedActorCapability}. Callers
- * pass only Gate-verified principals; every field of the capability comes from that principal
+ * pass only verified principals; every field of the capability comes from that principal
  * and the stored admission and authorization documents, never from request data.
  */
 function mintActor(fields: {
@@ -190,10 +228,11 @@ function mintActor(fields: {
 }
 
 /**
- * Admission and authorization for Gate connections. Admissions are created only by the operator
- * tool (`scripts/admit-subject.mjs`); this class reads them and never writes them. It creates a
- * missing authorization document with an empty allowance (General only) and never widens an
- * existing one.
+ * Admission and authorization for connections. Admissions are created only by the operator tool
+ * (`scripts/admit-subject.mjs`); this class reads them and never writes them. It creates a
+ * missing authorization document of the default connection or the worker with
+ * {@link FULL_ALLOWANCE} and never changes an existing one; only the operator tool
+ * (`scripts/manage-connections.mjs`) changes an allowance.
  */
 export class MemoryAccess {
   private readonly issued = new WeakSet<ConnectionAccess>();
@@ -203,15 +242,15 @@ export class MemoryAccess {
     private readonly repository: FirestoreMemoryRecordRepository,
   ) {}
 
-  /** Resolves a verified Gate principal to its admission and its connection actor. */
-  async resolve(principal: GatePrincipal): Promise<ConnectionAccess> {
+  /** Resolves a verified principal to its admission and its connection actor. */
+  async resolve(principal: AuthenticatedPrincipal): Promise<ConnectionAccess> {
     if (
       !textValue(principal.issuer) ||
       !textValue(principal.subject) ||
       !textValue(principal.connectionId) ||
       !textValue(principal.clientId)
     ) {
-      throw new AccessDeniedError('not_admitted', 'The Gate principal is incomplete');
+      throw new AccessDeniedError('not_admitted', 'The principal is incomplete');
     }
     const subjectKey = admissionDocumentId(principal.issuer, principal.subject);
     const admissionSnapshot = await this.firestore
@@ -220,10 +259,9 @@ export class MemoryAccess {
       .get();
     const admission = parseAdmission(admissionSnapshot.data(), principal.issuer);
     if (!admission) {
-      throw new AccessDeniedError('not_admitted', 'This Gate subject is not admitted to Lore');
+      throw new AccessDeniedError('not_admitted', 'This subject is not admitted to Lore');
     }
-    const connectionKey = sha256(
-      'lore-connection-v1',
+    const principals = connectionPrincipalIds(
       principal.issuer,
       principal.subject,
       principal.connectionId,
@@ -231,11 +269,13 @@ export class MemoryAccess {
     const template: AuthorizationTemplate = {
       tenantId: admission.tenantId,
       scopeId: admission.scopeId,
-      principalId: `connection:${connectionKey}`,
+      principalId: principals.connection,
       actorKind: 'connection',
       connectionId: gateKey(principal.connectionId),
       gateClientId: gateKey(principal.clientId),
-      initialAllowance: [],
+      // Only the default connection is provisioned on first use; a further connection must have
+      // been created by the operator tool, so an unknown one fails closed.
+      initialAllowance: CONNECTION_ID.test(principal.connectionId) ? null : FULL_ALLOWANCE,
     };
     const stored = await this.ensureAuthorization(template);
     const access: ConnectionAccess = Object.freeze({
@@ -244,7 +284,7 @@ export class MemoryAccess {
       approvalPolicy: admission.approvalPolicy,
       actor: mintActor({ ...template, stored }),
       subjectKey,
-      personPrincipalId: `person:${connectionKey}`,
+      personPrincipalId: principals.person,
     });
     this.issued.add(access);
     return access;
@@ -280,7 +320,9 @@ export class MemoryAccess {
       actorKind: 'person',
       connectionId: access.actor.connectionId,
       gateClientId: access.actor.gateClientId,
-      initialAllowance: access.actor.compartmentAllowance,
+      initialAllowance: CONNECTION_ID.test(access.actor.connectionId)
+        ? null
+        : access.actor.compartmentAllowance,
     };
     const stored = await this.ensureAuthorization(template);
     if (!sameSet(stored.compartmentAllowance, access.actor.compartmentAllowance)) {
@@ -312,7 +354,7 @@ export class MemoryAccess {
       actorKind: 'worker',
       connectionId: WORKER_CONNECTION_ID,
       gateClientId: WORKER_CONNECTION_ID,
-      initialAllowance: [],
+      initialAllowance: FULL_ALLOWANCE,
     };
     return mintActor({ ...template, stored: await this.ensureAuthorization(template) });
   }
@@ -326,6 +368,9 @@ export class MemoryAccess {
       .collection(MEMORY_AUTHORIZATION_COLLECTION)
       .doc(authorizationDocumentId(template.tenantId, template.principalId, template.scopeId));
     let data = (await ref.get()).data();
+    if (data === undefined && template.initialAllowance === null) {
+      throw new AccessDeniedError('not_admitted', 'This connection is not provisioned');
+    }
     if (data === undefined) {
       data = await this.firestore.runTransaction(async (transaction) => {
         const snapshot = await transaction.get(ref);
@@ -338,7 +383,7 @@ export class MemoryAccess {
           connectionId: template.connectionId,
           gateClientId: template.gateClientId,
           authorizationEpoch: 1,
-          compartmentAllowance: [...template.initialAllowance],
+          compartmentAllowance: [...(template.initialAllowance ?? [])],
           revokedSourceReferences: [],
           createdAt: new Date().toISOString(),
         };

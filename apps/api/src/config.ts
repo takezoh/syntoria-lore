@@ -9,7 +9,8 @@ export type EmbeddingConfig =
   | { readonly provider: 'deterministic' };
 
 export interface ApiConfig {
-  readonly access?: {
+  /** Cloudflare Access verification and the existing owner admission it maps to. */
+  readonly access: {
     readonly issuer: string;
     readonly audience: string;
     readonly ownerEmail: string;
@@ -21,14 +22,10 @@ export interface ApiConfig {
   readonly firestoreProjectId: string;
   readonly firestoreDatabaseId: string;
   readonly ledgerDatabaseId: string;
-  /** The Gate issuer origin. */
-  readonly gateIssuer: string;
-  /** The exact public `/mcp` URL; tokens must be introspected for this audience. */
+  /** The exact public `/mcp` URL; further connections are served under `/mcp/c/`. */
   readonly mcpResourceUrl: string;
   /** Hosts accepted in the Host header of `/mcp` requests. */
   readonly mcpAllowedHosts: readonly string[];
-  readonly gateClientId: string;
-  readonly gateClientSecret: string;
   readonly cursorKeyId: string;
   /** The active cursor signing key. */
   readonly cursorSecret: Buffer;
@@ -113,52 +110,32 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
     problems.push('LEDGER_DATABASE_ID must differ from FIRESTORE_DATABASE_ID');
   }
 
-  const accessEnabled = env['ACCESS_ISSUER'] !== undefined;
-  const access = accessEnabled
-    ? {
-        issuer: required('ACCESS_ISSUER'),
-        audience: required('ACCESS_AUDIENCE'),
-        ownerEmail: required('ACCESS_OWNER_EMAIL'),
-        admissionIssuer: required('OWNER_ADMISSION_ISSUER'),
-        admissionSubject: required('OWNER_ADMISSION_SUBJECT'),
-      }
-    : undefined;
-  if (access !== undefined) {
+  const access = {
+    issuer: required('ACCESS_ISSUER'),
+    audience: required('ACCESS_AUDIENCE'),
+    ownerEmail: required('ACCESS_OWNER_EMAIL'),
+    admissionIssuer: required('OWNER_ADMISSION_ISSUER'),
+    admissionSubject: required('OWNER_ADMISSION_SUBJECT'),
+  };
+  if (access.issuer !== '') {
     const url = parseUrl(access.issuer);
     if (url === null || url.protocol !== 'https:' || access.issuer !== url.origin) {
       problems.push('ACCESS_ISSUER must be an exact HTTPS origin');
     }
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(access.ownerEmail)) {
-      problems.push('ACCESS_OWNER_EMAIL must be an email address');
-    }
-    if (!/^[A-Za-z0-9_-]+$/u.test(access.audience)) {
-      problems.push('ACCESS_AUDIENCE must be one application audience');
-    }
-    if (
-      [access.admissionIssuer, access.admissionSubject].some(
-        (value) => value.length > 1024 || hasControlCharacter(value),
-      )
-    ) {
-      problems.push('Owner admission coordinates must be short printable values');
-    }
   }
-  const gateIssuer = access?.issuer ?? required('GATE_ISSUER');
-  if (gateIssuer !== '') {
-    const url = parseUrl(gateIssuer);
-    if (
-      url === null ||
-      !allowedScheme(url, allowLoopbackHttp) ||
-      url.username !== '' ||
-      url.password !== '' ||
-      url.pathname !== '/' ||
-      url.search !== '' ||
-      url.hash !== '' ||
-      gateIssuer !== url.origin
-    ) {
-      problems.push('GATE_ISSUER must be an HTTPS origin without a path or trailing slash');
-    }
+  if (access.ownerEmail !== '' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(access.ownerEmail)) {
+    problems.push('ACCESS_OWNER_EMAIL must be an email address');
   }
-
+  if (access.audience !== '' && !/^[A-Za-z0-9_-]+$/u.test(access.audience)) {
+    problems.push('ACCESS_AUDIENCE must be one application audience');
+  }
+  if (
+    [access.admissionIssuer, access.admissionSubject].some(
+      (value) => value.length > 1024 || hasControlCharacter(value),
+    )
+  ) {
+    problems.push('Owner admission coordinates must be short printable values');
+  }
   const mcpResourceUrl = required('MCP_RESOURCE_URL');
   let resourceHost = '';
   if (mcpResourceUrl !== '') {
@@ -188,17 +165,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
     extraHosts.some((value) => !/^[a-z0-9.-]+(:\d{1,5})?$|^\[[0-9a-f:]+\](:\d{1,5})?$/u.test(value))
   ) {
     problems.push('MCP_ALLOWED_HOSTS must be a comma-separated list of host[:port] values');
-  }
-
-  const gateClientId = accessEnabled ? '' : required('GATE_MCP_CLIENT_ID');
-  const gateClientSecret = accessEnabled ? '' : required('GATE_MCP_CLIENT_SECRET');
-  for (const [name, value] of [
-    ['GATE_MCP_CLIENT_ID', gateClientId],
-    ['GATE_MCP_CLIENT_SECRET', gateClientSecret],
-  ] as const) {
-    if (value !== '' && (value.length > 4096 || hasControlCharacter(value))) {
-      problems.push(`${name} must be printable and at most 4096 characters`);
-    }
   }
 
   const cursor = parseCursorKeys(env, problems);
@@ -238,16 +204,13 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): A
   }
   if (problems.length > 0) throw new ConfigError(problems);
   return {
-    ...(access === undefined ? {} : { access }),
+    access,
     port,
     firestoreProjectId,
     firestoreDatabaseId,
     ledgerDatabaseId,
-    gateIssuer,
     mcpResourceUrl,
     mcpAllowedHosts: [...new Set([resourceHost.toLowerCase(), ...extraHosts])],
-    gateClientId,
-    gateClientSecret,
     cursorKeyId: cursor.keyId,
     cursorSecret: cursor.secret,
     embedding,

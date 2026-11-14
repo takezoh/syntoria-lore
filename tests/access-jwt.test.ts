@@ -79,7 +79,7 @@ describe('Access owner authentication', () => {
     });
     await expect(unavailable.authenticate(await token())).rejects.toMatchObject({ status: 503 });
   });
-  it('loads Access mode without any Gate credential', () => {
+  it('loads the configuration from Access settings alone', () => {
     const loaded = loadConfig({
       NODE_ENV: 'production',
       FIRESTORE_PROJECT_ID: 'example-project',
@@ -97,7 +97,6 @@ describe('Access owner authentication', () => {
       VERTEX_LOCATION: 'asia-southeast1',
       EMBEDDING_MODEL: 'gemini-embedding-001',
     });
-    expect(loaded.access?.admissionSubject).toBe('existing-owner');
-    expect(loaded.gateClientSecret).toBe('');
+    expect(loaded.access.admissionSubject).toBe('existing-owner');
   });
 });

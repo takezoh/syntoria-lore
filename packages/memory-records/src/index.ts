@@ -480,13 +480,47 @@ export {
   AccessDeniedError,
   admissionDocumentId,
   AUTOMATIC_APPROVAL_POLICY,
+  connectionPrincipalIds,
+  FULL_ALLOWANCE,
   isAccessIdentifier,
   MEMORY_ADMISSIONS_COLLECTION,
   MemoryAccess,
   type AccessDeniedCode,
   type ConnectionAccess,
-  type GatePrincipal,
+  type AuthenticatedPrincipal,
 } from './access.js';
+export { createFirestoreClient, type FirestoreClientOptions } from './firestore-client.js';
+export {
+  MAX_PROJECT_DEPTH,
+  normalizeProjectName,
+  PROJECT_ID,
+  projectTextProblems,
+  ProjectTree,
+  type ProjectNode,
+} from './projects.js';
+export {
+  ALL_WORKSPACES,
+  INBOX,
+  labelForCompartments,
+  labelVisible,
+  storedLabel,
+  WORKSPACE_ID,
+} from './labels.js';
+export {
+  allowanceForGrant,
+  CONNECTION_ID,
+  connectionPath,
+  DEFAULT_CONNECTION,
+  normalizeWorkspaceName,
+  SHARED_AI_CONNECTION,
+  WorkspaceRegistry,
+  WorkspaceRegistryError,
+  type AdmissionCoordinates,
+  type ConnectionGrant,
+  type ConnectionView,
+  type WorkspaceRegistryErrorCode,
+  type WorkspaceView,
+} from './workspaces.js';
 export {
   createFirestoreDeletionLedger,
   FirestoreDeletionLedger,
@@ -712,6 +746,9 @@ export {
   observationSourceKey,
   type LinkKind,
   type ObservationIndexEntry,
+  type ProjectChange,
+  type ProjectView,
+  type WorkspaceProjects,
   type ObserveReceipt,
   type ObserveRequest,
   type SourceReport,

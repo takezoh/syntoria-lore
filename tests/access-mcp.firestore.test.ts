@@ -19,7 +19,6 @@ let app: ApiApp;
 let server: Server;
 let resource: URL;
 let pair: Awaited<ReturnType<typeof generateKeyPair>>;
-let gateCalls = 0;
 async function assertion(subject: string, email = ownerEmail) {
   return new SignJWT({ email })
     .setProtectedHeader({ alg: 'RS256', kid: 'local' })
@@ -80,10 +79,6 @@ beforeAll(async () => {
   });
   app = createApiApp(config, {
     accessKeys: createLocalJWKSet({ keys: [{ ...jwk, kid: 'local' }] }),
-    fetch: async () => {
-      gateCalls++;
-      throw new Error('No identity introspection allowed');
-    },
     log: () => undefined,
   });
   server.on('request', app.listener);
@@ -100,7 +95,8 @@ it('uses the existing admission and shared AI actor across independent Access su
   expect(access.structuredContent).toMatchObject({
     tenant_id: 'existing-tenant',
     scope_id: 'existing-scope',
-    compartment_allowance: [],
+    // The default connection reads every workspace and the Inbox (ADR 0012).
+    compartment_allowance: ['inbox', 'workspaces:all'],
     approval_policy: 'automatic',
   });
   expect((await second.callTool({ name: 'get_access', arguments: {} })).structuredContent).toEqual(
@@ -124,7 +120,6 @@ it('uses the existing admission and shared AI actor across independent Access su
     arguments: { observation_id: id },
   });
   expect(read.isError).not.toBe(true);
-  expect(gateCalls).toBe(0);
 }, 30000);
 it('rejects legacy bearers, forged gateway claims and another owner', async () => {
   for (const headers of [

@@ -10,10 +10,12 @@ function environment(overrides: Record<string, string | undefined> = {}) {
     FIRESTORE_PROJECT_ID: 'example-project',
     FIRESTORE_DATABASE_ID: 'lore-memory-records',
     LEDGER_DATABASE_ID: 'lore-deletion-ledger',
-    GATE_ISSUER: 'https://gate.example.com',
+    ACCESS_ISSUER: 'https://access.example.com',
+    ACCESS_AUDIENCE: 'synthetic-access-app',
+    ACCESS_OWNER_EMAIL: 'owner@example.com',
+    OWNER_ADMISSION_ISSUER: 'https://identity.example.com',
+    OWNER_ADMISSION_SUBJECT: 'existing-owner',
     MCP_RESOURCE_URL: 'https://lore.example.com/mcp',
-    GATE_MCP_CLIENT_ID: 'lore-mcp-resource',
-    GATE_MCP_CLIENT_SECRET: 'synthetic-resource-secret',
     CURSOR_HMAC_KEYS: `k2026a=${key(1)},k2026b=${key(2, 48)}`,
     CURSOR_HMAC_ACTIVE_KEY: 'k2026b',
     VERTEX_PROJECT_ID: 'example-project',
@@ -61,7 +63,13 @@ describe('API configuration', () => {
       firestoreProjectId: 'example-project',
       firestoreDatabaseId: 'lore-memory-records',
       ledgerDatabaseId: 'lore-deletion-ledger',
-      gateIssuer: 'https://gate.example.com',
+      access: {
+        issuer: 'https://access.example.com',
+        audience: 'synthetic-access-app',
+        ownerEmail: 'owner@example.com',
+        admissionIssuer: 'https://identity.example.com',
+        admissionSubject: 'existing-owner',
+      },
       mcpResourceUrl: 'https://lore.example.com/mcp',
       mcpAllowedHosts: ['lore.example.com'],
       cursorKeyId: 'k2026b',
@@ -95,7 +103,7 @@ describe('API configuration', () => {
   it('reports every missing value at once without echoing values', () => {
     let caught: unknown;
     try {
-      loadConfig({ NODE_ENV: 'production', GATE_MCP_CLIENT_SECRET: 'synthetic-secret-value' });
+      loadConfig({ NODE_ENV: 'production', OWNER_ADMISSION_SUBJECT: 'synthetic-secret-value' });
     } catch (error) {
       caught = error;
     }
@@ -106,9 +114,11 @@ describe('API configuration', () => {
         'FIRESTORE_PROJECT_ID is required',
         'FIRESTORE_DATABASE_ID is required',
         'LEDGER_DATABASE_ID is required',
-        'GATE_ISSUER is required',
+        'ACCESS_ISSUER is required',
+        'ACCESS_AUDIENCE is required',
+        'ACCESS_OWNER_EMAIL is required',
+        'OWNER_ADMISSION_ISSUER is required',
         'MCP_RESOURCE_URL is required',
-        'GATE_MCP_CLIENT_ID is required',
         'CURSOR_HMAC_KEYS and CURSOR_HMAC_ACTIVE_KEY are required',
         'VERTEX_PROJECT_ID is required',
         'VERTEX_LOCATION is required',
@@ -138,11 +148,17 @@ describe('API configuration', () => {
     }
   });
 
-  it('requires HTTPS Gate and resource URLs in production', () => {
-    expect(problems({ GATE_ISSUER: 'https://gate.example.com/' })).toEqual([
-      'GATE_ISSUER must be an HTTPS origin without a path or trailing slash',
+  it('requires an HTTPS Access issuer and resource URL in production', () => {
+    expect(problems({ ACCESS_ISSUER: 'https://access.example.com/' })).toEqual([
+      'ACCESS_ISSUER must be an exact HTTPS origin',
     ]);
-    expect(problems({ GATE_ISSUER: 'http://127.0.0.1:9000' })).toHaveLength(1);
+    expect(problems({ ACCESS_ISSUER: 'http://127.0.0.1:9000' })).toHaveLength(1);
+    expect(problems({ ACCESS_OWNER_EMAIL: 'owner' })).toEqual([
+      'ACCESS_OWNER_EMAIL must be an email address',
+    ]);
+    expect(problems({ ACCESS_AUDIENCE: 'two audiences' })).toEqual([
+      'ACCESS_AUDIENCE must be one application audience',
+    ]);
     expect(problems({ MCP_RESOURCE_URL: 'https://lore.example.com/api' })).toHaveLength(1);
     expect(problems({ MCP_RESOURCE_URL: 'https://lore.example.com/mcp?x=1' })).toHaveLength(1);
     expect(problems({ MCP_RESOURCE_URL: 'http://lore.example.com/mcp' })).toHaveLength(1);
@@ -156,7 +172,6 @@ describe('API configuration', () => {
       environment({
         NODE_ENV: 'test',
         ALLOW_LOOPBACK_HTTP: '1',
-        GATE_ISSUER: 'http://127.0.0.1:9000',
         MCP_RESOURCE_URL: 'http://127.0.0.1:9001/mcp',
         EMBEDDING_PROVIDER: 'deterministic',
         VERTEX_PROJECT_ID: undefined,
@@ -172,7 +187,7 @@ describe('API configuration', () => {
     expect(
       problems({
         NODE_ENV: 'test',
-        GATE_ISSUER: 'http://gate.example.com',
+        MCP_RESOURCE_URL: 'http://lore.example.com/mcp',
         ALLOW_LOOPBACK_HTTP: '1',
       }),
     ).toHaveLength(1);

@@ -2,8 +2,8 @@
 
 ## Access authentication
 
-Access mode is enabled by `ACCESS_ISSUER`, `ACCESS_AUDIENCE` and
-`ACCESS_OWNER_EMAIL`. The API independently verifies the RS256 assertion from
+Cloudflare Access is the only authentication: `ACCESS_ISSUER`, `ACCESS_AUDIENCE` and
+`ACCESS_OWNER_EMAIL` are required. The API independently verifies the RS256 assertion from
 `Cf-Access-Jwt-Assertion`: fixed issuer, exact application audience, expiry,
 issued-at, nonempty subject and owner email. Gateway user-info headers and the
 backend IAM `Authorization` header do not establish application identity.
@@ -11,18 +11,23 @@ backend IAM `Authorization` header do not establish application identity.
 `OWNER_ADMISSION_ISSUER` and `OWNER_ADMISSION_SUBJECT` select an existing admission.
 These are persistence coordinates, never claims copied from an Access token. The
 API reads that admission without rewriting its tenant, scope, policy or historical
-records. All admitted AI connections use one `shared-ai` actor. The stored
-`connectionId` and `gateClientId` fields retain their existing schema names but
-contain that shared group, rather than an individual AI identity. New shared
-permissions start with General only; existing grants are never unioned. Policy
-approval remains separate from AI proposal authority.
+records. AI clients of the default connection at `/mcp` share one `shared-ai`
+actor; a further connection at `/mcp/c/<id>` has its own actor, provisioned only by
+`scripts/manage-connections.mjs`, and a request for an unprovisioned, inactive or
+foreign connection returns the same `404`. The path selects a connection of the
+admission; it never adds a grant. The stored `connectionId` and `gateClientId` fields
+keep their earlier schema names. A missing
+authorization of the default actor or the worker is created with every workspace and the
+Inbox ([ADR 0012](docs/adr/0012-grant-workspaces-per-connection-and-classify-by-project.md));
+an existing one changes only through `scripts/manage-connections.mjs`, and grants are
+never unioned. Policy approval remains separate from AI proposal authority.
 
 Deploy behind an API Gateway that verifies the same Access JWT and invokes Cloud
 Run with a dedicated service account. Accept the backend hostname explicitly in
-`MCP_ALLOWED_HOSTS`; do not trust request-supplied forwarded hosts. Access owns MCP
-OAuth discovery in this mode, so the API does not advertise legacy Gate metadata.
-The old Gate configuration remains available for rollback and isolated regression
-fixtures; Access mode does not instantiate or call its verifier.
+`MCP_ALLOWED_HOSTS`; do not trust request-supplied forwarded hosts. The gateway and
+the Access application must cover `/mcp/c/*` as they cover `/mcp`. Access owns MCP
+OAuth discovery, so the API serves no protected-resource metadata. The earlier Gate
+introspection path was removed on 2026-11-14 and remains in Git history.
 
 ## Current state
 
@@ -30,7 +35,7 @@ Lore keeps a ledger of observations on Firestore, as [ADR 0010](docs/adr/0010-re
 
 The Memory Records model of [ADR 0007](docs/adr/0007-store-memories-as-firestore-memory-records.md) that preceded it is no longer served. Its repository, value model and recall code remain in `packages/memory-records` because the ledger extends the repository and converts the records it holds; its collections are read only by that conversion. The PostgreSQL implementation before it was removed on 2026-11-09 and remains in Git history; pages that describe it are marked historical.
 
-The ledger and the service were verified against the Firestore emulator with a fake Gate and deterministic embeddings. What was observed on the hosted service is in the dated [evaluation records](docs/eval/); nothing here claims hosted behaviour.
+The ledger and the service were verified against the Firestore emulator with locally signed Access assertions and deterministic embeddings. What was observed on the hosted service is in the dated [evaluation records](docs/eval/); nothing here claims hosted behaviour.
 
 ## Recall responsibility
 
@@ -71,16 +76,18 @@ An observation states something about named subjects: a `state` that holds until
 | `packages/memory-records/src/search-terms.ts` | Term derivation by script, name candidates of a query, selection of lookup terms and rarity-weighted term coverage |
 | `packages/memory-records/src/firestore-repository.ts` | The Memory Records repository the ledger extends: authorization checks, idempotent request pins, per-scope sequence, change feed with signed cursors, Forget, purge, restore checkpoint. Its record commits and recall are no longer reachable from the service |
 | `packages/memory-records/src/index.ts`, `derived-recall.ts`, `service.ts`, `capture.ts` | The Memory Records value model, recall, service and capture, kept for the conversion and for tests; not served |
-| `packages/memory-records/src/access.ts` | Reads admissions (`memoryAdmissions`, keyed by a digest of Gate issuer and subject), creates a missing connection, person or worker authorization with an empty allowance and never widens one, and is the only code that mints a verified actor capability. Applies the admission's approval policy: `automatic` records a `policy` approval for the exact request digest; any other policy returns `user_required` |
+| `packages/memory-records/src/access.ts` | Reads admissions (`memoryAdmissions`, keyed by a digest of the admission issuer and subject), creates a missing authorization of the default connection, its person or the worker with every workspace and the Inbox, denies a further connection whose authorization the operator tool did not write, never changes an existing one, and is the only code that mints a verified actor capability. Applies the admission's approval policy: `automatic` records a `policy` approval for the exact request digest; any other policy returns `user_required` |
 | `packages/memory-records/src/firestore-deletion-ledger.ts` | The deletion ledger on its own Firestore database: append-only entries and a head that moves in the same transaction |
 | `packages/memory-records/src/firestore-client.ts`, `runtime.ts` | Firestore client construction (Application Default Credentials, or a loopback emulator) and wiring of the two databases |
-| `apps/api` | Node.js 24 HTTP service: `/healthz`, `/readyz`, stateless Streamable HTTP MCP at `POST /mcp`, admission checks, body/rate limits, Access assertion or legacy Gate verification, the Vertex embedding provider and optional recall assessor. Legacy Gate mode also serves protected-resource metadata and introspects for the exact `MCP_RESOURCE_URL`; Access owns its OAuth discovery. Configuration is environment-only and fails fast |
+| `apps/api` | Node.js 24 HTTP service: `/healthz`, `/readyz`, stateless Streamable HTTP MCP at `POST /mcp` and `POST /mcp/c/<id>`, admission checks, body/rate limits, Access assertion verification, the Vertex embedding provider and optional recall assessor. Configuration is environment-only and fails fast |
+| `packages/memory-records/src/labels.ts`, `workspaces.ts` and `scripts/manage-connections.mjs` | Workspace labels and the one visibility rule; the registry of workspaces and connections and the operator tool that is the only path to change a grant ([ADR 0012](docs/adr/0012-grant-workspaces-per-connection-and-classify-by-project.md)) |
+| `packages/memory-records/src/projects.ts` | The pure rules of a workspace's project hierarchy: names unique under a parent, at most four levels, no cycles, paths computed from the current hierarchy. The ledger applies them in one transaction per change, refuses to delete a project that has children or observations, and records each change in the access history |
 | `scripts/admit-subject.mjs` | Operator tool that creates or reactivates one admission with the `automatic` policy; it refuses to move an existing admission to another tenant or scope |
 | `scripts/migrate-source-metadata.mjs` | Private, reviewed operator path for appending evidenced source metadata; its audit uses the credential-derived IAM identity and it is not exported through the API, service or runtime |
 
 Each admitted connection writes as its own principal, set by the server. The tier of an observation is derived from the write path: `person` when the approval policy grants the person's authority to a write that asks for it, `source` when it cites an original outside Lore, otherwise `inference`. Nothing waits for approval.
 
-Not built: the REST adapter, a durable external worker (indexing, purge and conversion use in-process maintenance; restore reconciliation runs before protected operations), person confirmation at Gate, a reviewed way to widen compartment allowances or revoke sources, an operator tool for writer suppression, and tracked deployment configuration.
+Not built: the REST adapter, a durable external worker (indexing, purge and conversion use in-process maintenance; restore reconciliation runs before protected operations), person confirmation of a protected change, a reviewed way to widen compartment allowances or revoke sources, an operator tool for writer suppression, and tracked deployment configuration.
 
 ## Correctness boundaries
 
@@ -88,17 +95,17 @@ Not built: the REST adapter, a durable external worker (indexing, purge and conv
 - **The present is derived, and the derivation is deterministic.** A topic's view is computed from its observations by rule, without a model, and gives the same result whatever the order of arrival. A rebuild must reproduce the stored view.
 - **Authority comes from the verified actor.** Writer and tier are set from the actor and the write path; a request field cannot set them. A lower tier does not replace or retract a state of a higher tier; the disagreement stays visible as an open conflict.
 - **Reads are bounded.** Every read is by key or a bounded query. Subjects are found through the alias table, topics by subject, and term and vector search return a bounded number of candidates; a term query that reaches its bound says that results are partial.
-- **Rights apply at read time.** Allowance, source rights, suppression and writer suppression are checked on every observation before it is returned, including those a stored view names; when a reader may not see everything that went into a view, the view is computed from what that reader may see. Firestore server clients bypass Security Rules, and a lint rule confines the Firestore client to the repository, the ledger, the client factory, the deletion ledger and the access module; there is no database-level backstop.
+- **Rights apply at read time.** Allowance, source rights, suppression and writer suppression are checked on every observation before it is returned, including those a stored view names; when a reader may not see everything that went into a view, the view is computed from what that reader may see. Firestore server clients bypass Security Rules, and a lint rule confines the Firestore client to the repository, the ledger, the client factory, the deletion ledger, the access module and the workspace registry; there is no database-level backstop.
 - **Forget denies first, purges later.** A Forget reports use stopped only after the independent ledger append is durable. Purge removes the observation, its index entry and its source reports and rebuilds the topic view. After a restore, a suppression named by the ledger hides an observation even when the restored document lacks its forgotten mark.
 - **Sources are references.** Lore stores identifiers, a link, the version seen and when it was read. It never fetches a source, so it reports what readers found, not whether a source is unchanged.
 - **Search is built in Lore.** Terms are derived by script; name and term matching and ranking run in the service over bounded candidates. Firestore Standard has no full-text search, and its vector index is flat; [ADR 0010](docs/adr/0010-record-observations-and-derive-the-current-state.md) accepts those limits.
 
 ## Runtime boundary
 
-The runtime uses separate named Firestore databases for memory and the deletion ledger. Deployment accounts, project coordinates, service URLs and IAM bindings remain in ignored private configuration. Access mode uses verified assertions and an existing owner admission; legacy Gate mode remains a separate configuration path. The repository's implementation does not establish which revision or configuration is currently hosted. Follow [operations](docs/operations.md) for release checks, monitoring and rollback. A durable external maintenance worker remains unimplemented.
+The runtime uses separate named Firestore databases for memory and the deletion ledger. Deployment accounts, project coordinates, service URLs and IAM bindings remain in ignored private configuration. The service uses verified Access assertions and an existing owner admission. The repository's implementation does not establish which revision or configuration is currently hosted. Follow [operations](docs/operations.md) for release checks, monitoring and rollback. A durable external maintenance worker remains unimplemented.
 
 Syntoria Weave is a separate service for current shared state. Lore has no shared storage or required API dependency on Weave.
 
 ## Verification boundary
 
-Unit tests check the value models, the service configuration and Gate token verification. The emulator suite checks the ledger through a real MCP client against a fake Gate, and the Memory Records repository it extends. The emulator does not enforce composite or vector indexes and does not show managed IAM, transaction contention, latency, cost, managed restore or search quality; deterministic embedding doubles do not measure recall quality. The indexes the queries need are declared in [firestore.indexes.json](firestore.indexes.json). The [development guide](docs/development.md) lists verification commands, [operations](docs/operations.md) covers configuration and recovery, and the [evaluation guide](docs/eval/README.md) separates dated observations from acceptance.
+Unit tests check the value models, the service configuration and Access assertion verification. The emulator suite checks the ledger through a real MCP client with locally signed Access assertions, the workspace registry and its operator tool, and the Memory Records repository it extends. The emulator does not enforce composite or vector indexes and does not show managed IAM, transaction contention, latency, cost, managed restore or search quality; deterministic embedding doubles do not measure recall quality. The indexes the queries need are declared in [firestore.indexes.json](firestore.indexes.json). The [development guide](docs/development.md) lists verification commands, [operations](docs/operations.md) covers configuration and recovery, and the [evaluation guide](docs/eval/README.md) separates dated observations from acceptance.

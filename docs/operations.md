@@ -1,6 +1,6 @@
 # Lore service operations
 
-This guide covers the current observation ledger and Remote MCP service. It replaces historical PostgreSQL and Gate cutover pages as the operating entry point. It describes procedures; it does not assert that the latest code is deployed or authorize a hosted change.
+This guide covers the current observation ledger and Remote MCP service. It replaces historical PostgreSQL and identity cutover pages as the operating entry point. It describes procedures; it does not assert that the latest code is deployed or authorize a hosted change.
 
 For client setup, everyday use and checking saved or recalled memories, use the [user guide](user-guide.md). This page is for service operators.
 
@@ -10,7 +10,7 @@ Keep actual projects, accounts, domains, URLs and resource identifiers in ignore
 
 The repository does not provide a complete current deployment pipeline. Use the deployment process owned by the target environment; record the release commit, previous revision, configured model, traffic change and rollback target privately. Pushing main is not evidence that a hosted deployment succeeded.
 
-Do not delete admissions or identity bindings, change their tenant/scope, rewrite memory data, or remove deletion-ledger data to clear an error. Admission changes use `scripts/admit-subject.mjs`; approval policies and permission changes need their reviewed operator path.
+Do not delete admissions or identity bindings, change their tenant/scope, rewrite memory data, or remove deletion-ledger data to clear an error. Admission changes use `scripts/admit-subject.mjs`; workspaces and connection grants use `scripts/manage-connections.mjs`; approval policies and other permission changes need their reviewed operator path.
 
 ## Configuration
 
@@ -20,9 +20,8 @@ Do not delete admissions or identity bindings, change their tenant/scope, rewrit
 | --- | --- |
 | Persistence | `FIRESTORE_PROJECT_ID`, `FIRESTORE_DATABASE_ID`, `LEDGER_DATABASE_ID`; memory and deletion databases must differ |
 | Cursor integrity | `CURSOR_HMAC_KEYS`, `CURSOR_HMAC_ACTIVE_KEY`; keep keys in secret configuration, not tracked files |
-| Access authentication | `ACCESS_ISSUER`, `ACCESS_AUDIENCE`, `ACCESS_OWNER_EMAIL`, `OWNER_ADMISSION_ISSUER`, `OWNER_ADMISSION_SUBJECT`; bind verified assertions to the existing admission |
+| Access authentication | Required: `ACCESS_ISSUER`, `ACCESS_AUDIENCE`, `ACCESS_OWNER_EMAIL`, `OWNER_ADMISSION_ISSUER`, `OWNER_ADMISSION_SUBJECT`; bind verified assertions to the existing admission. The earlier `GATE_*` settings are no longer read; remove them from the service configuration |
 | MCP endpoint | `MCP_RESOURCE_URL`, optional `MCP_ALLOWED_HOSTS`; accept only the intended public and backend hosts |
-| Legacy Gate mode | Without Access mode: `GATE_ISSUER`, `GATE_MCP_CLIENT_ID`, `GATE_MCP_CLIENT_SECRET`; do not mix identity modes as a repair shortcut |
 | Embeddings | `EMBEDDING_PROVIDER=vertex`, `VERTEX_PROJECT_ID`, `VERTEX_LOCATION`, `EMBEDDING_MODEL`, optional `EMBEDDING_DIMENSION` (default 768); model and dimension must match the intended index strategy |
 | Applicability assessment | Optional `RECALL_ASSESSMENT_MODEL`; uses the same Vertex project/location and credential mechanism; absent means disabled |
 | Local tests only | `FIRESTORE_EMULATOR_HOST` must be loopback; use demo- projects. Deterministic embeddings and `ALLOW_LOOPBACK_HTTP=1` are not production configuration |
@@ -38,6 +37,17 @@ Changing the embedding model or dimension is not the same operation as enabling 
 3. Compare baseline and assessment-enabled retrieval on synthetic cases with real embeddings. Review required evidence, irrelevant results, forbidden evidence, citations, effective-time interpretation and final answer use separately. [The evaluation guide](eval/README.md) lists the runners.
 4. Select explicit latency, provider-quota and cost limits for the environment. No accepted production budget or latency objective is established by the small-corpus evaluations.
 5. Preserve the current deployment configuration and revision as the rollback target. Keep assessment disabled until the enabled path has passed the environment's acceptance checks.
+
+## Workspaces and connection grants
+
+[ADR 0012](adr/0012-grant-workspaces-per-connection-and-classify-by-project.md) makes a workspace per company the boundary of what a connection reads, and the [memory workspaces design](design/memory-workspaces.md) defines it. `scripts/manage-connections.mjs` is the only path that creates workspaces or changes a grant. Build the packages first, then run it with Application Default Credentials and the admission's issuer and subject; pass real project, database and workspace names on the command line, never in tracked files.
+
+- `init` grants the default connection (`/mcp`) every workspace and the Inbox and lets the worker read every label. Run it once for an existing admission when the release that introduces workspaces is deployed: until then, the default connection and the worker keep their earlier empty allowance, and observations written before workspaces, which now read as Inbox items, are neither returned nor indexed.
+- `create-workspace` adds a workspace; all-workspace grants cover it at once.
+- `set-connection` and `deactivate-connection` change a grant. Each change increases the connection's epoch, so in-flight requests fail with stale authorization and change-feed cursors need a resync.
+- `show` lists workspaces and connections. Every change is recorded in the scope's `accessHistory` with the operator note.
+
+The service serves a further connection at `/mcp/c/<id>`, the path `set-connection` prints; an unprovisioned, inactive or foreign connection returns `404 not_found`. The API gateway and the Access application must cover `/mcp/c/*` before a client can use it; this repository does not establish that they do.
 
 ## Enable or disable applicability assessment
 

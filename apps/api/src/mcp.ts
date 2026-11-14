@@ -32,6 +32,14 @@ const idempotencyKey = z
   .describe(
     'A unique key for this request, such as a UUID. Retrying with the same key and input replays the result; reusing it for different input is an error.',
   );
+const workspaceId = z
+  .string()
+  .regex(/^wsp_[a-f0-9]{32}$/u)
+  .describe('A workspace ID (wsp_…) from get_access or list_projects');
+const projectId = z
+  .string()
+  .regex(/^prj_[a-f0-9]{32}$/u)
+  .describe('A project ID (prj_…) from list_projects');
 const observationId = z
   .string()
   .regex(/^obs_[a-f0-9]{32}$/u)
@@ -107,7 +115,9 @@ const observeInput = z
       .array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u))
       .max(20)
       .optional()
-      .describe("Compartment IDs within this connection's allowance; omit for General"),
+      .describe(
+        "The workspace ID (wsp_…) this belongs to, within this connection's allowance; omit to keep it in the Inbox",
+      ),
     retracts: observationId
       .optional()
       .describe('An observation of the same topic, or an event, that this one declares mistaken'),
@@ -195,7 +205,100 @@ export async function handleMcpRequest(
             const result = service.describeAccess(access);
             return summarize(
               result,
-              `Scope ${result.scope_id}; allowance ${result.compartment_allowance.length === 0 ? 'General only' : result.compartment_allowance.join(', ')}; approval policy ${result.approval_policy}.`,
+              `Scope ${result.scope_id}; allowance ${result.compartment_allowance.length === 0 ? 'Shared only' : result.compartment_allowance.join(', ')}; approval policy ${result.approval_policy}.`,
+            );
+          }),
+      );
+
+      server.registerTool(
+        'list_projects',
+        {
+          description:
+            'Lists the workspaces this connection may use, one per company or similar domain, and the project hierarchy of each (businesses and the work inside them) with descriptions and paths.',
+          inputSchema: z.object({}).strict(),
+          annotations: readOnly,
+        },
+        async () =>
+          run('list_projects', async () => {
+            const result = await service.listProjects(access);
+            const count = result.workspaces.reduce((sum, item) => sum + item.projects.length, 0);
+            return summarize(
+              result,
+              `${result.workspaces.length} workspaces with ${count} projects.`,
+            );
+          }),
+      );
+
+      server.registerTool(
+        'manage_project',
+        {
+          description:
+            'Creates, renames, describes, moves or deletes a project inside a workspace. Create one when a new business or line of work appears. A project has at most four levels and a name unique under its parent; a project with child projects or observations cannot be deleted.',
+          inputSchema: z
+            .object({
+              action: z.enum(['create', 'update', 'delete']),
+              workspace: workspaceId.optional().describe('For create: the workspace'),
+              project: projectId.optional().describe('For update and delete: the project'),
+              parent: projectId
+                .nullable()
+                .optional()
+                .describe(
+                  'For create: the parent project, or null for the top of the workspace. For update: the new parent, or null to move it to the top',
+                ),
+              name: text(80).optional(),
+              description: z.string().trim().max(500).optional(),
+            })
+            .strict(),
+          annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+        },
+        async (input) =>
+          run('manage_project', async () => {
+            const optional = {
+              ...(input.name === undefined ? {} : { name: input.name }),
+              ...(input.description === undefined ? {} : { description: input.description }),
+            };
+            let result;
+            if (input.action === 'create') {
+              if (input.workspace === undefined || input.name === undefined)
+                throw new MemoryServiceError('invalid_input', 'create needs workspace and name');
+              result = await service.changeProject(access, {
+                action: 'create',
+                workspaceId: input.workspace,
+                parentId: input.parent ?? null,
+                name: input.name,
+                ...optional,
+              });
+            } else {
+              if (input.project === undefined)
+                throw new MemoryServiceError('invalid_input', `${input.action} needs project`);
+              if (input.action === 'delete') {
+                result = await service.changeProject(access, {
+                  action: 'delete',
+                  projectId: input.project,
+                });
+              } else {
+                if (
+                  input.name === undefined &&
+                  input.description === undefined &&
+                  input.parent === undefined
+                )
+                  throw new MemoryServiceError(
+                    'invalid_input',
+                    'update needs name, description or parent',
+                  );
+                result = await service.changeProject(access, {
+                  action: 'update',
+                  projectId: input.project,
+                  ...optional,
+                  ...(input.parent === undefined ? {} : { parentId: input.parent }),
+                });
+              }
+            }
+            return summarize(
+              result,
+              result.project === null
+                ? 'Project deleted.'
+                : `Project ${result.project.path.join(' / ')} (${result.project.id}).`,
             );
           }),
       );

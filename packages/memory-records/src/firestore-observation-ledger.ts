@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   FieldPath,
   FieldValue,
@@ -10,7 +11,6 @@ import {
   MemoryRepositoryError,
   assertActor,
   assertWorkerActor,
-  containsOnly,
   digest,
   id,
   memoryForgetDigest,
@@ -23,6 +23,14 @@ import {
   type VerifiedActorCapability,
 } from './firestore-repository.js';
 import { createFirestoreClient } from './firestore-client.js';
+import { labelForCompartments, labelVisible, storedLabel, WORKSPACE_ID } from './labels.js';
+import {
+  normalizeProjectName,
+  PROJECT_ID,
+  projectTextProblems,
+  ProjectTree,
+  type ProjectNode,
+} from './projects.js';
 import { deriveAuthority, isMemoryRecord, type MemoryRecord } from './index.js';
 import {
   arrivalRelation,
@@ -85,7 +93,9 @@ export interface StoredArrival {
   readonly toObservationId: string | null;
 }
 
-interface StoredObservation extends Observation {
+interface StoredObservation extends Omit<Observation, 'label'> {
+  /** Absent on observations stored before labels existed; read through {@link labelOf}. */
+  readonly label?: readonly string[];
   /** Effective time when known, otherwise the recorded time; the order key of timelines. */
   readonly at: string;
   readonly inputDigest: string;
@@ -93,6 +103,25 @@ interface StoredObservation extends Observation {
   readonly arrival: StoredArrival | null;
   readonly suppressed?: boolean;
   readonly legacyRecordId?: string;
+}
+
+/** The current label of a stored observation (ADR 0012). */
+function labelOf(stored: Pick<StoredObservation, 'label' | 'compartmentIds'>): string[] {
+  return storedLabel(stored.label, stored.compartmentIds);
+}
+
+/** A stored observation with its current label filled in, usable wherever an observation is. */
+type LabeledObservation = StoredObservation & { readonly label: readonly string[] };
+
+function withLabel(stored: StoredObservation): LabeledObservation {
+  return { ...stored, label: labelOf(stored) };
+}
+
+/** The labels of several observations joined, as a topic or derived document carries them. */
+function joinedLabel(
+  members: readonly Pick<StoredObservation, 'label' | 'compartmentIds'>[],
+): string[] {
+  return [...new Set(members.flatMap(labelOf))].sort();
 }
 
 interface TopicDocument {
@@ -104,6 +133,8 @@ interface TopicDocument {
   readonly upcoming: readonly string[];
   readonly truncated: boolean;
   readonly compartmentIds: readonly string[];
+  /** The members' labels joined; absent on topics stored before labels existed. */
+  readonly label?: readonly string[];
   readonly lastRecordedAt: string;
 }
 
@@ -136,7 +167,8 @@ export interface ObservationIndexEntry {
   readonly topicKey: string | null;
   readonly nature: Observation['nature'];
   readonly at: string;
-  readonly compartmentIds: readonly string[];
+  /** The observation's current label; it decides who may find the entry. */
+  readonly label: readonly string[];
   readonly embedding: {
     readonly modelId: string;
     readonly dimension: number;
@@ -153,6 +185,95 @@ export interface SourceReport {
 }
 
 export type LinkKind = 'same-subject' | 'same-topic';
+
+/** A project as callers see it, with its path from the current hierarchy. */
+export interface ProjectView {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly parentId: string | null;
+  readonly name: string;
+  readonly description: string;
+  /** Names from the top of the workspace down to this project. */
+  readonly path: readonly string[];
+  readonly depth: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** A granted workspace with its project hierarchy. */
+export interface WorkspaceProjects {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  /** Increases with every change to the workspace's projects. */
+  readonly revision: number;
+  readonly projects: readonly ProjectView[];
+  /** True when the workspace holds more projects than one read returns. */
+  readonly truncated: boolean;
+}
+
+/** One change to a workspace's projects. `parentId: null` moves a project to the top. */
+export type ProjectChange =
+  | {
+      readonly action: 'create';
+      readonly workspaceId: string;
+      readonly parentId: string | null;
+      readonly name: string;
+      readonly description?: string;
+    }
+  | {
+      readonly action: 'update';
+      readonly projectId: string;
+      readonly name?: string;
+      readonly description?: string;
+      readonly parentId?: string | null;
+    }
+  | { readonly action: 'delete'; readonly projectId: string };
+
+/** Projects read for one workspace; a workspace beyond it is reported as truncated. */
+const MAX_PROJECTS_PER_WORKSPACE = 500;
+const MAX_WORKSPACES = 200;
+
+function parseProject(value: unknown): ProjectNode | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    typeof data['id'] !== 'string' ||
+    !PROJECT_ID.test(data['id']) ||
+    typeof data['workspaceId'] !== 'string' ||
+    !(data['parentId'] === null || typeof data['parentId'] === 'string') ||
+    typeof data['name'] !== 'string' ||
+    typeof data['normalizedName'] !== 'string' ||
+    typeof data['description'] !== 'string' ||
+    typeof data['createdAt'] !== 'string' ||
+    typeof data['updatedAt'] !== 'string'
+  )
+    return null;
+  return {
+    id: data['id'],
+    workspaceId: data['workspaceId'],
+    parentId: data['parentId'],
+    name: data['name'],
+    normalizedName: data['normalizedName'],
+    description: data['description'],
+    createdAt: data['createdAt'],
+    updatedAt: data['updatedAt'],
+  };
+}
+
+function projectView(tree: ProjectTree, node: ProjectNode): ProjectView {
+  return {
+    id: node.id,
+    workspaceId: node.workspaceId,
+    parentId: node.parentId,
+    name: node.name,
+    description: node.description,
+    path: tree.path(node.id),
+    depth: tree.depth(node.id),
+    createdAt: node.createdAt,
+    updatedAt: node.updatedAt,
+  };
+}
 
 interface ReadContext {
   readonly authorization: AuthorizationDocument;
@@ -224,6 +345,7 @@ function publicObservation(stored: StoredObservation): Observation {
     speaker: stored.speaker ?? null,
     sources: stored.sources.map((source) => ({ ...source, ids: { ...source.ids } })),
     compartmentIds: [...stored.compartmentIds],
+    label: labelOf(stored),
     retracts: stored.retracts ?? null,
   };
 }
@@ -260,10 +382,8 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     const problems = observationInputProblems(input);
     if (problems.length > 0)
       throw new MemoryRepositoryError('invalid_change_set', problems.join('; '));
-    if (
-      !input.compartmentIds.every(nonempty) ||
-      !containsOnly(input.compartmentIds, actor.compartmentAllowance)
-    )
+    const label = labelForCompartments(input.compartmentIds);
+    if (!input.compartmentIds.every(nonempty) || !labelVisible(label, actor.compartmentAllowance))
       throw new MemoryRepositoryError(
         'authorization_denied',
         "A compartment is outside the writer's allowance",
@@ -374,6 +494,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         speaker: input.speaker?.trim() ?? null,
         sources: input.sources.map((source) => ({ ...source, ids: { ...source.ids } })),
         compartmentIds: [...new Set(input.compartmentIds)].sort(),
+        label,
         retracts: input.retracts ?? null,
         at: input.effectiveAt ?? request.recordedAt,
         inputDigest: request.inputDigest,
@@ -389,7 +510,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         if (
           !isStoredObservation(stored) ||
           stored.suppressed === true ||
-          !containsOnly(stored.compartmentIds, actor.compartmentAllowance) ||
+          !labelVisible(labelOf(stored), actor.compartmentAllowance) ||
           stored.nature !== observation.nature ||
           (stored.topicKey ?? null) !== topicKey
         )
@@ -419,10 +540,11 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         const members = course.docs
           .map((document) => document.data() as unknown)
           .filter(isStoredObservation)
+          .map(withLabel)
           .filter((member) => member.suppressed !== true && !writerSuppressed(member));
-        const all = [...members, observation];
+        const all = [...members, withLabel(observation)];
         const computed = computeCourse(all, new Set(), request.recordedAt);
-        arrival = arrivalRelation(computed, observation);
+        arrival = arrivalRelation(computed, withLabel(observation));
         topicWrite = {
           ref: topicRef,
           data: {
@@ -434,6 +556,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
             upcoming: computed.upcoming,
             truncated: course.size >= MAX_TOPIC_OBSERVATIONS,
             compartmentIds: [...new Set(all.flatMap((member) => member.compartmentIds))].sort(),
+            label: joinedLabel(all),
             lastRecordedAt: request.recordedAt,
           },
         };
@@ -464,6 +587,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         recordIds: [observation.id],
         revisionNumbers: [],
         compartmentIds: observation.compartmentIds,
+        label: observation.label,
         createdAt: request.recordedAt,
       });
       transaction.set(this.indexQueueRef(actor, scopeId, observation.id), {
@@ -769,9 +893,9 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       await this.indexQueueRef(actor, scopeId, observationId).delete();
       return null;
     }
-    // An observation in a compartment the worker may not read stays queued and unindexed; it
-    // is still found through its subject and topic.
-    if (!containsOnly(stored.compartmentIds, actor.compartmentAllowance)) return null;
+    // An observation whose label the worker may not read stays queued and unindexed; it is
+    // still found through its subject and topic.
+    if (!labelVisible(labelOf(stored), actor.compartmentAllowance)) return null;
     return publicObservation(stored);
   }
 
@@ -786,7 +910,8 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       !OBSERVATION_ID.test(entry.observationId) ||
       entry.embedding.values.length !== entry.embedding.dimension ||
       entry.embedding.values.some((value) => !Number.isFinite(value)) ||
-      !containsOnly(entry.compartmentIds, actor.compartmentAllowance)
+      !entry.label.every(nonempty) ||
+      !labelVisible(entry.label, actor.compartmentAllowance)
     )
       throw new MemoryRepositoryError('invalid_change_set', 'Invalid observation index entry');
     await this.firestore.runTransaction(async (transaction) => {
@@ -804,7 +929,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         topicKey: entry.topicKey,
         nature: entry.nature,
         at: entry.at,
-        compartmentIds: [...entry.compartmentIds],
+        label: [...new Set(entry.label)].sort(),
         embeddingModelId: entry.embedding.modelId,
         embedding: FieldValue.vector([...entry.embedding.values]),
       });
@@ -834,8 +959,8 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       partial: snapshot.size >= MAX_TERM_CANDIDATES,
       entries: snapshot.docs
         .filter((document) =>
-          containsOnly(
-            (document.get('compartmentIds') as string[] | undefined) ?? [],
+          labelVisible(
+            storedLabel(document.get('label'), document.get('compartmentIds')),
             actor.compartmentAllowance,
           ),
         )
@@ -872,8 +997,8 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       .filter(
         (document) =>
           document.get('embeddingModelId') === embedding.modelId &&
-          containsOnly(
-            (document.get('compartmentIds') as string[] | undefined) ?? [],
+          labelVisible(
+            storedLabel(document.get('label'), document.get('compartmentIds')),
             actor.compartmentAllowance,
           ),
       )
@@ -886,6 +1011,265 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
   }
 
   // ---- Links, source reports, writer suppression ------------------------------------------
+
+  // ---- Projects -----------------------------------------------------------------------------
+
+  /** The granted workspaces and their project hierarchies. */
+  async listProjects(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+  ): Promise<WorkspaceProjects[]> {
+    await this.readContext(actor, scopeId);
+    const workspaces = await this.scopeRef(actor, scopeId)
+      .collection('workspaces')
+      .limit(MAX_WORKSPACES)
+      .get();
+    const granted = workspaces.docs.filter((document) =>
+      labelVisible([document.id], actor.compartmentAllowance),
+    );
+    return Promise.all(
+      granted.map(async (document) => {
+        const [projects, state] = await Promise.all([
+          this.projectQuery(actor, scopeId, document.id).get(),
+          this.projectStateRef(actor, scopeId, document.id).get(),
+        ]);
+        const nodes = projects.docs
+          .map((item) => parseProject(item.data()))
+          .filter((item) => item !== null);
+        const tree = new ProjectTree(nodes);
+        return {
+          id: document.id,
+          name: String(document.get('name')),
+          description: String(document.get('description') ?? ''),
+          revision: Number(state.get('revision') ?? 0),
+          projects: nodes
+            .map((node) => projectView(tree, node))
+            .sort((left, right) =>
+              left.path.join('\u0000').localeCompare(right.path.join('\u0000')),
+            ),
+          truncated: projects.size >= MAX_PROJECTS_PER_WORKSPACE,
+        };
+      }),
+    );
+  }
+
+  /**
+   * Creates, renames, describes, moves or deletes a project of a granted workspace. One
+   * transaction rechecks the actor's authorization, the hierarchy rules and, for a delete, that
+   * no observation's current project or project scope refers to it, then appends the access
+   * history and increases the workspace's project revision.
+   */
+  async changeProject(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    change: ProjectChange,
+  ): Promise<{ project: ProjectView | null; revision: number }> {
+    assertActor(actor, scopeId);
+    if (actor.actorKind === 'worker')
+      throw new MemoryRepositoryError('authorization_denied', 'A worker cannot change projects');
+    const textProblems =
+      change.action === 'delete'
+        ? []
+        : projectTextProblems({
+            ...(change.name === undefined ? {} : { name: change.name }),
+            ...(change.description === undefined ? {} : { description: change.description }),
+          });
+    if (textProblems.length > 0)
+      throw new MemoryRepositoryError('invalid_change_set', textProblems.join('; '));
+    await this.assertRestoreReady(actor, scopeId);
+    const scope = this.scopeRef(actor, scopeId);
+    const now = new Date().toISOString();
+    return this.firestore.runTransaction(async (transaction) => {
+      const auth = await transaction.get(this.authorizationRef(actor, scopeId));
+      this.assertCurrentAuthorization(actor, auth.data() as AuthorizationDocument | undefined);
+      let existing: ProjectNode | null = null;
+      let workspaceId: string;
+      if (change.action === 'create') {
+        workspaceId = change.workspaceId;
+      } else {
+        if (!PROJECT_ID.test(change.projectId))
+          throw new MemoryRepositoryError('not_found', 'Project was not found');
+        existing = parseProject(
+          (await transaction.get(scope.collection('projects').doc(change.projectId))).data(),
+        );
+        if (existing === null)
+          throw new MemoryRepositoryError('not_found', 'Project was not found');
+        workspaceId = existing.workspaceId;
+      }
+      // An unknown workspace and one outside the allowance read the same.
+      if (
+        !WORKSPACE_ID.test(workspaceId) ||
+        !labelVisible([workspaceId], actor.compartmentAllowance)
+      )
+        throw new MemoryRepositoryError(
+          change.action === 'create' ? 'invalid_change_set' : 'not_found',
+          change.action === 'create' ? 'Unknown workspace' : 'Project was not found',
+        );
+      const [workspace, projects, state] = await Promise.all([
+        transaction.get(scope.collection('workspaces').doc(workspaceId)),
+        transaction.get(this.projectQuery(actor, scopeId, workspaceId)),
+        transaction.get(this.projectStateRef(actor, scopeId, workspaceId)),
+      ]);
+      if (!workspace.exists)
+        throw new MemoryRepositoryError('invalid_change_set', 'Unknown workspace');
+      if (projects.size >= MAX_PROJECTS_PER_WORKSPACE)
+        throw new MemoryRepositoryError(
+          'invalid_change_set',
+          'The workspace has too many projects',
+        );
+      const tree = new ProjectTree(
+        projects.docs.map((item) => parseProject(item.data())).filter((item) => item !== null),
+      );
+      const revision = Number(state.get('revision') ?? 0) + 1;
+      let after: ProjectNode | null = null;
+
+      if (change.action === 'create') {
+        const name = change.name.trim();
+        const normalizedName = normalizeProjectName(name);
+        const parentId = change.parentId;
+        if (parentId !== null && !PROJECT_ID.test(parentId))
+          throw new MemoryRepositoryError(
+            'invalid_change_set',
+            'parent is not a project of this workspace',
+          );
+        const problems = tree.createProblems(parentId, normalizedName);
+        if (problems.length > 0) throw this.projectProblem(problems);
+        const nameRef = this.projectNameRef(actor, scopeId, workspaceId, parentId, normalizedName);
+        if ((await transaction.get(nameRef)).exists)
+          throw this.projectProblem(['a project with this name exists under the same parent']);
+        after = {
+          id: `prj_${randomBytes(16).toString('hex')}`,
+          workspaceId,
+          parentId,
+          name,
+          normalizedName,
+          description: change.description?.trim() ?? '',
+          createdAt: now,
+          updatedAt: now,
+        };
+        transaction.create(scope.collection('projects').doc(after.id), after);
+        transaction.create(nameRef, { projectId: after.id });
+      } else if (change.action === 'update') {
+        const current = existing!;
+        const name = change.name?.trim() ?? current.name;
+        const normalizedName = normalizeProjectName(name);
+        const parentId = change.parentId === undefined ? current.parentId : change.parentId;
+        if (parentId !== null && !PROJECT_ID.test(parentId))
+          throw new MemoryRepositoryError(
+            'invalid_change_set',
+            'parent is not a project of this workspace',
+          );
+        const problems = tree.updateProblems(current.id, parentId, normalizedName);
+        if (problems.length > 0) throw this.projectProblem(problems);
+        after = {
+          ...current,
+          name,
+          normalizedName,
+          parentId,
+          description: change.description?.trim() ?? current.description,
+          updatedAt: now,
+        };
+        if (parentId !== current.parentId || normalizedName !== current.normalizedName) {
+          const nameRef = this.projectNameRef(
+            actor,
+            scopeId,
+            workspaceId,
+            parentId,
+            normalizedName,
+          );
+          if ((await transaction.get(nameRef)).exists)
+            throw this.projectProblem(['a project with this name exists under the same parent']);
+          transaction.delete(
+            this.projectNameRef(
+              actor,
+              scopeId,
+              workspaceId,
+              current.parentId,
+              current.normalizedName,
+            ),
+          );
+          transaction.create(nameRef, { projectId: current.id });
+        }
+        transaction.set(scope.collection('projects').doc(current.id), after);
+      } else {
+        const current = existing!;
+        const [byProject, byScope] = await Promise.all([
+          transaction.get(
+            this.observationCollection(actor, scopeId)
+              .where('projectId', '==', current.id)
+              .limit(1),
+          ),
+          transaction.get(
+            this.observationCollection(actor, scopeId)
+              .where('scope.projectId', '==', current.id)
+              .limit(1),
+          ),
+        ]);
+        if (tree.childrenOf(current.id).length > 0 || !byProject.empty || !byScope.empty)
+          throw new MemoryRepositoryError(
+            'project_in_use',
+            'The project has child projects or observations; move or classify them first',
+          );
+        transaction.delete(scope.collection('projects').doc(current.id));
+        transaction.delete(
+          this.projectNameRef(
+            actor,
+            scopeId,
+            workspaceId,
+            current.parentId,
+            current.normalizedName,
+          ),
+        );
+      }
+      transaction.set(this.projectStateRef(actor, scopeId, workspaceId), { revision });
+      transaction.create(scope.collection('accessHistory').doc(), {
+        operation: `${change.action}-project`,
+        target: after?.id ?? existing!.id,
+        before: existing,
+        after,
+        writer: actor.principalId,
+        note: '',
+        at: now,
+      });
+      if (after === null) return { project: null, revision };
+      const updated = new ProjectTree([
+        ...tree.nodes.filter((node) => node.id !== after!.id),
+        after,
+      ]);
+      return { project: projectView(updated, after), revision };
+    });
+  }
+
+  private projectProblem(problems: readonly string[]): MemoryRepositoryError {
+    return new MemoryRepositoryError('project_conflict', problems.join('; '));
+  }
+
+  private projectQuery(actor: VerifiedActorCapability, scopeId: string, workspaceId: string) {
+    return this.scopeRef(actor, scopeId)
+      .collection('projects')
+      .where('workspaceId', '==', workspaceId)
+      .limit(MAX_PROJECTS_PER_WORKSPACE);
+  }
+
+  private projectStateRef(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    workspaceId: string,
+  ): DocumentReference {
+    return this.scopeRef(actor, scopeId).collection('projectState').doc(workspaceId);
+  }
+
+  private projectNameRef(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    workspaceId: string,
+    parentId: string | null,
+    normalizedName: string,
+  ): DocumentReference {
+    return this.scopeRef(actor, scopeId)
+      .collection('projectNames')
+      .doc(digest(['project-name', workspaceId, parentId ?? '', normalizedName]));
+  }
 
   /** Declares two subjects, or two topics, the same. The link can be revoked; nothing merges. */
   async link(
@@ -1119,7 +1503,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         suppression.exists ||
         !isStoredObservation(observation) ||
         observation.suppressed === true ||
-        !containsOnly(observation.compartmentIds, actor.compartmentAllowance)
+        !labelVisible(labelOf(observation), actor.compartmentAllowance)
       )
         throw new MemoryRepositoryError('not_found', 'Observation was not found');
       const nextSequence = Number(sequence.get('sequence') ?? 0) + 1;
@@ -1222,6 +1606,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       const members = course.docs
         .map((document) => document.data() as unknown)
         .filter(isStoredObservation)
+        .map(withLabel)
         .filter((member) => member.suppressed !== true && !writerSuppressed(member));
       const computed = computeCourse(members, new Set(), new Date().toISOString());
       const first = members[0];
@@ -1238,6 +1623,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         upcoming: computed.upcoming,
         truncated: course.size >= MAX_TOPIC_OBSERVATIONS,
         compartmentIds: [...new Set(members.flatMap((member) => member.compartmentIds))].sort(),
+        label: joinedLabel(members),
         lastRecordedAt: computed.view.lastRecordedAt,
       } satisfies TopicDocument);
     });
@@ -1382,6 +1768,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         speaker: record.attribution.speaker,
         sources,
         compartmentIds: [...record.compartmentIds].sort(),
+        label: labelForCompartments(record.compartmentIds),
         retracts: null,
         at: input.effectiveAt ?? recordedAt,
         inputDigest: digest(['legacy', record.id, record.revision.revision]),
@@ -1447,9 +1834,9 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       observation.tenantId === actor.tenantId &&
       observation.scopeId === scopeId &&
       observation.suppressed !== true &&
-      containsOnly(observation.compartmentIds, actor.compartmentAllowance) &&
+      labelVisible(labelOf(observation), actor.compartmentAllowance) &&
       !observation.sources.some((source) => revoked.has(observationSourceKey(source))) &&
-      !context.writerSuppressed(observation)
+      !context.writerSuppressed(withLabel(observation))
     );
   }
 
@@ -1555,7 +1942,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       options.at === undefined &&
       options.course !== true &&
       topic.upcoming.length === 0 &&
-      containsOnly(topic.compartmentIds, actor.compartmentAllowance)
+      labelVisible(storedLabel(topic.label, topic.compartmentIds), actor.compartmentAllowance)
     ) {
       const wanted = [
         stored.current.observationId,

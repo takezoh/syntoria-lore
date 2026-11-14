@@ -48,6 +48,7 @@ function state(
     speaker: null,
     sources: [],
     compartmentIds: [],
+    label: ['inbox'],
     retracts: options.retracts ?? null,
   };
 }
