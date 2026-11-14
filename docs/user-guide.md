@@ -14,6 +14,8 @@ This guide is for people using Lore through an AI client. Server configuration a
 
 Clients connected to the same mapped account can share its memories within their permissions. Installing instructions in one client does not install them in another. The current shared account mapping does not distinguish individual AI products as separate writers.
 
+The connection at `/mcp` reads every workspace and the Inbox. Connect only clients that may see all of your companies there. For a client that should see less, such as one your company provides, ask the operator for a further connection: it has its own URL, ending in `/mcp/c/` and an ID, and reads only the workspaces granted to it. Lore tells connections apart by that URL, not by signing in again, so give a client only the URL meant for it.
+
 ## Initial setup prompt
 
 After connecting Lore, paste this into the client:
@@ -49,6 +51,12 @@ empty search proves nothing was recorded.
 Record a changed state as a new observation. Retract an incorrect observation
 through the supported write path. Call forget only when I explicitly ask you
 to forget the identified material. Respect requests not to save information.
+
+Record each fact in the workspace and project it belongs to; when you cannot
+tell, leave it in the Inbox. Write a lesson that would help elsewhere as a
+separate, generalized observation without names or amounts, and name the facts
+it came from. Pass the project of the task as context, and use an item marked
+not usable there only as a lesson.
 ```
 
 A one-time chat message normally affects that conversation only. Persistence depends on the client's actual settings. Lore's MCP instructions explain its tools and expected behavior, but they cannot force a client to call them. Saving this block inside Lore is not a substitute: a client would have to recall it before it could follow it.
@@ -85,13 +93,37 @@ You can speak normally; the persistent instructions ask the AI to capture and re
 
 A change in circumstances and a mistaken earlier statement are different: record the new state for the former, retract the incorrect observation for the latter. Forget is for stopping retention and use, not the ordinary way to update a fact.
 
+## Companies, businesses and lessons
+
+Lore keeps memories per workspace, usually one per company, and inside it per project, such as a business and the work under it. Each memory also has a scope: how far it may travel.
+
+| Scope | Use it for | Where it is used as a fact |
+| --- | --- | --- |
+| Its project (the default) | Negotiation terms, customer names, amounts | That project and the projects below it |
+| An ancestor project or `workspace` | Rules that hold across a business or the whole company | Everywhere below that project, or the whole company |
+| `shared` | A lesson generalized without names or amounts | Every workspace; another company's connection does not learn where it came from |
+| Inbox | Anything whose company is not clear yet | Only where the Inbox is asked for |
+
+Examples of what to ask:
+
+| Goal | Example | Expected result |
+| --- | --- | --- |
+| Set up the place | “List my workspaces and projects. Create a project Retail under Northwind.” | `list_projects`, then `manage_project`; workspaces themselves are created by the operator |
+| Keep a fact in its business | “Record that the Quartz quote is 800,000 yen, for Northwind Retail.” | The observation shows workspace Northwind and project Retail |
+| Keep a lesson | “From that negotiation, keep a lesson for any company, without names or amounts.” | A separate observation with scope `shared` and `derived_from` pointing at the facts |
+| Work in one business | “We are working on Northwind Logistics. What should I know?” | Recall with that project as context; items not usable there are presented only as lessons |
+| Search across places | “Show what is usable in Cedar, plus anything still in the Inbox.” | A query combining `usable_in` and `workspace_id` null |
+| Sort the Inbox | “List the Inbox and file each item where it belongs.” | `list_observations`, then `classify`; content is unchanged and each move is recorded |
+
+Widening a scope and classifying are approved by your account's approval policy and recorded; with the default automatic policy nobody reviews them first. Lore keeps another company's connection away from a workspace it is not granted, but inside one connection it is the AI that keeps one business's facts out of another's work, guided by the place and scope each result carries. A generalized lesson that still contains a name or an amount travels as far as its scope.
+
 ## Working with source documents
 
 For example: “Read this Google Drive document through the connected Drive tools, then retain the decisions and constraints relevant to Cedar, with source links.” The client needs access to both Drive and Lore. Lore does not fetch Drive documents or ingest your conversations itself.
 
 Ask the AI to summarize useful points and attach references rather than copy whole documents. A saved reference does not mean the original will remain accessible or unchanged. When current status matters, have the client open the source again and distinguish the earlier observation from the latest evidence.
 
-A confidential label alone does not restrict access. Only submit material that belongs in the configured memory scope and permissions. If you need different access boundaries, ask the operator to configure them before saving that material.
+A confidential source label alone does not restrict access; the workspace does. Save company material into that company's workspace, and connect a client that must not see every company through a further connection rather than `/mcp`.
 
 ## When something does not work
 

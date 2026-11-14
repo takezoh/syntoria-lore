@@ -50,6 +50,20 @@ Changing the embedding model or dimension is not the same operation as enabling 
 
 The service serves a further connection at `/mcp/c/<id>`, the path `set-connection` prints; an unprovisioned, inactive or foreign connection returns `404 not_found`. The API gateway and the Access application must cover `/mcp/c/*` before a client can use it; this repository does not establish that they do.
 
+### Rolling out workspaces
+
+The release that introduces workspaces changes what existing connections see until `init` has run. Keep the previous revision and configuration as the rollback target, and keep real identifiers in private configuration.
+
+1. Remove the `GATE_*` settings from the service configuration; Access settings are required.
+2. Deploy the indexes in `firestore.indexes.json` to the memory database and wait until they are built.
+3. Deploy the revision through the environment's normal process and route traffic to it alone.
+4. With Application Default Credentials, run `node scripts/manage-connections.mjs init` with the memory project and database and the admission's `OWNER_ADMISSION_ISSUER` and `OWNER_ADMISSION_SUBJECT`. Without it, existing observations, now Inbox items, are neither returned nor indexed.
+5. Create workspaces with `create-workspace`. For a client that must see less, create a further connection with `set-connection --connection new`, cover `/mcp/c/*` in the API gateway and the Access application, and give that client only its URL.
+6. Check through a client: `get_access` lists the workspaces and the Inbox grant, a recall returns existing memories, an observation written into a workspace shows its place, `list_observations` lists the Inbox, and a further connection cannot read a workspace it is not granted.
+7. Watch `observation.label_keys` logs until the backfill finishes; the scope's `metadata/labelKeyBackfill` then reads `done`.
+
+A rollback to the previous revision keeps all data: it ignores the new fields and reads every observation as before, and a further connection's path is not served. Workspaces, grants, classifications and placements written meanwhile take effect again when this release returns. Record the hosted outcome in a dated evaluation record; local verification does not establish it.
+
 ## Enable or disable applicability assessment
 
 To enable, set `RECALL_ASSESSMENT_MODEL` to the selected, tested Vertex model ID in private service configuration, preserving other variables. Apply the configuration through the environment's normal revision/rollout process. The setting is read at process startup; it is not a per-request switch or hot reload.

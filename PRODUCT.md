@@ -57,9 +57,9 @@ When the operator enables applicability assessment, Lore can remove candidates j
 
 The client must initiate recall and apply results. Lore's MCP instructions guide that behavior but do not force it. A controlled client integration can retrieve before answering; it must still avoid treating similarity as proof of a current cause or of shared constraints.
 
-## Access, compartments and forgetting
+## Access, workspaces and forgetting
 
-The current API is Remote MCP. Operator admission and authenticated account mapping are prerequisites. General and explicitly allowed compartments limit what a connection can read and write. A confidentiality label is not an access grant. No self-service permission-management or source-revocation tool is currently provided.
+The current API is Remote MCP behind Cloudflare Access. Operator admission and authenticated account mapping are prerequisites. A workspace per company bounds what a connection reads and writes: `/mcp` reads every workspace and the Inbox, and a further connection at its own URL reads only the workspaces the operator granted it. Inside a workspace, projects and a scope classify memories and say where each may be used as a fact; they guide the AI and are not access control. Shared lessons reach every connection without revealing an ungranted origin. Connections are told apart by URL, so any client authenticated as the owner can use a URL it is given. A source's confidentiality label is not an access grant. Workspaces and grants change only through the operator tool; no self-service permission or source-revocation tool is provided.
 
 Forget denies further protected reads before purge removes material from the observation store and derived indexes. Other clients may retain previously delivered content. Backups can retain deleted data until their retention period ends; restore readiness depends on reconciling the independent deletion ledger before serving reads.
 

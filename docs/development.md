@@ -49,7 +49,7 @@ Local checks with deterministic doubles do not establish hosted behavior, extrac
 | Required behavior and measurable service targets | [Product requirements](design/requirements.md) |
 | Contextual recall outcomes, optional applicability assessment, retrieval contracts and client use | [Situational recall](design/situational-recall.md) and [evaluation fixtures](eval/fixtures/situational-recall.md) |
 | Observations, subjects, topics, trust, source references, reading, Forget and migration | [Observation ledger design](design/observation-ledger.md) |
-| Workspaces granted per connection, projects, scope, lessons, Inbox, queries and classification (accepted, partly implemented) | [Memory workspaces design](design/memory-workspaces.md) |
+| Workspaces granted per connection, projects, scope, lessons, Inbox, queries and classification (accepted; implemented and verified locally, hosted rollout pending) | [Memory workspaces design](design/memory-workspaces.md) and [local verification](eval/memory-workspaces-local-20261114.md) |
 | The earlier Memory Records contracts and the decision-model evaluation | [Memory Records design](design/memory-records.md) |
 | Components and correctness boundaries | [Architecture](../ARCHITECTURE.md) |
 | Observation value model, ledger, service operations and access; the Memory Records code they extend | `packages/memory-records/src/` |
