@@ -310,9 +310,9 @@ export class ObservationService {
         if (!(await this.ledger.isRestoreReady(worker, entry.access.scopeId))) {
           await this.ledger.reconcileRestore(worker, entry.access.scopeId);
         }
-        await this.afterWrite(entry.access);
+        const labelKeysDone = await this.afterWrite(entry.access);
         const pending = await this.ledger.hasPendingIndex(worker, entry.access.scopeId);
-        if (!pending) {
+        if (!pending && labelKeysDone) {
           this.maintenanceScopes.delete(key);
           continue;
         }
@@ -1384,7 +1384,9 @@ export class ObservationService {
   }
 
   /** Purges recorded Forgets, indexes waiting observations and converts old records. */
-  private async afterWrite(access: ConnectionAccess): Promise<void> {
+  /** Returns whether every earlier document has its label key. */
+  private async afterWrite(access: ConnectionAccess): Promise<boolean> {
+    let labelKeysDone = false;
     try {
       const worker = await this.access.worker(access);
       const scopeId = access.scopeId;
@@ -1395,6 +1397,9 @@ export class ObservationService {
       const converted = await this.ledger.convertLegacyRecords(worker, scopeId, 100);
       if (converted.converted > 0 || converted.skipped > 0)
         this.log({ event: 'observation.legacy_converted', ...converted });
+      const backfill = await this.ledger.backfillLabelKeys(worker, scopeId);
+      if (backfill.updated > 0) this.log({ event: 'observation.label_keys', ...backfill });
+      labelKeysDone = backfill.done;
       let indexed = 0;
       let failed = 0;
       for (const observationId of await this.ledger.listIndexQueue(
@@ -1433,6 +1438,7 @@ export class ObservationService {
         error: error instanceof MemoryRepositoryError ? error.code : 'unexpected',
       });
     }
+    return labelKeysDone;
   }
 
   private async run<T>(access: ConnectionAccess, operation: () => Promise<T>): Promise<T> {

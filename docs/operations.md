@@ -46,6 +46,7 @@ Changing the embedding model or dimension is not the same operation as enabling 
 - `create-workspace` adds a workspace; all-workspace grants cover it at once.
 - `set-connection` and `deactivate-connection` change a grant. Each change increases the connection's epoch, so in-flight requests fail with stale authorization and change-feed cursors need a resync.
 - `show` lists workspaces and connections. Every change is recorded in the scope's `accessHistory` with the operator note.
+- Deploy the composite and vector indexes in [`firestore.indexes.json`](../firestore.indexes.json) before the release that reads by label key. After it serves alone, the in-process worker writes the label key of earlier documents in bounded batches and records completion in the scope's `metadata/labelKeyBackfill`; until then reads filter a bounded number of documents, so a busy other workspace can hide results. Do not let a revision without label keys keep writing after the backfill has finished, or its documents will not be found by label.
 
 The service serves a further connection at `/mcp/c/<id>`, the path `set-connection` prints; an unprovisioned, inactive or foreign connection returns `404 not_found`. The API gateway and the Access application must cover `/mcp/c/*` before a client can use it; this repository does not establish that they do.
 

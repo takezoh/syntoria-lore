@@ -40,6 +40,79 @@
           }
         }
       ]
+    },
+    {
+      "collectionGroup": "observationIndex",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "labelKey",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "terms",
+          "arrayConfig": "CONTAINS"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "observationIndex",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "labelKey",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "embedding",
+          "vectorConfig": {
+            "dimension": 768,
+            "flat": {}
+          }
+        }
+      ]
+    },
+    {
+      "collectionGroup": "observations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subjectIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "labelKey",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "observations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "topicKey",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "labelKey",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "links",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "members",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "labelKey",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

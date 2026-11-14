@@ -16,6 +16,7 @@ import {
   id,
   memoryForgetDigest,
   nonempty,
+  stableJson,
   type AuthorizationDocument,
   type ChangeFeedEntry,
   type DeletionLedger,
@@ -25,7 +26,13 @@ import {
   type VerifiedActorCapability,
 } from './firestore-repository.js';
 import { createFirestoreClient } from './firestore-client.js';
-import { labelForCompartments, labelVisible, storedLabel, WORKSPACE_ID } from './labels.js';
+import {
+  ALL_WORKSPACES,
+  labelForCompartments,
+  labelVisible,
+  storedLabel,
+  WORKSPACE_ID,
+} from './labels.js';
 import {
   normalizeProjectName,
   PROJECT_ID,
@@ -70,6 +77,16 @@ const SUBJECT_ID = /^sub_[a-f0-9]{32}$/u;
 const MAX_TOPIC_OBSERVATIONS = 500;
 const MAX_IN = 30;
 const MAX_TERM_CANDIDATES = 200;
+/** Label keys queried at most; a reader with more keys reads and filters instead. */
+const MAX_PREFILTER_KEYS = 30;
+/** Collections whose documents carry a label key, in backfill order. */
+const LABEL_KEY_COLLECTIONS = [
+  'observations',
+  'observationIndex',
+  'links',
+  'observationIndexQueue',
+] as const;
+
 /** Documents one listing call reads, and per batch. */
 const LIST_SCAN_BUDGET = 500;
 const LIST_BATCH = 100;
@@ -695,6 +712,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       transaction.create(observationRef, {
         ...observation,
         arrival,
+        labelKey: labelKey(label),
         sourceKeys: observation.sources.map(observationSourceKey),
       });
       if (topicWrite !== null) transaction.set(topicWrite.ref, topicWrite.data);
@@ -722,6 +740,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       transaction.set(this.indexQueueRef(actor, scopeId, observation.id), {
         observationId: observation.id,
         queuedAt: request.recordedAt,
+        labelKey: labelKey(label),
       });
       return {
         observationId: observation.id,
@@ -853,6 +872,34 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     transaction?: Transaction,
     kind: LinkKind = 'same-subject',
   ): Promise<boolean> {
+    const keys = await this.visibleLabelKeys(actor, scopeId);
+    if (keys !== null) {
+      // Each query selects visible labels first, so observations of other workspaces naming the
+      // same member cannot push a visible one out.
+      const snapshots = await Promise.all(
+        chunks(keys, MAX_IN).map((chunk) => {
+          const query = this.observationCollection(actor, scopeId)
+            .where(
+              kind === 'same-subject' ? 'subjectIds' : 'topicKey',
+              kind === 'same-subject' ? 'array-contains' : '==',
+              member,
+            )
+            .where('labelKey', 'in', chunk)
+            .limit(MEMBER_VISIBILITY_SCAN);
+          return transaction === undefined ? query.get() : transaction.get(query);
+        }),
+      );
+      return snapshots.some((snapshot) =>
+        snapshot.docs.some((document) => {
+          const stored: unknown = document.data();
+          return (
+            isStoredObservation(stored) &&
+            stored.suppressed !== true &&
+            labelVisible(labelOf(stored), actor.compartmentAllowance)
+          );
+        }),
+      );
+    }
     const query = this.observationCollection(actor, scopeId)
       .where(
         kind === 'same-subject' ? 'subjectIds' : 'topicKey',
@@ -1127,7 +1174,122 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
   /** Whether an observation is still waiting to be indexed. */
   async hasPendingIndex(actor: VerifiedActorCapability, scopeId: string): Promise<boolean> {
     assertActor(actor, scopeId);
-    return !(await this.indexQueueCollection(actor, scopeId).limit(1).get()).empty;
+    const keys = await this.visibleLabelKeys(actor, scopeId);
+    // Only waiting observations the reader may see count, so the note reveals nothing else.
+    if (keys !== null) {
+      const found = await Promise.all(
+        chunks(keys, MAX_IN).map((chunk) =>
+          this.indexQueueCollection(actor, scopeId).where('labelKey', 'in', chunk).limit(1).get(),
+        ),
+      );
+      return found.some((snapshot) => !snapshot.empty);
+    }
+    if (actor.actorKind === 'worker')
+      return !(await this.indexQueueCollection(actor, scopeId).limit(1).get()).empty;
+    // Before label keys are complete, a reader learns of a waiting observation only from the
+    // observation itself.
+    const queued = await this.indexQueueCollection(actor, scopeId)
+      .limit(MEMBER_VISIBILITY_SCAN)
+      .get();
+    if (queued.empty) return false;
+    const documents = await this.firestore.getAll(
+      ...queued.docs.map((document) =>
+        this.observationRef(actor, scopeId, String(document.get('observationId'))),
+      ),
+    );
+    return documents.some((document) => {
+      const stored: unknown = document.data();
+      return (
+        isStoredObservation(stored) && labelVisible(labelOf(stored), actor.compartmentAllowance)
+      );
+    });
+  }
+
+  /**
+   * The label keys a reader may see, for queries that select by label before they read: Shared,
+   * each compartment of the allowance, and every workspace for an all-workspaces grant. `null`
+   * while earlier documents still lack a label key, or when there are too many keys to query;
+   * callers then read a bounded number of documents and filter them.
+   */
+  private async visibleLabelKeys(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+  ): Promise<string[] | null> {
+    const scope = this.scopeRef(actor, scopeId);
+    const state = await scope.collection('metadata').doc('labelKeyBackfill').get();
+    if (state.get('done') !== true) return null;
+    const keys = new Set(['shared']);
+    for (const entry of actor.compartmentAllowance) {
+      if (entry !== ALL_WORKSPACES) keys.add(entry);
+      else
+        for (const workspace of (await scope.collection('workspaces').limit(MAX_WORKSPACES).get())
+          .docs)
+          keys.add(workspace.id);
+    }
+    return keys.size > MAX_PREFILTER_KEYS ? null : [...keys];
+  }
+
+  /**
+   * Writes the label key of documents stored before label keys existed: observations, index
+   * entries, links and queued index work, one collection at a time and a bounded number of
+   * documents per call. Documents written since always carry their key; when every collection
+   * has been read through, prefiltered reads take over.
+   */
+  async backfillLabelKeys(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    limit = 200,
+  ): Promise<{ updated: number; done: boolean }> {
+    assertActor(actor, scopeId);
+    assertWorkerActor(actor);
+    const scope = this.scopeRef(actor, scopeId);
+    const stateRef = scope.collection('metadata').doc('labelKeyBackfill');
+    const state = await stateRef.get();
+    if (state.get('done') === true) return { updated: 0, done: true };
+    const finished = new Set((state.get('finished') as string[] | undefined) ?? []);
+    const name = LABEL_KEY_COLLECTIONS.find((collection) => !finished.has(collection));
+    if (name === undefined) {
+      await stateRef.set({ done: true, finished: [...finished] }, { merge: true });
+      return { updated: 0, done: true };
+    }
+    const cursor = state.get(`cursors.${name}`) as string | undefined;
+    let query = scope.collection(name).orderBy(FieldPath.documentId()).limit(limit);
+    if (cursor !== undefined) query = query.startAfter(cursor);
+    const snapshot = await query.get();
+    const batch = this.firestore.batch();
+    let updated = 0;
+    for (const document of snapshot.docs) {
+      if (typeof document.get('labelKey') === 'string') continue;
+      let label: readonly string[];
+      if (name === 'observations') {
+        const stored: unknown = document.data();
+        if (!isStoredObservation(stored)) continue;
+        label = labelOf(stored);
+      } else if (name === 'observationIndexQueue') {
+        const stored: unknown = (
+          await this.observationRef(actor, scopeId, String(document.get('observationId'))).get()
+        ).data();
+        label = isStoredObservation(stored) ? labelOf(stored) : ['inbox'];
+      } else if (name === 'observationIndex') {
+        label = storedLabel(document.get('label'), document.get('compartmentIds'));
+      } else {
+        label = storedLabel(document.get('label'), undefined);
+      }
+      batch.update(document.ref, { labelKey: labelKey(label) });
+      updated += 1;
+    }
+    const last = snapshot.docs.at(-1);
+    if (snapshot.size < limit) finished.add(name);
+    batch.set(
+      stateRef,
+      {
+        finished: [...finished],
+        ...(last === undefined ? {} : { cursors: { [name]: last.id } }),
+      },
+      { merge: true },
+    );
+    await batch.commit();
+    return { updated, done: false };
   }
 
   async listIndexQueue(
@@ -1184,9 +1346,23 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         transaction.get(this.observationRef(actor, scopeId, entry.observationId)),
         transaction.get(this.suppressionRef(actor, scopeId, entry.observationId)),
       ]);
-      transaction.delete(this.indexQueueRef(actor, scopeId, entry.observationId));
-      if (!observation.exists || suppression.exists || observation.get('suppressed') === true)
+      if (!observation.exists || suppression.exists || observation.get('suppressed') === true) {
+        transaction.delete(this.indexQueueRef(actor, scopeId, entry.observationId));
         return;
+      }
+      // A classification may have changed the placement since the entry was built; a stale entry
+      // is not written and the queued work stays, so the next run indexes the current placement.
+      const stored: unknown = observation.data();
+      const current = isStoredObservation(stored) ? withLabel(stored) : null;
+      if (
+        current === null ||
+        labelKey(current.label) !== labelKey(entry.label) ||
+        stableJson(current.placement.scope) !== stableJson(entry.placement.scope) ||
+        current.placement.workspaceId !== entry.placement.workspaceId ||
+        current.placement.projectId !== entry.placement.projectId
+      )
+        return;
+      transaction.delete(this.indexQueueRef(actor, scopeId, entry.observationId));
       transaction.set(this.indexRef(actor, scopeId, entry.observationId), {
         observationId: entry.observationId,
         terms: [...entry.terms],
@@ -1195,6 +1371,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         nature: entry.nature,
         at: entry.at,
         label: [...new Set(entry.label)].sort(),
+        labelKey: labelKey(entry.label),
         workspaceId: entry.placement.workspaceId,
         projectId: entry.placement.projectId,
         scopeKind: entry.placement.scope.kind,
@@ -1221,13 +1398,31 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     await this.readContext(actor, scopeId);
     const wanted = [...new Set(terms)].slice(0, MAX_IN);
     if (wanted.length === 0) return { entries: [], partial: false };
-    const snapshot = await this.indexCollectionOfObservations(actor, scopeId)
-      .where('terms', 'array-contains-any', wanted)
-      .limit(MAX_TERM_CANDIDATES)
-      .get();
+    // With label keys, each visible label is queried on its own, so entries of other workspaces
+    // cannot take up the candidate budget.
+    const keys = await this.visibleLabelKeys(actor, scopeId);
+    const snapshots = await Promise.all(
+      (keys ?? [null]).map((key) => {
+        let query = this.indexCollectionOfObservations(actor, scopeId).where(
+          'terms',
+          'array-contains-any',
+          wanted,
+        );
+        if (key !== null) query = query.where('labelKey', '==', key);
+        return query.limit(MAX_TERM_CANDIDATES).get();
+      }),
+    );
+    const seen = new Set<string>();
     return {
-      partial: snapshot.size >= MAX_TERM_CANDIDATES,
-      entries: snapshot.docs
+      partial: snapshots.some((snapshot) => snapshot.size >= MAX_TERM_CANDIDATES),
+      entries: snapshots
+        .flatMap((snapshot) => snapshot.docs)
+        .filter((document) => {
+          const observationId = String(document.get('observationId'));
+          if (seen.has(observationId)) return false;
+          seen.add(observationId);
+          return true;
+        })
         .filter((document) =>
           labelVisible(
             storedLabel(document.get('label'), document.get('compartmentIds')),
@@ -1254,16 +1449,25 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     scanned: number;
   }> {
     await this.readContext(actor, scopeId);
-    const snapshot = await this.indexCollectionOfObservations(actor, scopeId)
-      .findNearest({
-        vectorField: 'embedding',
-        queryVector: [...embedding.values],
-        limit: 1000,
-        distanceMeasure: 'COSINE',
-        distanceResultField: 'distance',
-      })
-      .get();
-    const hits = snapshot.docs
+    const keys = await this.visibleLabelKeys(actor, scopeId);
+    const perQuery = keys === null ? 1000 : Math.max(limit, 50);
+    const snapshots = await Promise.all(
+      (keys ?? [null]).map((key) => {
+        const base = this.indexCollectionOfObservations(actor, scopeId);
+        return (key === null ? base : base.where('labelKey', '==', key))
+          .findNearest({
+            vectorField: 'embedding',
+            queryVector: [...embedding.values],
+            limit: perQuery,
+            distanceMeasure: 'COSINE',
+            distanceResultField: 'distance',
+          })
+          .get();
+      }),
+    );
+    const scanned = snapshots.reduce((sum, snapshot) => sum + snapshot.size, 0);
+    const hits = snapshots
+      .flatMap((snapshot) => snapshot.docs)
       .filter(
         (document) =>
           document.get('embeddingModelId') === embedding.modelId &&
@@ -1276,8 +1480,9 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         observationId: String(document.get('observationId')),
         similarity: 1 - Number(document.get('distance')),
       }))
+      .sort((left, right) => right.similarity - left.similarity)
       .slice(0, limit);
-    return { hits, exhausted: snapshot.size === 1000, scanned: snapshot.size };
+    return { hits, exhausted: keys === null && scanned === 1000, scanned };
   }
 
   // ---- Links, source reports, writer suppression ------------------------------------------
@@ -1692,6 +1897,13 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       await this.assertPlacement(transaction, actor, scopeId, { ...to, derivedFrom: [] });
       const label = labelForPlacement(to);
       const topicRef = stored.topicKey ? this.topicRef(actor, scopeId, stored.topicKey) : null;
+      // The names this observation gave its subjects become resolvable under the new label too.
+      const aliasNames = [
+        ...new Set((stored.subjectNames ?? []).map(normalizeLabel).filter((name) => name !== '')),
+      ];
+      const aliasDocs = await Promise.all(
+        aliasNames.map((name) => transaction.get(this.aliasRef(actor, scopeId, name))),
+      );
       const [index, topic, sequence, indexState] = await Promise.all([
         transaction.get(this.indexRef(actor, scopeId, request.observationId)),
         topicRef === null ? Promise.resolve(null) : transaction.get(topicRef),
@@ -1734,6 +1946,28 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
             ...new Set([...storedLabel(topic.get('label'), topic.get('compartmentIds')), ...label]),
           ].sort(),
         });
+      aliasDocs.forEach((alias, index) => {
+        const subjectIds: unknown = alias.get('subjectIds');
+        if (!Array.isArray(subjectIds)) return;
+        const named = stored.subjectIds.filter((subjectId) => subjectIds.includes(subjectId));
+        if (named.length === 0) return;
+        transaction.set(
+          this.aliasRef(actor, scopeId, aliasNames[index]!),
+          {
+            labels: Object.fromEntries(
+              named.map((subjectId) => [subjectId, FieldValue.arrayUnion(labelKey(label))]),
+            ),
+          },
+          { merge: true },
+        );
+      });
+      // The index is rebuilt for the new placement; a worker run that built the old one does not
+      // overwrite it.
+      transaction.set(this.indexQueueRef(actor, scopeId, request.observationId), {
+        observationId: request.observationId,
+        queuedAt: request.at,
+        labelKey: labelKey(label),
+      });
       transaction.create(this.jobRef(actor, scopeId, nextSequence), {
         sequence: nextSequence,
         recordIds: [],
@@ -1809,6 +2043,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
           kind: request.kind,
           members,
           label: [...request.label],
+          labelKey: key,
           active: !request.revoke,
           history: FieldValue.arrayUnion({
             action: request.revoke ? 'revoke' : 'link',
@@ -2280,13 +2515,16 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         arrival: null,
         legacyRecordId: record.id,
       };
+      const convertedKey = labelKey(labelOf(observation));
       transaction.create(observationRef, {
         ...observation,
+        labelKey: convertedKey,
         sourceKeys: sources.map(observationSourceKey),
       });
       transaction.set(this.indexQueueRef(actor, scopeId, observationId), {
         observationId,
         queuedAt: recordedAt,
+        labelKey: convertedKey,
       });
       return 'converted';
     });
@@ -2410,6 +2648,24 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     members: readonly string[],
   ): Promise<string[]> {
     const result = new Set(members);
+    const keys = await this.visibleLabelKeys(actor, scopeId);
+    if (keys !== null) {
+      for (const member of [...new Set(members)])
+        for (const chunk of chunks(keys, MAX_IN)) {
+          const snapshot = await this.scopeRef(actor, scopeId)
+            .collection('links')
+            .where('members', 'array-contains', member)
+            .where('labelKey', 'in', chunk)
+            .limit(100)
+            .get();
+          for (const document of snapshot.docs) {
+            if (document.get('kind') !== kind || document.get('active') !== true) continue;
+            for (const linked of (document.get('members') as string[] | undefined) ?? [])
+              result.add(linked);
+          }
+        }
+      return [...result];
+    }
     for (const group of chunks([...new Set(members)], MAX_IN)) {
       const snapshot = await this.scopeRef(actor, scopeId)
         .collection('links')

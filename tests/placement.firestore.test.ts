@@ -13,6 +13,9 @@ import {
   type ObserveInput,
 } from '../packages/memory-records/src/index.js';
 import { DeterministicEmbeddingProvider } from '../apps/api/src/embeddings.js';
+// Seeding thousands of synthetic index entries with vectors needs FieldValue; only this test does.
+// eslint-disable-next-line no-restricted-imports
+import { FieldValue } from '@google-cloud/firestore';
 
 const run = promisify(execFile);
 const projectId = `demo-place-${randomUUID().slice(0, 8)}`;
@@ -716,6 +719,187 @@ describe('classification', () => {
       ).toMatchObject({ status: 'failed', error: { code: 'user_required' } });
     } finally {
       await admission.update({ approvalPolicy: 'automatic' });
+    }
+  });
+});
+
+describe('label keys, stale index entries and crowded members', () => {
+  const scopePath = () =>
+    firestore
+      .collection('memoryTenants')
+      .doc(Buffer.from('synthetic', 'utf8').toString('base64url'))
+      .collection('scopes')
+      .doc(Buffer.from('personal', 'utf8').toString('base64url'));
+  let northwindOnly: ConnectionAccess;
+
+  beforeAll(async () => {
+    const created = await cli(
+      'set-connection',
+      '--connection',
+      'new',
+      '--workspaces',
+      northwind,
+      '--default-workspace',
+      northwind,
+    );
+    northwindOnly = await resolve(created.id);
+    const worker = await runtime.access.worker(owner);
+    for (let run = 0; run < 20; run++)
+      if ((await runtime.observations.backfillLabelKeys(worker, owner.scopeId, 500)).done) break;
+    expect(
+      (await scopePath().collection('metadata').doc('labelKeyBackfill').get()).get('done'),
+    ).toBe(true);
+  }, 60_000);
+
+  it('does not let an index entry built before a classification overwrite the new placement', async () => {
+    const id = await observe(owner, 'stale-index', { summary: 'Gallium stale index check.' });
+    const worker = await runtime.access.worker(owner);
+    const before = await runtime.observations.getObservationForIndex(worker, owner.scopeId, id);
+    expect(before?.label).toEqual(['inbox']);
+    await service.classify(owner, {
+      items: [{ observationId: id, workspaceId: northwind }],
+      idempotencyKey: 'stale-index',
+    });
+    await runtime.observations.writeObservationIndexEntry(worker, owner.scopeId, {
+      observationId: id,
+      terms: ['gallium'],
+      subjectIds: before!.subjectIds,
+      topicKey: null,
+      nature: 'event',
+      at: before!.recordedAt,
+      label: before!.label,
+      placement: before!.placement,
+      embedding: await new DeterministicEmbeddingProvider().embed('Gallium stale index check.'),
+    });
+    const entry = await scopePath()
+      .collection('observationIndex')
+      .where('observationId', '==', id)
+      .get();
+    for (const document of entry.docs) expect(document.get('label')).toEqual([northwind]);
+    expect(
+      JSON.stringify(await service.recall(cedarOnly, { query: 'gallium stale index' })),
+    ).not.toContain(id);
+  });
+
+  it('makes a classified subject name resolvable in its new workspace', async () => {
+    await observe(owner, 'moved-subject', { subjects: ['Moved Subject'] });
+    const resolveName = async (access: ConnectionAccess) =>
+      (
+        await runtime.observations.resolveNames(access.actor, access.scopeId, ['Moved Subject'])
+      ).get('Moved Subject') ?? [];
+    expect(await resolveName(cedarOnly)).toEqual([]);
+    await service.classify(owner, {
+      items: [{ observationId: ids['moved-subject']!, workspaceId: cedar }],
+      idempotencyKey: 'moved-subject',
+    });
+    expect(await resolveName(cedarOnly)).toHaveLength(1);
+  });
+
+  it('finds what a reader may see even when another workspace names the same member 1,050 times', async () => {
+    const [crowded] = (
+      await service.observe(owner, {
+        title: 'Crowded fact',
+        summary: 'Cobalt tariff schedule for the retail business, reviewed weekly.',
+        nature: 'event',
+        subjects: ['Crowded Subject'],
+        workspaceId: northwind,
+        asUser: false,
+        idempotencyKey: 'crowded-fact',
+      })
+    ).subject_ids;
+    const [partner] = (
+      await service.observe(owner, {
+        title: 'Crowded partner',
+        summary: 'The partner of the crowded subject.',
+        nature: 'event',
+        subjects: ['Crowded Partner'],
+        workspaceId: northwind,
+        asUser: false,
+        idempotencyKey: 'crowded-partner',
+      })
+    ).subject_ids;
+    await service.link(owner, {
+      kind: 'same-subject',
+      a: 'Crowded Subject',
+      b: 'Crowded Partner',
+      revoke: false,
+      workspaceId: northwind,
+    });
+    const crowdedId = (
+      await scopePath().collection('observations').where('title', '==', 'Crowded fact').get()
+    ).docs[0]!.get('id') as string;
+
+    // Synthetic Cedar documents that sort before the visible ones and are nearer to the query.
+    const embedding = await new DeterministicEmbeddingProvider().embed('cobalt tariff schedule');
+    for (let start = 0; start < 1050; start += 350) {
+      const batch = firestore.batch();
+      for (let index = start; index < start + 350; index++) {
+        const suffix = String(index).padStart(5, '0');
+        batch.set(scopePath().collection('observations').doc(`!crowd-${suffix}`), {
+          subjectIds: [crowded],
+          label: [cedar],
+          labelKey: cedar,
+        });
+        batch.set(scopePath().collection('observationIndex').doc(`!crowd-${suffix}`), {
+          observationId: `obs_${suffix.padStart(32, 'f')}`,
+          terms: ['cobalt', 'tariff', 'schedule'],
+          subjectIds: [crowded],
+          label: [cedar],
+          labelKey: cedar,
+          at: '2026-11-14T00:00:00.000Z',
+          embeddingModelId: embedding.modelId,
+          embedding: FieldValue.vector([...embedding.values]),
+        });
+        batch.set(scopePath().collection('links').doc(`!crowd-${suffix}`), {
+          kind: 'same-subject',
+          members: [crowded, `sub_${suffix.padStart(32, 'e')}`],
+          label: [cedar],
+          labelKey: cedar,
+          active: true,
+        });
+      }
+      await batch.commit();
+    }
+
+    const reach = async () => ({
+      found: JSON.stringify(
+        await service.recall(northwindOnly, { query: 'cobalt tariff schedule', limit: 30 }),
+      ).includes(crowdedId),
+      named: (
+        await runtime.observations.getSubjects(northwindOnly.actor, northwindOnly.scopeId, [
+          crowded!,
+        ])
+      ).length,
+      linked: (
+        await runtime.observations.linkedSubjects(northwindOnly.actor, northwindOnly.scopeId, [
+          crowded!,
+        ])
+      ).includes(partner!),
+    });
+    const state = scopePath().collection('metadata').doc('labelKeyBackfill');
+    // Reading a fixed number of documents and filtering afterwards loses all three.
+    await state.update({ done: false });
+    expect(await reach()).toEqual({ found: false, named: 0, linked: false });
+    await state.update({ done: true });
+    expect(await reach()).toEqual({ found: true, named: 1, linked: true });
+  }, 120_000);
+
+  it('notes waiting index work only when the reader may see it', async () => {
+    const queue = scopePath().collection('observationIndexQueue').doc('!pending');
+    await queue.set({
+      observationId: `obs_${'d'.repeat(32)}`,
+      labelKey: northwind,
+      queuedAt: '2026-11-14T00:00:00.000Z',
+    });
+    try {
+      expect((await service.recall(cedarOnly, { query: 'anything waiting' })).notes).not.toContain(
+        'index-pending',
+      );
+      expect((await service.recall(northwindOnly, { query: 'anything waiting' })).notes).toContain(
+        'index-pending',
+      );
+    } finally {
+      await queue.delete();
     }
   });
 });
