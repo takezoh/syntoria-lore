@@ -3448,13 +3448,7 @@ export class FirestoreMemoryRecordRepository {
       const entries: ChangeFeedEntry[] = [];
       for (const document of selected) {
         const entry = document.data() as ChangeFeedEntry;
-        // Observation entries carry a label, and one written before labels existed reads as the
-        // Inbox; record entries keep their compartments.
-        const entryLabel =
-          entry.operation === 'observe'
-            ? storedLabel(entry.label, entry.compartmentIds)
-            : entry.compartmentIds;
-        if (!labelVisible(entryLabel, actor.compartmentAllowance)) continue;
+        if (!labelVisible(this.changeEntryLabel(entry), actor.compartmentAllowance)) continue;
         if (entry.operation === 'deletion' || entry.recordIds.length === 0) {
           entries.push(entry);
           continue;
@@ -4053,6 +4047,17 @@ export class FirestoreMemoryRecordRepository {
         gateClientId: actor.gateClientId,
       },
     };
+  }
+
+  /**
+   * The label that decides who receives a change-feed entry. The record store keeps each entry's
+   * compartments, with observation entries read through their label; the observation ledger
+   * overrides this so that unlabeled entries read as Inbox items.
+   */
+  protected changeEntryLabel(entry: ChangeFeedEntry): readonly string[] {
+    return entry.operation === 'observe'
+      ? storedLabel(entry.label, entry.compartmentIds)
+      : entry.compartmentIds;
   }
 
   protected authorizationRef(actor: VerifiedActorCapability, scopeId: string): DocumentReference {

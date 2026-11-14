@@ -18,6 +18,7 @@ export const SERVER_INSTRUCTIONS = [
   'An observation is never edited. When something changes, write a new observation; Lore keeps the earlier one and works out what is current. Use nature "state" for something that holds until it changes (an amount, a status, who is responsible, a decision, a plan) and nature "event" for something that happened (a meeting, a call, a message). For a state, give `aspect`, a short stable label for what about the subject it states, such as "quoted price" or "contract status", and `value`, the state itself in a few words. Before choosing an aspect, recall the subject and reuse the aspect an existing topic already has: the same matter under two aspects becomes two separate courses. Give `effective_at`, when it became the case or happened, whenever you know it.',
   'Name every subject by its proper name in `subjects`, the main one first, and give other spellings of the main subject (another script, an abbreviation, a former name) in `aliases`. If recall shows the subject already exists, use its subject ID. A subject that only appears inside the summary is much harder to find.',
   'Originals stay where they are. Summarize the important points in your own words; never paste the body of a message or document. For anything you read in Slack, Gmail, Notion, Google Drive or another service, attach a source with the identifiers that service uses for the item and a link, so a reader can open the original. Mark confidential material with sensitivity "confidential"; that is a label, not an access control.',
+  'Memories are kept per workspace, one per company, and inside it per project, such as a business. get_access and list_projects show which workspaces and projects this connection may use. Write each fact into its workspace and project with the default scope, so it stays with that work; leave the workspace or the project out when you cannot tell, and it waits in the Inbox or unclassified. When something is a lesson that would help elsewhere, write it as a separate observation, generalized without names, amounts or other particulars, with scope "workspace" or "shared" and derived_from naming the facts it came from; widening is recorded. When you use a recalled item, keep its workspace, project and scope with it: use it as a fact only for work it belongs to, and present anything from another workspace or project only as a lesson stated as such. The scope guides you; it is not an access control.',
   'Set as_user only when the user states the thing themselves in this conversation; the approval policy then decides whether it carries their authority. To withdraw an observation that was wrong, write a new one with `retracts`. Call forget only after the user explicitly asks to forget something.',
   'Recall without being asked, and recall often: at the start of a conversation and before recommendations, planning or decisions even without a proper name, and whenever a named person, customer, company, project or product, a past decision, or something discussed before comes up, call recall first, with the full situation, task and constraints, including relevant names, before you answer, plan or ask the user to explain again. A topic result gives the current state, the state before it and when it changed; `tier` says whether the person stated it, it came from a cited source, or an AI inferred it; `agreeing` counts independent writers; `conflicts` are lower-tier observations that disagree and are still open. Use get_timeline for the course of one aspect or for everything about a subject in order, and `at` for what held on a past date. An empty result does not show that nothing was written.',
   'Before asking the user to repeat background or constraints for a task, recall what is already known and carry it forward. Ask only for missing details. When you use a memory, identify its original subject and cite a supporting source link or observation_id so the user can inspect the evidence. Keep the subject, relevant conditions and time with each claim. A similar event in another project is evidence for a possible lesson or hypothesis, never proof of the cause or facts of the current case. State this distinction explicitly when transferring experience. Apply a stated constraint to the recommendation, but do not claim the proposed solution satisfies a cost or performance limit without measurements; identify what must be checked. When a source has changed, identify what was observed and recommend checking the original before relying on its present status. Do not force unrelated memories into the answer. General requests such as translation still deserve a direct answer.',
@@ -111,13 +112,27 @@ const observeInput = z
     observed_at: isoTime.optional().describe('When you learned it; defaults to now'),
     speaker: text(200).optional().describe('Who said or decided it'),
     sources: z.array(source).max(10).optional(),
-    compartment_ids: z
-      .array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u))
-      .max(20)
+    workspace: workspaceId
+      .nullable()
       .optional()
       .describe(
-        "The workspace ID (wsp_…) this belongs to, within this connection's allowance; omit to keep it in the Inbox",
+        "The workspace it belongs to; omit for this connection's default, null to keep it in the Inbox when unsure",
       ),
+    project: projectId
+      .nullable()
+      .optional()
+      .describe('The project inside the workspace; omit when unsure'),
+    scope: z
+      .union([z.enum(['project', 'workspace', 'shared']), projectId])
+      .optional()
+      .describe(
+        'How far it may be used: omit for its own project (or workspace), an ancestor project ID, "workspace" for the whole company, or "shared" for a generalized lesson usable everywhere. Widening is recorded',
+      ),
+    derived_from: z
+      .array(observationId)
+      .max(5)
+      .optional()
+      .describe('For a lesson: the observations it was generalized from'),
     retracts: observationId
       .optional()
       .describe('An observation of the same topic, or an event, that this one declares mistaken'),
@@ -196,16 +211,16 @@ export async function handleMcpRequest(
         'get_access',
         {
           description:
-            "Returns this connection's authenticated tenant, scope, compartment allowance and approval policy.",
+            "Returns this connection's tenant and scope, the workspaces it may use with their descriptions, whether it may use the Inbox, its default workspace and the approval policy.",
           inputSchema: z.object({}).strict(),
           annotations: readOnly,
         },
         async () =>
           run('get_access', async () => {
-            const result = service.describeAccess(access);
+            const result = await service.getAccess(access);
             return summarize(
               result,
-              `Scope ${result.scope_id}; allowance ${result.compartment_allowance.length === 0 ? 'Shared only' : result.compartment_allowance.join(', ')}; approval policy ${result.approval_policy}.`,
+              `Scope ${result.scope_id}; workspaces ${result.workspaces.map((item) => item.name).join(', ') || 'none'}; Inbox ${result.inbox ? 'allowed' : 'not allowed'}; approval policy ${result.approval_policy}.`,
             );
           }),
       );
@@ -331,9 +346,10 @@ export async function handleMcpRequest(
               ...(input.observed_at === undefined ? {} : { observedAt: input.observed_at }),
               ...(input.speaker === undefined ? {} : { speaker: input.speaker }),
               ...(input.retracts === undefined ? {} : { retracts: input.retracts }),
-              ...(input.compartment_ids === undefined
-                ? {}
-                : { compartmentIds: input.compartment_ids }),
+              ...(input.workspace === undefined ? {} : { workspaceId: input.workspace }),
+              ...(input.project === undefined ? {} : { projectId: input.project }),
+              ...(input.scope === undefined ? {} : { scope: input.scope }),
+              ...(input.derived_from === undefined ? {} : { derivedFrom: input.derived_from }),
               ...(input.sources === undefined
                 ? {}
                 : {

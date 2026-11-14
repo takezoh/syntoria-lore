@@ -1,6 +1,6 @@
 # Memory workspaces design
 
-Status: accepted design. U1 (workspaces, connections and the operator tool), U2 (labels and visibility), the routing of U3 (`/mcp/c/<id>` and its fail-closed resolution) and U4 (projects, `list_projects` and `manage_project`) are implemented and verified against the Firestore emulator only; hosted gateway and Access coverage of the path and units U5 to U10 are not done. It turns [ADR 0012](../adr/0012-grant-workspaces-per-connection-and-classify-by-project.md) into contracts on the [observation ledger](observation-ledger.md). It was written directly in the main session on 2026-11-14 because the dev-skills design runtime could not reach its execution server; no design gate or independent review has run.
+Status: accepted design. U1 (workspaces, connections and the operator tool), U2 (labels and visibility), the routing of U3 (`/mcp/c/<id>` and its fail-closed resolution) U4 (projects, `list_projects` and `manage_project`) and U5 except labels on aliases and links (placement on write, protected widening, `derived_from`, result fields with origin hiding, `get_access` and server instructions) are implemented and verified against the Firestore emulator only. Not done: labels on aliases and links, units U6 to U10, and hosted gateway and Access coverage of `/mcp/c/*`. It turns [ADR 0012](../adr/0012-grant-workspaces-per-connection-and-classify-by-project.md) into contracts on the [observation ledger](observation-ledger.md). It was written directly in the main session on 2026-11-14 because the dev-skills design runtime could not reach its execution server; no design gate or independent review has run.
 
 ## Outcome
 
@@ -127,7 +127,8 @@ MCP offers `list_projects` (the hierarchies of granted workspaces with descripti
 | `workspace` omitted | The connection's default workspace, or the Inbox |
 | `project` omitted | No project |
 | `scope` omitted | The project when there is one; otherwise `workspace` in a workspace, or `inbox` without one |
-| A workspace not granted or unknown; the Inbox without the Inbox grant; a project not in the workspace; a scope that is not the project, an ancestor, `workspace` or `shared`; a project scope without a project | `invalid_input` with one message for all of these; nothing is written |
+| A workspace not granted or unknown; the Inbox without the Inbox grant; a project not in the workspace; a project scope that is not the project or an ancestor | `invalid_input` with one message for all of these, since they depend on stored data; nothing is written |
+| A project without a workspace, a workspace scope without a workspace, a project scope without a project, an unknown scope value | `invalid_input` naming the problem, which depends only on the request; nothing is written |
 
 - A write whose scope is wider than the narrowest scope it could have, including any Shared write, is a protected change under the binding's approval policy and records its provenance, bound to the request digest as for `as_user`.
 - `derived_from` may name only observations visible to the writer.

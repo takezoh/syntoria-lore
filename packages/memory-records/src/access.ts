@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import type { DocumentData, Firestore } from '@google-cloud/firestore';
 import {
   authorizationDocumentId,
+  id,
   MEMORY_AUTHORIZATION_COLLECTION,
   type FirestoreMemoryRecordRepository,
   type VerifiedActorCapability,
 } from './firestore-repository.js';
-import { ALL_WORKSPACES, INBOX } from './labels.js';
+import { ALL_WORKSPACES, INBOX, WORKSPACE_ID } from './labels.js';
 
 /** Admissions, one per admitted subject, keyed by {@link admissionDocumentId}. */
 export const MEMORY_ADMISSIONS_COLLECTION = 'memoryAdmissions';
@@ -55,6 +56,8 @@ export interface ConnectionAccess {
   readonly subjectKey: string;
   /** The principal that holds the person's authority when it acts through this connection. */
   readonly personPrincipalId: string;
+  /** Where a write without a workspace goes; `null` is the Inbox. */
+  readonly defaultWorkspace: string | null;
 }
 
 export type AccessDeniedCode = 'not_admitted' | 'authorization_unavailable' | 'user_required';
@@ -285,6 +288,10 @@ export class MemoryAccess {
       actor: mintActor({ ...template, stored }),
       subjectKey,
       personPrincipalId: principals.person,
+      defaultWorkspace: await this.defaultWorkspace(
+        admission,
+        CONNECTION_ID.test(principal.connectionId) ? principal.connectionId : 'default',
+      ),
     });
     this.issued.add(access);
     return access;
@@ -357,6 +364,27 @@ export class MemoryAccess {
       initialAllowance: FULL_ALLOWANCE,
     };
     return mintActor({ ...template, stored: await this.ensureAuthorization(template) });
+  }
+
+  /** The connection's default workspace as the operator tool set it; `null` is the Inbox. */
+  private async defaultWorkspace(
+    admission: Admission,
+    connectionId: string,
+  ): Promise<string | null> {
+    const snapshot = await this.firestore
+      .collection('memoryTenants')
+      .doc(id(admission.tenantId))
+      .collection('scopes')
+      .doc(id(admission.scopeId))
+      .collection('connections')
+      .doc(connectionId)
+      .get();
+    const grant: unknown = snapshot.get('grant');
+    const value =
+      typeof grant === 'object' && grant !== null
+        ? (grant as Record<string, unknown>)['defaultWorkspace']
+        : null;
+    return typeof value === 'string' && WORKSPACE_ID.test(value) ? value : null;
   }
 
   private assertIssued(access: ConnectionAccess): void {

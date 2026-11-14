@@ -85,7 +85,7 @@ An observation states something about named subjects: a `state` that holds until
 | `scripts/admit-subject.mjs` | Operator tool that creates or reactivates one admission with the `automatic` policy; it refuses to move an existing admission to another tenant or scope |
 | `scripts/migrate-source-metadata.mjs` | Private, reviewed operator path for appending evidenced source metadata; its audit uses the credential-derived IAM identity and it is not exported through the API, service or runtime |
 
-Each admitted connection writes as its own principal, set by the server. The tier of an observation is derived from the write path: `person` when the approval policy grants the person's authority to a write that asks for it, `source` when it cites an original outside Lore, otherwise `inference`. Nothing waits for approval.
+Each admitted connection writes as its own principal, set by the server. An observation records its workspace, project and scope; a scope wider than the narrowest is approved under the approval policy and recorded, and results carry the place, which is hidden for a Shared observation from a workspace the reader is not granted. The tier of an observation is derived from the write path: `person` when the approval policy grants the person's authority to a write that asks for it, `source` when it cites an original outside Lore, otherwise `inference`. Nothing waits for approval.
 
 Not built: the REST adapter, a durable external worker (indexing, purge and conversion use in-process maintenance; restore reconciliation runs before protected operations), person confirmation of a protected change, a reviewed way to widen compartment allowances or revoke sources, an operator tool for writer suppression, and tracked deployment configuration.
 

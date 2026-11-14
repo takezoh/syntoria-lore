@@ -55,6 +55,106 @@ export interface ObservationInput {
   readonly retracts?: string;
 }
 
+/**
+ * How far an observation may travel (ADR 0012): its project or an ancestor, the whole workspace,
+ * every workspace (Shared), or, without a workspace, only the Inbox.
+ */
+export type ObservationScope =
+  | { readonly kind: 'project'; readonly projectId: string }
+  | { readonly kind: 'workspace' }
+  | { readonly kind: 'shared' }
+  | { readonly kind: 'inbox' };
+
+/** Where an observation belongs and how far it may travel. */
+export interface ObservationPlacement {
+  /** `null` keeps the observation in the Inbox. */
+  readonly workspaceId: string | null;
+  /** `null` leaves it unclassified inside its workspace. */
+  readonly projectId: string | null;
+  readonly scope: ObservationScope;
+  /** Observations a lesson was generalized from; at most five. */
+  readonly derivedFrom: readonly string[];
+  /** The approval recorded when the scope is wider than the narrowest it could have. */
+  readonly scopeApproval: {
+    readonly provenance: 'policy';
+    readonly protectedChangeId: string;
+  } | null;
+}
+
+export const MAX_DERIVED_FROM = 5;
+const PLACEMENT_WORKSPACE = /^wsp_[a-f0-9]{32}$/u;
+const PLACEMENT_PROJECT = /^prj_[a-f0-9]{32}$/u;
+const PLACEMENT_OBSERVATION = /^obs_[a-f0-9]{32}$/u;
+
+/** The scope an observation gets when none is asked for: the narrowest it can have. */
+export function narrowestScope(
+  workspaceId: string | null,
+  projectId: string | null,
+): ObservationScope {
+  if (projectId !== null) return { kind: 'project', projectId };
+  return workspaceId === null ? { kind: 'inbox' } : { kind: 'workspace' };
+}
+
+/** True when the scope reaches further than the narrowest one. */
+export function scopeIsWider(
+  placement: Pick<ObservationPlacement, 'workspaceId' | 'projectId' | 'scope'>,
+): boolean {
+  const narrowest = narrowestScope(placement.workspaceId, placement.projectId);
+  const scope = placement.scope;
+  if (scope.kind !== narrowest.kind) return true;
+  return (
+    scope.kind === 'project' &&
+    narrowest.kind === 'project' &&
+    scope.projectId !== narrowest.projectId
+  );
+}
+
+/** The label the ledger checks: `[]` for Shared, the workspace, or the Inbox. */
+export function labelForPlacement(
+  placement: Pick<ObservationPlacement, 'workspaceId' | 'scope'>,
+): string[] {
+  if (placement.scope.kind === 'shared') return [];
+  return placement.workspaceId === null ? ['inbox'] : [placement.workspaceId];
+}
+
+/**
+ * Problems with the shape of a placement; empty when the shape is valid. Whether the workspace
+ * is granted, the project belongs to it and a project scope is an ancestor is checked against
+ * stored data by the ledger.
+ */
+export function placementProblems(placement: ObservationPlacement): string[] {
+  const problems: string[] = [];
+  const { workspaceId, projectId, scope } = placement;
+  if (workspaceId !== null && !PLACEMENT_WORKSPACE.test(workspaceId))
+    problems.push('invalid workspace');
+  if (projectId !== null && !PLACEMENT_PROJECT.test(projectId)) problems.push('invalid project');
+  if (workspaceId === null && projectId !== null) problems.push('a project needs its workspace');
+  if (scope.kind === 'project' && (projectId === null || !PLACEMENT_PROJECT.test(scope.projectId)))
+    problems.push('a project scope needs a project');
+  if (scope.kind === 'workspace' && workspaceId === null)
+    problems.push('a workspace scope needs a workspace');
+  if (scope.kind === 'inbox' && workspaceId !== null)
+    problems.push('only an observation without a workspace stays in the Inbox');
+  if (
+    placement.derivedFrom.length > MAX_DERIVED_FROM ||
+    new Set(placement.derivedFrom).size !== placement.derivedFrom.length ||
+    !placement.derivedFrom.every((item) => PLACEMENT_OBSERVATION.test(item))
+  )
+    problems.push(`derived_from holds at most ${MAX_DERIVED_FROM} distinct observation IDs`);
+  if (scopeIsWider(placement) !== (placement.scopeApproval !== null))
+    problems.push('a wider scope needs, and only a wider scope carries, a recorded approval');
+  return problems;
+}
+
+/** The placement of an observation stored before placements existed: the Inbox. */
+export const INBOX_PLACEMENT: ObservationPlacement = Object.freeze({
+  workspaceId: null,
+  projectId: null,
+  scope: Object.freeze({ kind: 'inbox' as const }),
+  derivedFrom: Object.freeze([]) as readonly string[],
+  scopeApproval: null,
+});
+
 export interface Observation {
   readonly id: string;
   readonly tenantId: string;
@@ -85,6 +185,7 @@ export interface Observation {
    * Shared. An observation stored before labels existed reads as its compartments or the Inbox.
    */
   readonly label: readonly string[];
+  readonly placement: ObservationPlacement;
   readonly retracts: string | null;
 }
 

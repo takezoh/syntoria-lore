@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  INBOX_PLACEMENT,
   arrivalRelation,
   computeCourse,
   computeCourseAt,
@@ -49,6 +50,7 @@ function state(
     sources: [],
     compartmentIds: [],
     label: ['inbox'],
+    placement: INBOX_PLACEMENT,
     retracts: options.retracts ?? null,
   };
 }

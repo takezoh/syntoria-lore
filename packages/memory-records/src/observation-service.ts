@@ -24,11 +24,17 @@ import {
   type ChangeFeedEntry,
 } from './firestore-repository.js';
 import {
+  narrowestScope,
   observationInputProblems,
+  scopeIsWider,
   type Observation,
   type ObservationInput,
+  type ObservationPlacement,
+  type ObservationScope,
   type ObservationSource,
 } from './observations.js';
+import { PROJECT_ID } from './projects.js';
+import { INBOX, labelVisible } from './labels.js';
 import {
   lookupTerms,
   MIN_TERM_COVERAGE,
@@ -56,7 +62,17 @@ export type SourceInput = Omit<ObservationSource, 'readAt' | 'sensitivity'> & {
 
 export interface ObserveInput extends Omit<ObservationInput, 'sources' | 'compartmentIds'> {
   readonly sources?: readonly SourceInput[];
-  readonly compartmentIds?: readonly string[];
+  /** The workspace; omitted means the connection's default, `null` the Inbox. */
+  readonly workspaceId?: string | null;
+  /** The project inside the workspace; omitted or `null` leaves it unclassified. */
+  readonly projectId?: string | null;
+  /**
+   * How far it may travel: omitted or `"project"` for the narrowest scope, an ancestor project
+   * ID, `"workspace"` or `"shared"`. A wider scope is a protected change.
+   */
+  readonly scope?: string;
+  /** Observations a lesson was generalized from. */
+  readonly derivedFrom?: readonly string[];
   /** Other spellings of the first subject. */
   readonly aliases?: readonly string[];
   /** True only when the person states this themselves; the approval policy then decides. */
@@ -89,6 +105,39 @@ export interface ObservationView {
   readonly speaker: string | null;
   readonly retracts: string | null;
   readonly sources: readonly SourceView[];
+  /** The workspace it belongs to; `null` in the Inbox or when the origin is hidden. */
+  readonly workspace: { readonly id: string; readonly name: string } | null;
+  /** The project inside the workspace; `null` when unclassified or hidden. */
+  readonly project: ProjectRefView | null;
+  /** How far it may travel; a project scope names the project it reaches. */
+  readonly scope: {
+    readonly kind: ObservationScope['kind'];
+    readonly project?: ProjectRefView | null;
+  };
+  /** Visible observations it was generalized from. */
+  readonly derived_from: readonly string[];
+  /** True for a Shared observation from a workspace this connection is not granted. */
+  readonly origin_hidden: boolean;
+  /** How a scope wider than the narrowest was approved, if it was widened. */
+  readonly scope_approval: 'policy' | null;
+}
+
+/** Per-request data that observation views need. */
+interface ViewContext {
+  readonly reports: readonly SourceReport[];
+  readonly places: ReadonlyMap<
+    string,
+    { readonly name: string; readonly projects: ReadonlyMap<string, ProjectView> }
+  >;
+  /** Observations the reader may see among those that views refer to. */
+  readonly visible: ReadonlySet<string>;
+}
+
+export interface ProjectRefView {
+  readonly id: string;
+  readonly name: string;
+  /** Names from the top of the workspace down to the project. */
+  readonly path: readonly string[];
 }
 
 export interface TopicStateView {
@@ -264,12 +313,50 @@ export class ObservationService {
     };
   }
 
+  /** The access view with the granted workspaces, the Inbox grant and the default workspace. */
+  async getAccess(access: ConnectionAccess): Promise<
+    AccessView & {
+      readonly workspaces: readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly description: string;
+      }[];
+      readonly inbox: boolean;
+      readonly default_workspace: string | null;
+    }
+  > {
+    return this.run(access, async () => {
+      const workspaces = await this.ledger.listProjects(access.actor, access.scopeId);
+      return {
+        ...this.describeAccess(access),
+        workspaces: workspaces.map(({ id, name, description }) => ({ id, name, description })),
+        inbox: labelVisible([INBOX], access.actor.compartmentAllowance),
+        default_workspace: access.defaultWorkspace,
+      };
+    });
+  }
+
   async observe(access: ConnectionAccess, input: ObserveInput): Promise<ObserveView> {
     return this.run(access, async () => {
       const key = this.idempotencyKey(input.idempotencyKey);
       const now = this.now().toISOString();
-      const { asUser, idempotencyKey: _key, aliases, sources, compartmentIds, ...content } = input;
+      const {
+        asUser,
+        idempotencyKey: _key,
+        aliases,
+        sources,
+        workspaceId: requestedWorkspace,
+        projectId: requestedProject,
+        scope: requestedScope,
+        derivedFrom,
+        ...content
+      } = input;
       void _key;
+      const workspaceId =
+        requestedWorkspace === undefined ? access.defaultWorkspace : requestedWorkspace;
+      const projectId = requestedProject ?? null;
+      const scope = this.scopeFor(requestedScope, workspaceId, projectId);
+      const place = { workspaceId, projectId, scope, derivedFrom: [...(derivedFrom ?? [])] };
       const observation: ObservationInput = {
         ...content,
         sources: (sources ?? []).map((source) => ({
@@ -277,12 +364,17 @@ export class ObservationService {
           readAt: source.readAt ?? now,
           sensitivity: source.sensitivity ?? 'normal',
         })),
-        compartmentIds: compartmentIds ?? [],
+        compartmentIds: [],
       };
       const problems = observationInputProblems(observation);
       if (problems.length > 0) throw new MemoryServiceError('invalid_input', problems.join('; '));
       const inputDigest = sha256(
-        stableJson({ observation: { ...observation, sources: sources ?? [] }, aliases, asUser }),
+        stableJson({
+          observation: { ...observation, sources: sources ?? [] },
+          aliases,
+          asUser,
+          place,
+        }),
       );
       const { recordedAt } = await this.ledger.pinRequest(
         access.actor,
@@ -307,7 +399,19 @@ export class ObservationService {
             requestDigest: observationDigest(access.scopeId, observationId, inputDigest),
           })
         : access.actor;
+      // A scope wider than the narrowest is a protected change: the policy approves it for this
+      // exact request, or the write is refused with user_required.
+      let scopeApproval: ObservationPlacement['scopeApproval'] = null;
+      if (scopeIsWider(place)) {
+        const protectedChangeId = this.protectedChangeId(access, 'widen-scope', key);
+        await this.access.approveByPolicy(access, {
+          protectedChangeId,
+          requestDigest: observationDigest(access.scopeId, observationId, inputDigest),
+        });
+        scopeApproval = { provenance: 'policy', protectedChangeId };
+      }
       const receipt = await this.ledger.observe(actor, access.scopeId, {
+        placement: { ...place, scopeApproval },
         observationId,
         input: pinned,
         aliases: aliases ?? [],
@@ -445,11 +549,7 @@ export class ObservationService {
           .map((observation) => observation.id),
       ];
 
-      const evidenceReports = await this.ledger.latestSourceReports(
-        actor,
-        scopeId,
-        searched.map((item) => item.id),
-      );
+      const evidenceContext = await this.viewContext(access, searched);
       const topicViews = await this.topicViews(access, [...topicByKey.values()]);
       const topicItems: RecallItemView[] = [...topicByKey.values()].map((topic, index) => ({
         type: 'topic',
@@ -457,7 +557,7 @@ export class ObservationService {
         topic: topicViews[index]!,
         evidence: searched
           .filter((item) => item.topicKey === topic.topicKey)
-          .map((item) => this.observationView(item, evidenceReports)),
+          .map((item) => this.observationView(item, evidenceContext)),
       }));
       const namedEvents = timeline.filter(
         (observation) => observation.nature === 'event' && withinCut(observation),
@@ -469,15 +569,11 @@ export class ObservationService {
           (observation) => observation.nature === 'event' && !namedEventIds.has(observation.id),
         ),
       ];
-      const reports = await this.ledger.latestSourceReports(
-        actor,
-        scopeId,
-        events.map((observation) => observation.id),
-      );
+      const eventContext = await this.viewContext(access, events);
       const eventItems: RecallItemView[] = events.map((observation) => ({
         type: 'event',
         matched: matchedOf([observation.id], namedEventIds.has(observation.id)),
-        observation: this.observationView(observation, reports),
+        observation: this.observationView(observation, eventContext),
       }));
 
       const rank = (item: RecallItemView): number =>
@@ -646,15 +742,11 @@ export class ObservationService {
         ...(input.from === undefined ? {} : { from: input.from }),
         ...(input.to === undefined ? {} : { to: input.to }),
       });
-      const reports = await this.ledger.latestSourceReports(
-        actor,
-        scopeId,
-        observations.map((observation) => observation.id),
-      );
+      const context = await this.viewContext(access, observations);
       return {
         subjects,
         topic: null,
-        observations: observations.map((observation) => this.observationView(observation, reports)),
+        observations: observations.map((observation) => this.observationView(observation, context)),
       };
     });
   }
@@ -666,10 +758,7 @@ export class ObservationService {
       ]);
       if (observation === undefined)
         throw new MemoryServiceError('not_found', 'Observation not found');
-      const reports = await this.ledger.latestSourceReports(access.actor, access.scopeId, [
-        observation.id,
-      ]);
-      return this.observationView(observation, reports);
+      return this.observationView(observation, await this.viewContext(access, [observation]));
     });
   }
 
@@ -733,6 +822,23 @@ export class ObservationService {
   }
 
   /** Records what the caller found when it opened a source of an observation. */
+  /** The scope a request asks for, resolved against its workspace and project. */
+  private scopeFor(
+    requested: string | undefined,
+    workspaceId: string | null,
+    projectId: string | null,
+  ): ObservationScope {
+    if (requested === undefined || requested === 'project')
+      return narrowestScope(workspaceId, projectId);
+    if (requested === 'workspace') return { kind: 'workspace' };
+    if (requested === 'shared') return { kind: 'shared' };
+    if (PROJECT_ID.test(requested)) return { kind: 'project', projectId: requested };
+    throw new MemoryServiceError(
+      'invalid_input',
+      'scope must be "project", "workspace", "shared" or an ancestor project ID',
+    );
+  }
+
   /** The granted workspaces with their project hierarchies. */
   async listProjects(access: ConnectionAccess): Promise<{
     readonly workspaces: readonly WorkspaceProjects[];
@@ -949,12 +1055,8 @@ export class ObservationService {
       ...topic.conflicts,
       ...(topic.course ?? []),
     ]);
-    const [reports, subjects] = await Promise.all([
-      this.ledger.latestSourceReports(
-        access.actor,
-        access.scopeId,
-        observations.map((observation) => observation.id),
-      ),
+    const [context, subjects] = await Promise.all([
+      this.viewContext(access, observations),
       this.subjectNames(
         access,
         topics.map((topic) => topic.subjectId),
@@ -964,28 +1066,95 @@ export class ObservationService {
     return topics.map((topic) => ({
       subject: { id: topic.subjectId, name: names.get(topic.subjectId) ?? null },
       aspect: topic.aspect,
-      current: this.observationView(topic.current, reports),
-      previous: topic.previous === null ? null : this.observationView(topic.previous, reports),
+      current: this.observationView(topic.current, context),
+      previous: topic.previous === null ? null : this.observationView(topic.previous, context),
       changed: topic.view.changed,
       changed_at: topic.view.changedAt,
       agreeing: topic.view.agreeing,
-      conflicts: topic.conflicts.map((conflict) => this.observationView(conflict, reports)),
+      conflicts: topic.conflicts.map((conflict) => this.observationView(conflict, context)),
       upcoming: topic.upcoming.length,
       observations: topic.view.count,
       truncated: topic.truncated,
       ...(topic.course === undefined
         ? {}
         : {
-            course: topic.course.map((observation) => this.observationView(observation, reports)),
+            course: topic.course.map((observation) => this.observationView(observation, context)),
           }),
     }));
   }
 
-  private observationView(
-    observation: Observation,
-    reports: readonly SourceReport[],
-  ): ObservationView {
+  /**
+   * What views of these observations need beyond the observations: source reports, the names and
+   * paths of the granted workspaces and projects, and which derivation references are visible.
+   */
+  private async viewContext(
+    access: ConnectionAccess,
+    observations: readonly Observation[],
+  ): Promise<ViewContext> {
+    const derived = [...new Set(observations.flatMap((item) => item.placement.derivedFrom))];
+    const [reports, workspaces, visible] = await Promise.all([
+      this.ledger.latestSourceReports(
+        access.actor,
+        access.scopeId,
+        observations.map((observation) => observation.id),
+      ),
+      observations.some((item) => item.placement.workspaceId !== null)
+        ? this.ledger.listProjects(access.actor, access.scopeId)
+        : Promise.resolve([]),
+      derived.length === 0
+        ? Promise.resolve([])
+        : this.ledger.getObservations(access.actor, access.scopeId, derived),
+    ]);
     return {
+      reports,
+      places: new Map(
+        workspaces.map((workspace) => [
+          workspace.id,
+          {
+            name: workspace.name,
+            projects: new Map(workspace.projects.map((project) => [project.id, project])),
+          },
+        ]),
+      ),
+      visible: new Set(visible.map((item) => item.id)),
+    };
+  }
+
+  private placeView(observation: Observation, context: ViewContext) {
+    const { workspaceId, projectId, scope, derivedFrom, scopeApproval } = observation.placement;
+    const place = workspaceId === null ? undefined : context.places.get(workspaceId);
+    // A Shared observation from a workspace the reader is not granted keeps its origin hidden.
+    if (workspaceId !== null && place === undefined)
+      return {
+        workspace: null,
+        project: null,
+        scope: { kind: scope.kind },
+        derived_from: [],
+        origin_hidden: true,
+        scope_approval: scopeApproval?.provenance ?? null,
+      };
+    const project = (id: string | null) => {
+      const found = id === null ? undefined : place?.projects.get(id);
+      return found === undefined ? null : { id: found.id, name: found.name, path: found.path };
+    };
+    return {
+      workspace:
+        place === undefined || workspaceId === null ? null : { id: workspaceId, name: place.name },
+      project: project(projectId),
+      scope:
+        scope.kind === 'project'
+          ? { kind: scope.kind, project: project(scope.projectId) }
+          : { kind: scope.kind },
+      derived_from: derivedFrom.filter((id) => context.visible.has(id)),
+      origin_hidden: false,
+      scope_approval: scopeApproval?.provenance ?? null,
+    };
+  }
+
+  private observationView(observation: Observation, context: ViewContext): ObservationView {
+    const { reports } = context;
+    return {
+      ...this.placeView(observation, context),
       observation_id: observation.id,
       title: observation.title,
       summary: observation.summary,
@@ -1051,6 +1220,7 @@ export class ObservationService {
             nature: observation.nature,
             at: observation.effectiveAt ?? observation.recordedAt,
             label: observation.label,
+            placement: observation.placement,
             embedding: await this.embeddings.embed(text),
           });
           indexed += 1;

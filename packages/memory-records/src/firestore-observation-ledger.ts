@@ -16,6 +16,7 @@ import {
   memoryForgetDigest,
   nonempty,
   type AuthorizationDocument,
+  type ChangeFeedEntry,
   type DeletionLedger,
   type DeletionLedgerEntry,
   type ForgetResult,
@@ -35,6 +36,9 @@ import { deriveAuthority, isMemoryRecord, type MemoryRecord } from './index.js';
 import {
   arrivalRelation,
   computeCourse,
+  INBOX_PLACEMENT,
+  labelForPlacement,
+  placementProblems,
   computeCourseAt,
   deriveTier,
   normalizeLabel,
@@ -46,6 +50,7 @@ import {
   type Observation,
   type ObservationInput,
   type ObservationKind,
+  type ObservationPlacement,
   type ObservationSource,
   type ObservationTier,
   type TopicView,
@@ -70,8 +75,10 @@ export interface ObserveRequest {
   /** Other spellings of the primary subject. */
   readonly aliases: readonly string[];
   readonly recordedAt: string;
-  /** Digest of the request, so a resend with other content is refused. */
+  /** Digest of the request, placement included, so a resend with other content is refused. */
   readonly inputDigest: string;
+  /** Where the observation belongs and how far it may travel; checked against stored data. */
+  readonly placement: ObservationPlacement;
 }
 
 export interface ObserveReceipt {
@@ -93,9 +100,15 @@ export interface StoredArrival {
   readonly toObservationId: string | null;
 }
 
-interface StoredObservation extends Omit<Observation, 'label'> {
+interface StoredObservation extends Omit<Observation, 'label' | 'placement'> {
   /** Absent on observations stored before labels existed; read through {@link labelOf}. */
   readonly label?: readonly string[];
+  /** Absent before placements existed; read through {@link placementOf}. */
+  readonly workspaceId?: string | null;
+  readonly projectId?: string | null;
+  readonly scope?: ObservationPlacement['scope'];
+  readonly derivedFrom?: readonly string[];
+  readonly scopeApproval?: ObservationPlacement['scopeApproval'];
   /** Effective time when known, otherwise the recorded time; the order key of timelines. */
   readonly at: string;
   readonly inputDigest: string;
@@ -110,11 +123,32 @@ function labelOf(stored: Pick<StoredObservation, 'label' | 'compartmentIds'>): s
   return storedLabel(stored.label, stored.compartmentIds);
 }
 
-/** A stored observation with its current label filled in, usable wherever an observation is. */
-type LabeledObservation = StoredObservation & { readonly label: readonly string[] };
+/** The placement of a stored observation; one stored before placements existed is in the Inbox. */
+function placementOf(stored: StoredObservation): ObservationPlacement {
+  const scope = stored.scope;
+  if (
+    scope === undefined ||
+    typeof scope !== 'object' ||
+    !['project', 'workspace', 'shared', 'inbox'].includes(scope.kind)
+  )
+    return INBOX_PLACEMENT;
+  return {
+    workspaceId: stored.workspaceId ?? null,
+    projectId: stored.projectId ?? null,
+    scope: { ...scope },
+    derivedFrom: [...(stored.derivedFrom ?? [])],
+    scopeApproval: stored.scopeApproval ?? null,
+  };
+}
+
+/** A stored observation with its current label and placement, usable wherever one is. */
+type LabeledObservation = StoredObservation & {
+  readonly label: readonly string[];
+  readonly placement: ObservationPlacement;
+};
 
 function withLabel(stored: StoredObservation): LabeledObservation {
-  return { ...stored, label: labelOf(stored) };
+  return { ...stored, label: labelOf(stored), placement: placementOf(stored) };
 }
 
 /** The labels of several observations joined, as a topic or derived document carries them. */
@@ -169,6 +203,7 @@ export interface ObservationIndexEntry {
   readonly at: string;
   /** The observation's current label; it decides who may find the entry. */
   readonly label: readonly string[];
+  readonly placement: ObservationPlacement;
   readonly embedding: {
     readonly modelId: string;
     readonly dimension: number;
@@ -229,6 +264,9 @@ export type ProjectChange =
       readonly parentId?: string | null;
     }
   | { readonly action: 'delete'; readonly projectId: string };
+
+/** One message for every placement that is not available, so none reveals what exists. */
+const PLACEMENT_UNAVAILABLE = 'The workspace, project or scope is not available';
 
 /** Projects read for one workspace; a workspace beyond it is reported as truncated. */
 const MAX_PROJECTS_PER_WORKSPACE = 500;
@@ -346,6 +384,7 @@ function publicObservation(stored: StoredObservation): Observation {
     sources: stored.sources.map((source) => ({ ...source, ids: { ...source.ids } })),
     compartmentIds: [...stored.compartmentIds],
     label: labelOf(stored),
+    placement: placementOf(stored),
     retracts: stored.retracts ?? null,
   };
 }
@@ -382,12 +421,25 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     const problems = observationInputProblems(input);
     if (problems.length > 0)
       throw new MemoryRepositoryError('invalid_change_set', problems.join('; '));
-    const label = labelForCompartments(input.compartmentIds);
-    if (!input.compartmentIds.every(nonempty) || !labelVisible(label, actor.compartmentAllowance))
+    const { placement } = request;
+    if (input.compartmentIds.length > 0)
       throw new MemoryRepositoryError(
-        'authorization_denied',
-        "A compartment is outside the writer's allowance",
+        'invalid_change_set',
+        'Compartments are not written directly; give a workspace',
       );
+    const placementShape = placementProblems(placement);
+    if (placementShape.length > 0)
+      throw new MemoryRepositoryError('invalid_change_set', placementShape.join('; '));
+    const label = labelForPlacement(placement);
+    // An unknown workspace and one outside the allowance read the same.
+    if (
+      (placement.workspaceId !== null &&
+        !labelVisible([placement.workspaceId], actor.compartmentAllowance)) ||
+      (placement.workspaceId === null &&
+        placement.scope.kind === 'inbox' &&
+        !labelVisible(label, actor.compartmentAllowance))
+    )
+      throw new MemoryRepositoryError('invalid_change_set', PLACEMENT_UNAVAILABLE);
     const approval = actor.protectedChangeApproval;
     const personAuthority = actor.actorKind === 'person';
     if (
@@ -435,6 +487,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
           arrival: stored.arrival ?? null,
         } satisfies ObserveReceipt;
       }
+      await this.assertPlacement(transaction, actor, scopeId, placement);
       if (personAuthority) {
         const stored = persistedApproval?.data() as ProtectedApprovalDocument | undefined;
         if (
@@ -493,8 +546,13 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         tier,
         speaker: input.speaker?.trim() ?? null,
         sources: input.sources.map((source) => ({ ...source, ids: { ...source.ids } })),
-        compartmentIds: [...new Set(input.compartmentIds)].sort(),
+        compartmentIds: [],
         label,
+        workspaceId: placement.workspaceId,
+        projectId: placement.projectId,
+        scope: { ...placement.scope },
+        derivedFrom: [...placement.derivedFrom],
+        scopeApproval: placement.scopeApproval === null ? null : { ...placement.scopeApproval },
         retracts: input.retracts ?? null,
         at: input.effectiveAt ?? request.recordedAt,
         inputDigest: request.inputDigest,
@@ -544,7 +602,20 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
           .filter((member) => member.suppressed !== true && !writerSuppressed(member));
         const all = [...members, withLabel(observation)];
         const computed = computeCourse(all, new Set(), request.recordedAt);
-        arrival = arrivalRelation(computed, withLabel(observation));
+        // The writer learns how its observation stands only among the members it may see, so a
+        // relation never reveals an observation of a workspace outside its allowance. The topic
+        // document keeps the full view, which every read recomputes for a narrower reader.
+        const visibleToWriter = members.filter((member) =>
+          labelVisible(member.label, actor.compartmentAllowance),
+        );
+        arrival = arrivalRelation(
+          computeCourse(
+            [...visibleToWriter, withLabel(observation)],
+            new Set(),
+            request.recordedAt,
+          ),
+          withLabel(observation),
+        );
         topicWrite = {
           ref: topicRef,
           data: {
@@ -930,6 +1001,11 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         nature: entry.nature,
         at: entry.at,
         label: [...new Set(entry.label)].sort(),
+        workspaceId: entry.placement.workspaceId,
+        projectId: entry.placement.projectId,
+        scopeKind: entry.placement.scope.kind,
+        scopeProjectId:
+          entry.placement.scope.kind === 'project' ? entry.placement.scope.projectId : null,
         embeddingModelId: entry.embedding.modelId,
         embedding: FieldValue.vector([...entry.embedding.values]),
       });
@@ -1011,6 +1087,14 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
   }
 
   // ---- Links, source reports, writer suppression ------------------------------------------
+
+  /**
+   * Every change-feed entry is read with the observation ledger's labels: an entry written
+   * before labels existed, record and deletion entries included, reads as an Inbox item.
+   */
+  protected override changeEntryLabel(entry: ChangeFeedEntry): readonly string[] {
+    return storedLabel(entry.label, entry.compartmentIds);
+  }
 
   // ---- Projects -----------------------------------------------------------------------------
 
@@ -1238,6 +1322,59 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       ]);
       return { project: projectView(updated, after), revision };
     });
+  }
+
+  /**
+   * Checks a placement against stored data inside the write transaction: the workspace exists,
+   * the project belongs to it, a project scope is the project or one of its current ancestors,
+   * and every observation it was derived from is visible to the writer.
+   */
+  private async assertPlacement(
+    transaction: Transaction,
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    placement: ObservationPlacement,
+  ): Promise<void> {
+    const { workspaceId, projectId, scope } = placement;
+    const scopeRef = this.scopeRef(actor, scopeId);
+    const [workspace, projects, derived] = await Promise.all([
+      workspaceId === null
+        ? Promise.resolve(null)
+        : transaction.get(scopeRef.collection('workspaces').doc(workspaceId)),
+      workspaceId === null || (projectId === null && scope.kind !== 'project')
+        ? Promise.resolve(null)
+        : transaction.get(this.projectQuery(actor, scopeId, workspaceId)),
+      Promise.all(
+        placement.derivedFrom.map((observationId) =>
+          transaction.get(this.observationRef(actor, scopeId, observationId)),
+        ),
+      ),
+    ]);
+    if (workspace !== null && !workspace.exists)
+      throw new MemoryRepositoryError('invalid_change_set', PLACEMENT_UNAVAILABLE);
+    if (projects !== null && projectId !== null) {
+      const tree = new ProjectTree(
+        projects.docs.map((item) => parseProject(item.data())).filter((item) => item !== null),
+      );
+      const reach = [projectId, ...tree.ancestors(projectId).map((node) => node.id)];
+      if (
+        tree.get(projectId) === undefined ||
+        (scope.kind === 'project' && !reach.includes(scope.projectId))
+      )
+        throw new MemoryRepositoryError('invalid_change_set', PLACEMENT_UNAVAILABLE);
+    }
+    for (const document of derived) {
+      const stored: unknown = document.data();
+      if (
+        !isStoredObservation(stored) ||
+        stored.suppressed === true ||
+        !labelVisible(labelOf(stored), actor.compartmentAllowance)
+      )
+        throw new MemoryRepositoryError(
+          'invalid_change_set',
+          'An observation in derived_from was not found',
+        );
+    }
   }
 
   private projectProblem(problems: readonly string[]): MemoryRepositoryError {
@@ -1528,6 +1665,9 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         recordIds: [],
         revisionNumbers: [],
         compartmentIds: [],
+        // A deletion marker is content-free, but its presence is disclosed only where the
+        // forgotten observation was visible.
+        label: labelOf(observation),
       });
       transaction.create(this.deletionIntentRef(actor, scopeId, ledgerEntry.id), {
         id: ledgerEntry.id,

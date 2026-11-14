@@ -741,18 +741,18 @@ describe('Lore API over Remote MCP', () => {
       },
     });
 
-    // A connection cannot write into a compartment outside its allowance.
+    // A connection cannot write into a workspace that does not exist or is not granted.
     expect(
       errorCode(
         await call(first, 'observe', {
           ...status,
-          summary: 'A compartment write.',
+          summary: 'A write into an unknown workspace.',
           value: 'agreed',
-          compartment_ids: ['work'],
+          workspace: `wsp_${'0'.repeat(32)}`,
           idempotency_key: 'trust-6',
         }),
       ),
-    ).toBe('forbidden');
+    ).toBe('invalid_input');
   }, 90_000);
 
   it('resolves names without merging subjects and reads linked subjects and topics together', async () => {

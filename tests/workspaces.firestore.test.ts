@@ -204,7 +204,8 @@ describe('workspace and connection registry', () => {
       .get();
     // init (worker and default), two workspaces and one connection.
     expect(history.size).toBe(5);
-  });
+    // Each step starts the operator tool as its own process.
+  }, 60_000);
 });
 
 describe('workspace labels on observations', () => {
@@ -221,7 +222,7 @@ describe('workspace labels on observations', () => {
       access: ConnectionAccess,
       key: string,
       summary: string,
-      compartmentIds?: string[],
+      workspaceId?: string,
     ) => {
       const saved = await service.observe(access, {
         title: key,
@@ -230,16 +231,19 @@ describe('workspace labels on observations', () => {
         asUser: false,
         subjects: [`Subject ${key}`],
         idempotencyKey: key,
-        ...(compartmentIds === undefined ? {} : { compartmentIds }),
+        ...(workspaceId === undefined ? {} : { workspaceId }),
       });
       ids[key] = saved.observation_id;
     };
     await write(owner, 'inbox-note', 'Quartz pricing note awaiting a company.');
-    await write(owner, 'northwind-fact', 'Quartz negotiation price for the retail deal.', [
+    await write(
+      owner,
+      'northwind-fact',
+      'Quartz negotiation price for the retail deal.',
       northwind,
-    ]);
-    await write(owner, 'cedar-fact', 'Quartz renewal schedule for the platform.', [cedar]);
-    await write(cedarOnly, 'cedar-own', 'Quartz onboarding checklist written in Cedar.', [cedar]);
+    );
+    await write(owner, 'cedar-fact', 'Quartz renewal schedule for the platform.', cedar);
+    await write(cedarOnly, 'cedar-own', 'Quartz onboarding checklist written in Cedar.', cedar);
 
     for (const key of ['inbox-note', 'northwind-fact', 'cedar-fact', 'cedar-own'])
       await expect(service.getObservation(owner, ids[key]!)).resolves.toBeDefined();
@@ -277,7 +281,7 @@ describe('workspace labels on observations', () => {
         asUser: false,
         subjects: ['Outside'],
         idempotencyKey: 'outside',
-        compartmentIds: [northwind],
+        workspaceId: northwind,
       }),
     ).rejects.toThrow();
     await expect(
@@ -288,6 +292,7 @@ describe('workspace labels on observations', () => {
         asUser: false,
         subjects: ['Inbox'],
         idempotencyKey: 'inbox-from-cedar',
+        workspaceId: null,
       }),
     ).rejects.toThrow();
   });
@@ -377,5 +382,5 @@ describe('workspace labels on observations', () => {
       code: 1,
       output: { error: 'invalid_input' },
     });
-  });
+  }, 60_000);
 });
