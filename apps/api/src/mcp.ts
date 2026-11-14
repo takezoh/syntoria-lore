@@ -18,7 +18,7 @@ export const SERVER_INSTRUCTIONS = [
   'An observation is never edited. When something changes, write a new observation; Lore keeps the earlier one and works out what is current. Use nature "state" for something that holds until it changes (an amount, a status, who is responsible, a decision, a plan) and nature "event" for something that happened (a meeting, a call, a message). For a state, give `aspect`, a short stable label for what about the subject it states, such as "quoted price" or "contract status", and `value`, the state itself in a few words. Before choosing an aspect, recall the subject and reuse the aspect an existing topic already has: the same matter under two aspects becomes two separate courses. Give `effective_at`, when it became the case or happened, whenever you know it.',
   'Name every subject by its proper name in `subjects`, the main one first, and give other spellings of the main subject (another script, an abbreviation, a former name) in `aliases`. If recall shows the subject already exists, use its subject ID. A subject that only appears inside the summary is much harder to find.',
   'Originals stay where they are. Summarize the important points in your own words; never paste the body of a message or document. For anything you read in Slack, Gmail, Notion, Google Drive or another service, attach a source with the identifiers that service uses for the item and a link, so a reader can open the original. Mark confidential material with sensitivity "confidential"; that is a label, not an access control.',
-  'Memories are kept per workspace, one per company, and inside it per project, such as a business. get_access and list_projects show which workspaces and projects this connection may use. Write each fact into its workspace and project with the default scope, so it stays with that work; leave the workspace or the project out when you cannot tell, and it waits in the Inbox or unclassified. When something is a lesson that would help elsewhere, write it as a separate observation, generalized without names, amounts or other particulars, with scope "workspace" or "shared" and derived_from naming the facts it came from; widening is recorded. When you use a recalled item, keep its workspace, project and scope with it: use it as a fact only for work it belongs to, and present anything from another workspace or project only as a lesson stated as such. Pass the project or workspace of the task as context to recall and get_timeline: an item with usable false is at most a lesson there. Narrow a search with where, and list the Inbox with list_observations. The scope guides you; it is not an access control.',
+  'Memories are kept per workspace, one per company, and inside it per project, such as a business. get_access and list_projects show which workspaces and projects this connection may use. Write each fact into its workspace and project with the default scope, so it stays with that work; leave the workspace or the project out when you cannot tell, and it waits in the Inbox or unclassified. When something is a lesson that would help elsewhere, write it as a separate observation, generalized without names, amounts or other particulars, with scope "workspace" or "shared" and derived_from naming the facts it came from; widening is recorded. When you use a recalled item, keep its workspace, project and scope with it: use it as a fact only for work it belongs to, and present anything from another workspace or project only as a lesson stated as such. Pass the project or workspace of the task as context to recall and get_timeline: an item with usable false is at most a lesson there. Narrow a search with where, list the Inbox with list_observations, and classify items once their place is clear. The scope guides you; it is not an access control.',
   'Set as_user only when the user states the thing themselves in this conversation; the approval policy then decides whether it carries their authority. To withdraw an observation that was wrong, write a new one with `retracts`. Call forget only after the user explicitly asks to forget something.',
   'Recall without being asked, and recall often: at the start of a conversation and before recommendations, planning or decisions even without a proper name, and whenever a named person, customer, company, project or product, a past decision, or something discussed before comes up, call recall first, with the full situation, task and constraints, including relevant names, before you answer, plan or ask the user to explain again. A topic result gives the current state, the state before it and when it changed; `tier` says whether the person stated it, it came from a cited source, or an AI inferred it; `agreeing` counts independent writers; `conflicts` are lower-tier observations that disagree and are still open. Use get_timeline for the course of one aspect or for everything about a subject in order, and `at` for what held on a past date. An empty result does not show that nothing was written.',
   'Before asking the user to repeat background or constraints for a task, recall what is already known and carry it forward. Ask only for missing details. When you use a memory, identify its original subject and cite a supporting source link or observation_id so the user can inspect the evidence. Keep the subject, relevant conditions and time with each claim. A similar event in another project is evidence for a possible lesson or hypothesis, never proof of the cause or facts of the current case. State this distinction explicitly when transferring experience. Apply a stated constraint to the recommendation, but do not claim the proposed solution satisfies a cost or performance limit without measurements; identify what must be checked. When a source has changed, identify what was observed and recommend checking the original before relying on its present status. Do not force unrelated memories into the answer. General requests such as translation still deserve a direct answer.',
@@ -483,6 +483,55 @@ export async function handleMcpRequest(
             return summarize(
               result,
               `${result.observations.length} observations${result.cursor === null ? '' : '; more may follow with the cursor'}.`,
+            );
+          }),
+      );
+
+      server.registerTool(
+        'classify',
+        {
+          description:
+            'Moves observations to the workspace, project and scope where they belong, such as Inbox items once their company is clear. Content is not changed; each move is approved by the policy and recorded. Up to 50 at a time; each item reports its own result.',
+          inputSchema: z
+            .object({
+              items: z
+                .array(
+                  z
+                    .object({
+                      observation_id: observationId,
+                      workspace: workspaceId
+                        .nullable()
+                        .describe('The workspace, or null for the Inbox'),
+                      project: projectId.nullable().optional(),
+                      scope: z
+                        .union([z.enum(['project', 'workspace', 'shared']), projectId])
+                        .optional()
+                        .describe('Omit for the narrowest scope'),
+                    })
+                    .strict(),
+                )
+                .min(1)
+                .max(50),
+              idempotency_key: idempotencyKey,
+            })
+            .strict(),
+          annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+        },
+        async (input) =>
+          run('classify', async () => {
+            const result = await service.classify(access, {
+              idempotencyKey: input.idempotency_key,
+              items: input.items.map((item) => ({
+                observationId: item.observation_id,
+                workspaceId: item.workspace,
+                ...(item.project === undefined ? {} : { projectId: item.project }),
+                ...(item.scope === undefined ? {} : { scope: item.scope }),
+              })),
+            });
+            const failed = result.results.filter((item) => item.status === 'failed').length;
+            return summarize(
+              result,
+              `${result.results.length - failed} classified${failed === 0 ? '' : `, ${failed} failed`}.`,
             );
           }),
       );

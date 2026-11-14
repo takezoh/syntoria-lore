@@ -93,7 +93,7 @@ export interface CommitReceipt {
 
 export interface ChangeFeedEntry {
   readonly sequence: number;
-  readonly operation: MemoryChange['kind'] | 'batch' | 'deletion' | 'observe';
+  readonly operation: MemoryChange['kind'] | 'batch' | 'deletion' | 'observe' | 'classify';
   readonly recordIds: readonly string[];
   readonly revisionNumbers: readonly number[];
   readonly compartmentIds: readonly string[];
@@ -3453,7 +3453,7 @@ export class FirestoreMemoryRecordRepository {
           entries.push(entry);
           continue;
         }
-        if (entry.operation === 'observe') {
+        if (entry.operation === 'observe' || entry.operation === 'classify') {
           // An observation is disclosed like a record: it must still exist, be unsuppressed and
           // lie within the reader's allowance.
           const visible = await Promise.all(

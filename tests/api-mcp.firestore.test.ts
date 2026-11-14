@@ -530,6 +530,7 @@ describe('Lore API over Remote MCP', () => {
     await admit(subject, 'tenant-course', 'personal');
     const client = await connect(grant(subject));
     expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
+      'classify',
       'forget',
       'get_access',
       'get_changes',

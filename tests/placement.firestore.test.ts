@@ -598,3 +598,124 @@ describe('placement queries and context', () => {
     ).toBe('resync_required');
   });
 });
+
+describe('classification', () => {
+  const statuses = async (
+    access: ConnectionAccess,
+    items: Parameters<ObservationService['classify']>[1]['items'],
+    key: string,
+  ) => (await service.classify(access, { items, idempotencyKey: key })).results;
+
+  it('moves an Inbox item into a project without changing what it says', async () => {
+    const id = await observe(owner, 'to-classify', { summary: 'Zirconia supplier rated well.' });
+    const before = await service.getObservation(owner, id);
+    expect(
+      await statuses(
+        owner,
+        [{ observationId: id, workspaceId: northwind, projectId: logistics }],
+        'c-1',
+      ),
+    ).toEqual([{ observation_id: id, status: 'classified' }]);
+    const after = await service.getObservation(owner, id);
+    expect(after).toMatchObject({
+      summary: before.summary,
+      title: before.title,
+      workspace: { id: northwind },
+      project: { id: logistics, path: ['Logistics'] },
+      scope: { kind: 'project' },
+    });
+    const inbox = await service.listObservations(owner, {
+      where: { field: 'workspace_id', op: 'eq', value: null },
+      limit: 100,
+    });
+    expect(inbox.observations.map((item) => item.observation_id)).not.toContain(id);
+    const found = await service.recall(owner, {
+      query: 'zirconia supplier',
+      where: { field: 'usable_in', op: 'eq', value: logistics },
+    });
+    expect(JSON.stringify(found)).toContain(id);
+    const changes = await service.getChanges(owner, undefined, 100);
+    expect(
+      changes.entries.some(
+        (entry) => entry.operation === 'classify' && entry.recordIds.includes(id),
+      ),
+    ).toBe(true);
+    const records = await firestore
+      .collectionGroup('classifications')
+      .where('observationId', '==', id)
+      .get();
+    expect(records.size).toBe(1);
+    expect(records.docs[0]?.get('from')).toMatchObject({
+      workspaceId: null,
+      scope: { kind: 'inbox' },
+    });
+
+    // The same request replays; the same key with another placement conflicts.
+    expect(
+      await statuses(
+        owner,
+        [{ observationId: id, workspaceId: northwind, projectId: logistics }],
+        'c-1',
+      ),
+    ).toEqual([{ observation_id: id, status: 'replayed' }]);
+    expect(
+      (await statuses(owner, [{ observationId: id, workspaceId: northwind }], 'c-1'))[0],
+    ).toMatchObject({ status: 'failed', error: { code: 'idempotency_conflict' } });
+  });
+
+  it('takes an observation out of reach of a connection that loses it', async () => {
+    const id = await observe(cedarOnly, 'cedar-move', { summary: 'Basaltic onboarding note.' });
+    const finds = async (access: ConnectionAccess) =>
+      JSON.stringify(await service.recall(access, { query: 'basaltic onboarding' })).includes(id);
+    expect(await finds(cedarOnly)).toBe(true);
+    expect(
+      await statuses(
+        owner,
+        [{ observationId: id, workspaceId: northwind, projectId: retail }],
+        'c-2',
+      ),
+    ).toEqual([{ observation_id: id, status: 'classified' }]);
+    expect(await finds(cedarOnly)).toBe(false);
+    expect((await failure(service.getObservation(cedarOnly, id))).code).toBe('not_found');
+  });
+
+  it('refuses what a connection may not classify, item by item', async () => {
+    const results = await statuses(
+      cedarOnly,
+      [
+        { observationId: ids['lesson']!, workspaceId: cedar },
+        { observationId: `obs_${'0'.repeat(32)}`, workspaceId: cedar },
+        { observationId: ids['cedar-lesson']!, workspaceId: northwind },
+        // A malformed scope fails on its own; the other items still report their results.
+        { observationId: ids['ancestor']!, workspaceId: cedar, scope: 'everywhere' },
+      ],
+      'c-3',
+    );
+    expect(results[0]).toMatchObject({
+      status: 'failed',
+      error: { code: 'invalid_input', message: 'The observation cannot be classified' },
+    });
+    expect(results[1]?.error).toEqual(results[0]?.error);
+    expect(results[2]).toMatchObject({
+      status: 'failed',
+      error: { code: 'invalid_input', message: 'The workspace, project or scope is not available' },
+    });
+    expect(results[3]).toMatchObject({ status: 'failed', error: { code: 'invalid_input' } });
+  });
+
+  it('needs the automatic policy for every classification', async () => {
+    const id = await observe(owner, 'confirm-classify');
+    const admission = firestore
+      .collection('memoryAdmissions')
+      .doc(admissionDocumentId(issuer, subject));
+    await admission.update({ approvalPolicy: 'confirm' });
+    try {
+      const confirming = await resolve('shared-ai');
+      expect(
+        (await statuses(confirming, [{ observationId: id, workspaceId: northwind }], 'c-4'))[0],
+      ).toMatchObject({ status: 'failed', error: { code: 'user_required' } });
+    } finally {
+      await admission.update({ approvalPolicy: 'automatic' });
+    }
+  });
+});

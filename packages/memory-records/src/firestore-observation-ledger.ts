@@ -40,6 +40,7 @@ import {
   INBOX_PLACEMENT,
   labelForPlacement,
   placementProblems,
+  scopeIsWider,
   computeCourseAt,
   deriveTier,
   normalizeLabel,
@@ -305,6 +306,21 @@ export type ProjectChange =
       readonly parentId?: string | null;
     }
   | { readonly action: 'delete'; readonly projectId: string };
+
+/** One message for every observation that cannot be classified, visible or not. */
+const NOT_CLASSIFIABLE = 'The observation cannot be classified';
+
+/** A change of an observation's placement, approved and recorded once per request. */
+export interface ClassifyRequest {
+  readonly observationId: string;
+  /** The new placement; `derivedFrom` is kept from the observation and ignored here. */
+  readonly placement: Omit<ObservationPlacement, 'derivedFrom' | 'scopeApproval'>;
+  /** The approval recorded for this change; it also identifies the classification record. */
+  readonly protectedChangeId: string;
+  /** Digest of the requested placement, so a resend with another placement is refused. */
+  readonly requestDigest: string;
+  readonly at: string;
+}
 
 /** One message for every placement that is not available, so none reveals what exists. */
 const PLACEMENT_UNAVAILABLE = 'The workspace, project or scope is not available';
@@ -1584,6 +1600,160 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     return this.scopeRef(actor, scopeId)
       .collection('projectNames')
       .doc(digest(['project-name', workspaceId, parentId ?? '', normalizedName]));
+  }
+
+  /**
+   * Moves an observation to another workspace, project or scope. The observation's content is
+   * not changed: one transaction appends a classification record, updates the current placement
+   * and label of the observation, its index entry and its topic, and appends a `classify`
+   * change-feed entry carrying the new label. Only an observation the actor can see, in a
+   * workspace (or the Inbox) the actor is granted, can be classified.
+   */
+  async classify(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    request: ClassifyRequest,
+  ): Promise<{ placement: ObservationPlacement; replayed: boolean }> {
+    assertActor(actor, scopeId);
+    if (actor.actorKind === 'worker')
+      throw new MemoryRepositoryError('authorization_denied', 'A worker cannot classify');
+    if (
+      !OBSERVATION_ID.test(request.observationId) ||
+      !/^policy_[a-f0-9]{40}$/u.test(request.protectedChangeId) ||
+      !/^[a-f0-9]{64}$/u.test(request.requestDigest)
+    )
+      throw new MemoryRepositoryError('invalid_change_set', 'Invalid classification request');
+    await this.assertRestoreReady(actor, scopeId);
+    const scopeRef = this.scopeRef(actor, scopeId);
+    const recordRef = scopeRef.collection('classifications').doc(request.protectedChangeId);
+    const observationRef = this.observationRef(actor, scopeId, request.observationId);
+    return this.firestore.runTransaction(async (transaction) => {
+      const [auth, record, current, suppression, approval] = await Promise.all([
+        transaction.get(this.authorizationRef(actor, scopeId)),
+        transaction.get(recordRef),
+        transaction.get(observationRef),
+        transaction.get(this.suppressionRef(actor, scopeId, request.observationId)),
+        transaction.get(this.protectedApprovalRef(actor, scopeId, request.protectedChangeId)),
+      ]);
+      this.assertCurrentAuthorization(actor, auth.data() as AuthorizationDocument | undefined);
+      if (record.exists) {
+        if (
+          record.get('requestDigest') !== request.requestDigest ||
+          record.get('observationId') !== request.observationId
+        )
+          throw new MemoryRepositoryError(
+            'idempotency_conflict',
+            'The classification was already requested with another placement',
+          );
+        return { placement: record.get('to') as ObservationPlacement, replayed: true };
+      }
+      if (approval.get('requestDigest') !== request.requestDigest)
+        throw new MemoryRepositoryError(
+          'authorization_denied',
+          'The classification is not approved for this request',
+        );
+      const stored: unknown = current.data();
+      if (
+        !isStoredObservation(stored) ||
+        stored.suppressed === true ||
+        suppression.exists ||
+        !labelVisible(labelOf(stored), actor.compartmentAllowance)
+      )
+        throw new MemoryRepositoryError('invalid_change_set', NOT_CLASSIFIABLE);
+      const from = placementOf(stored);
+      // The current place must be granted too: a Shared lesson seen without its origin, or an
+      // Inbox item seen without the Inbox grant, cannot be moved by this connection.
+      if (
+        !labelVisible(
+          from.workspaceId === null ? ['inbox'] : [from.workspaceId],
+          actor.compartmentAllowance,
+        )
+      )
+        throw new MemoryRepositoryError('invalid_change_set', NOT_CLASSIFIABLE);
+      const target = request.placement;
+      const to: ObservationPlacement = {
+        workspaceId: target.workspaceId,
+        projectId: target.projectId,
+        scope: { ...target.scope },
+        derivedFrom: [...from.derivedFrom],
+        scopeApproval: scopeIsWider(target)
+          ? { provenance: 'policy', protectedChangeId: request.protectedChangeId }
+          : null,
+      };
+      const shape = placementProblems(to);
+      if (shape.length > 0) throw new MemoryRepositoryError('invalid_change_set', shape.join('; '));
+      if (
+        !labelVisible(
+          to.workspaceId === null ? ['inbox'] : [to.workspaceId],
+          actor.compartmentAllowance,
+        )
+      )
+        throw new MemoryRepositoryError('invalid_change_set', PLACEMENT_UNAVAILABLE);
+      await this.assertPlacement(transaction, actor, scopeId, { ...to, derivedFrom: [] });
+      const label = labelForPlacement(to);
+      const topicRef = stored.topicKey ? this.topicRef(actor, scopeId, stored.topicKey) : null;
+      const [index, topic, sequence, indexState] = await Promise.all([
+        transaction.get(this.indexRef(actor, scopeId, request.observationId)),
+        topicRef === null ? Promise.resolve(null) : transaction.get(topicRef),
+        transaction.get(this.sequenceRef(actor, scopeId)),
+        transaction.get(this.indexStateRef(actor, scopeId)),
+      ]);
+      const nextSequence = Number(sequence.get('sequence') ?? 0) + 1;
+      transaction.create(recordRef, {
+        observationId: request.observationId,
+        from,
+        to,
+        by: actor.principalId,
+        at: request.at,
+        requestDigest: request.requestDigest,
+        approval: { provenance: 'policy', protectedChangeId: request.protectedChangeId },
+      });
+      transaction.update(observationRef, {
+        workspaceId: to.workspaceId,
+        projectId: to.projectId,
+        scope: { ...to.scope },
+        scopeApproval: to.scopeApproval,
+        label,
+        labelKey: labelKey(label),
+        classifiedAt: request.at,
+      });
+      if (index.exists)
+        transaction.update(index.ref, {
+          label,
+          labelKey: labelKey(label),
+          workspaceId: to.workspaceId,
+          projectId: to.projectId,
+          scopeKind: to.scope.kind,
+          scopeProjectId: to.scope.kind === 'project' ? to.scope.projectId : null,
+        });
+      // A topic's label joins its members' labels; adding the new one only narrows who may use
+      // the stored view, and every reader recomputes a view it may not fully see.
+      if (topic !== null && topic.exists && topicRef !== null)
+        transaction.update(topicRef, {
+          label: [
+            ...new Set([...storedLabel(topic.get('label'), topic.get('compartmentIds')), ...label]),
+          ].sort(),
+        });
+      transaction.create(this.jobRef(actor, scopeId, nextSequence), {
+        sequence: nextSequence,
+        recordIds: [],
+        revisions: [],
+        status: 'complete',
+        completedAt: request.at,
+      });
+      if (Number(indexState.get('indexedThrough') ?? 0) === nextSequence - 1)
+        transaction.set(this.indexStateRef(actor, scopeId), { indexedThrough: nextSequence });
+      transaction.set(this.sequenceRef(actor, scopeId), { sequence: nextSequence });
+      transaction.create(this.changeRef(actor, scopeId, nextSequence), {
+        sequence: nextSequence,
+        operation: 'classify',
+        recordIds: [request.observationId],
+        revisionNumbers: [],
+        compartmentIds: [],
+        label,
+      });
+      return { placement: to, replayed: false };
+    });
   }
 
   /** Declares two subjects, or two topics, the same. The link can be revoked; nothing merges. */

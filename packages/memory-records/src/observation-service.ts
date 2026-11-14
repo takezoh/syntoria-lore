@@ -923,6 +923,76 @@ export class ObservationService {
     });
   }
 
+  /**
+   * Classifies up to fifty observations under one idempotency key: each gets a new workspace,
+   * project and scope. Every classification is a protected change approved under the binding's
+   * policy, and each item succeeds or fails on its own.
+   */
+  async classify(
+    access: ConnectionAccess,
+    input: {
+      readonly items: readonly {
+        readonly observationId: string;
+        /** `null` moves it to the Inbox. */
+        readonly workspaceId: string | null;
+        readonly projectId?: string | null;
+        readonly scope?: string;
+      }[];
+      readonly idempotencyKey: string;
+    },
+  ): Promise<{
+    readonly results: readonly {
+      readonly observation_id: string;
+      readonly status: 'classified' | 'replayed' | 'failed';
+      readonly error?: { readonly code: string; readonly message: string };
+    }[];
+  }> {
+    return this.run(access, async () => {
+      const key = this.idempotencyKey(input.idempotencyKey);
+      if (input.items.length < 1 || input.items.length > 50)
+        throw new MemoryServiceError('invalid_input', 'Classify 1 to 50 observations at a time');
+      if (new Set(input.items.map((item) => item.observationId)).size !== input.items.length)
+        throw new MemoryServiceError('invalid_input', 'Name each observation once');
+      const results = [];
+      for (const item of input.items) {
+        try {
+          const projectId = item.projectId ?? null;
+          const scope = this.scopeFor(item.scope, item.workspaceId, projectId);
+          const placement = { workspaceId: item.workspaceId, projectId, scope };
+          const protectedChangeId = this.protectedChangeId(
+            access,
+            'classify',
+            `${key}\u0000${item.observationId}`,
+          );
+          const requestDigest = sha256(
+            stableJson({ observationId: item.observationId, placement }),
+          );
+          await this.access.approveByPolicy(access, { protectedChangeId, requestDigest });
+          const result = await this.ledger.classify(access.actor, access.scopeId, {
+            observationId: item.observationId,
+            placement,
+            protectedChangeId,
+            requestDigest,
+            at: this.now().toISOString(),
+          });
+          results.push({
+            observation_id: item.observationId,
+            status: result.replayed ? ('replayed' as const) : ('classified' as const),
+          });
+        } catch (error) {
+          const translated = this.translate(error);
+          if (!(translated instanceof MemoryServiceError)) throw translated;
+          results.push({
+            observation_id: item.observationId,
+            status: 'failed' as const,
+            error: { code: translated.code, message: translated.message },
+          });
+        }
+      }
+      return { results };
+    });
+  }
+
   /** The granted workspaces with their project hierarchies. */
   async listProjects(access: ConnectionAccess): Promise<{
     readonly workspaces: readonly WorkspaceProjects[];
