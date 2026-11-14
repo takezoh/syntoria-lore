@@ -18,7 +18,7 @@ export const SERVER_INSTRUCTIONS = [
   'An observation is never edited. When something changes, write a new observation; Lore keeps the earlier one and works out what is current. Use nature "state" for something that holds until it changes (an amount, a status, who is responsible, a decision, a plan) and nature "event" for something that happened (a meeting, a call, a message). For a state, give `aspect`, a short stable label for what about the subject it states, such as "quoted price" or "contract status", and `value`, the state itself in a few words. Before choosing an aspect, recall the subject and reuse the aspect an existing topic already has: the same matter under two aspects becomes two separate courses. Give `effective_at`, when it became the case or happened, whenever you know it.',
   'Name every subject by its proper name in `subjects`, the main one first, and give other spellings of the main subject (another script, an abbreviation, a former name) in `aliases`. If recall shows the subject already exists, use its subject ID. A subject that only appears inside the summary is much harder to find.',
   'Originals stay where they are. Summarize the important points in your own words; never paste the body of a message or document. For anything you read in Slack, Gmail, Notion, Google Drive or another service, attach a source with the identifiers that service uses for the item and a link, so a reader can open the original. Mark confidential material with sensitivity "confidential"; that is a label, not an access control.',
-  'Memories are kept per workspace, one per company, and inside it per project, such as a business. get_access and list_projects show which workspaces and projects this connection may use. Write each fact into its workspace and project with the default scope, so it stays with that work; leave the workspace or the project out when you cannot tell, and it waits in the Inbox or unclassified. When something is a lesson that would help elsewhere, write it as a separate observation, generalized without names, amounts or other particulars, with scope "workspace" or "shared" and derived_from naming the facts it came from; widening is recorded. When you use a recalled item, keep its workspace, project and scope with it: use it as a fact only for work it belongs to, and present anything from another workspace or project only as a lesson stated as such. The scope guides you; it is not an access control.',
+  'Memories are kept per workspace, one per company, and inside it per project, such as a business. get_access and list_projects show which workspaces and projects this connection may use. Write each fact into its workspace and project with the default scope, so it stays with that work; leave the workspace or the project out when you cannot tell, and it waits in the Inbox or unclassified. When something is a lesson that would help elsewhere, write it as a separate observation, generalized without names, amounts or other particulars, with scope "workspace" or "shared" and derived_from naming the facts it came from; widening is recorded. When you use a recalled item, keep its workspace, project and scope with it: use it as a fact only for work it belongs to, and present anything from another workspace or project only as a lesson stated as such. Pass the project or workspace of the task as context to recall and get_timeline: an item with usable false is at most a lesson there. Narrow a search with where, and list the Inbox with list_observations. The scope guides you; it is not an access control.',
   'Set as_user only when the user states the thing themselves in this conversation; the approval policy then decides whether it carries their authority. To withdraw an observation that was wrong, write a new one with `retracts`. Call forget only after the user explicitly asks to forget something.',
   'Recall without being asked, and recall often: at the start of a conversation and before recommendations, planning or decisions even without a proper name, and whenever a named person, customer, company, project or product, a past decision, or something discussed before comes up, call recall first, with the full situation, task and constraints, including relevant names, before you answer, plan or ask the user to explain again. A topic result gives the current state, the state before it and when it changed; `tier` says whether the person stated it, it came from a cited source, or an AI inferred it; `agreeing` counts independent writers; `conflicts` are lower-tier observations that disagree and are still open. Use get_timeline for the course of one aspect or for everything about a subject in order, and `at` for what held on a past date. An empty result does not show that nothing was written.',
   'Before asking the user to repeat background or constraints for a task, recall what is already known and carry it forward. Ask only for missing details. When you use a memory, identify its original subject and cite a supporting source link or observation_id so the user can inspect the evidence. Keep the subject, relevant conditions and time with each claim. A similar event in another project is evidence for a possible lesson or hypothesis, never proof of the cause or facts of the current case. State this distinction explicitly when transferring experience. Apply a stated constraint to the recommendation, but do not claim the proposed solution satisfies a cost or performance limit without measurements; identify what must be checked. When a source has changed, identify what was observed and recommend checking the original before relying on its present status. Do not force unrelated memories into the answer. General requests such as translation still deserve a direct answer.',
@@ -41,6 +41,17 @@ const projectId = z
   .string()
   .regex(/^prj_[a-f0-9]{32}$/u)
   .describe('A project ID (prj_…) from list_projects');
+const where = z
+  .record(z.string(), z.unknown())
+  .describe(
+    'Selects by placement: {"and"|"or": [conditions]}, {"not": condition}, or {"field", "op", "value"|"values"}. Fields: workspace_id and project_id (op eq, ne, in, not_in; null means the Inbox or no project; project_id includes descendants unless include_descendants is false), scope (eq, in: project, workspace, shared, inbox), usable_in (eq, in: workspace or project IDs; what may be used as a fact there). Example: {"or": [{"field": "usable_in", "op": "eq", "value": "prj_…"}, {"field": "workspace_id", "op": "eq", "value": null}]}',
+  );
+const context = z
+  .string()
+  .regex(/^(wsp|prj)_[a-f0-9]{32}$/u)
+  .describe(
+    'The workspace or project of the task; each result then says in `usable` whether it may be used as a fact there',
+  );
 const observationId = z
   .string()
   .regex(/^obs_[a-f0-9]{32}$/u)
@@ -386,6 +397,8 @@ export async function handleMcpRequest(
               intent: z.enum(['contextual', 'entity', 'historical']).optional(),
               at: isoTime.optional().describe('Answer as of this past time'),
               limit: z.number().int().min(1).max(30).optional(),
+              where: where.optional(),
+              context: context.optional(),
             })
             .strict(),
           annotations: readOnly,
@@ -397,6 +410,8 @@ export async function handleMcpRequest(
               ...(input.intent === undefined ? {} : { intent: input.intent }),
               ...(input.at === undefined ? {} : { at: input.at }),
               ...(input.limit === undefined ? {} : { limit: input.limit }),
+              ...(input.where === undefined ? {} : { where: input.where }),
+              ...(input.context === undefined ? {} : { context: input.context }),
             });
             const notes = result.notes.length === 0 ? '' : ` Notes: ${result.notes.join(', ')}.`;
             return summarize(
@@ -419,6 +434,8 @@ export async function handleMcpRequest(
               to: isoTime.optional(),
               at: isoTime.optional(),
               limit: z.number().int().min(1).max(100).optional(),
+              where: where.optional(),
+              context: context.optional(),
             })
             .strict(),
           annotations: readOnly,
@@ -432,9 +449,41 @@ export async function handleMcpRequest(
               ...(input.to === undefined ? {} : { to: input.to }),
               ...(input.at === undefined ? {} : { at: input.at }),
               ...(input.limit === undefined ? {} : { limit: input.limit }),
+              ...(input.where === undefined ? {} : { where: input.where }),
+              ...(input.context === undefined ? {} : { context: input.context }),
             });
             const count = result.topic?.course?.length ?? result.observations.length;
             return summarize(result, `${count} observations in order.`);
+          }),
+      );
+
+      server.registerTool(
+        'list_observations',
+        {
+          description:
+            'Lists observations newest first, selected by placement. Use {"field": "workspace_id", "op": "eq", "value": null} for the Inbox, or project_id null with a workspace for its unclassified items. Continue with the returned cursor.',
+          inputSchema: z
+            .object({
+              where: where.optional(),
+              context: context.optional(),
+              cursor: z.string().min(1).max(4096).optional(),
+              limit: z.number().int().min(1).max(100).optional(),
+            })
+            .strict(),
+          annotations: readOnly,
+        },
+        async (input) =>
+          run('list_observations', async () => {
+            const result = await service.listObservations(access, {
+              ...(input.where === undefined ? {} : { where: input.where }),
+              ...(input.context === undefined ? {} : { context: input.context }),
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+              ...(input.limit === undefined ? {} : { limit: input.limit }),
+            });
+            return summarize(
+              result,
+              `${result.observations.length} observations${result.cursor === null ? '' : '; more may follow with the cursor'}.`,
+            );
           }),
       );
 

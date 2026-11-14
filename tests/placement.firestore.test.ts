@@ -427,3 +427,174 @@ describe('subjects, aliases and links across workspaces', () => {
     expect(hidden.code).toBe('not_found');
   });
 });
+
+describe('placement queries and context', () => {
+  const keys = new Map<string, string>();
+  const place = async (key: string, extra: Partial<ObserveInput>, access = owner) => {
+    const saved = await service.observe(access, {
+      title: key,
+      summary: `Query fixture ${key}.`,
+      nature: 'event',
+      subjects: ['Query fixture'],
+      asUser: false,
+      idempotencyKey: `q-${key}`,
+      ...extra,
+    });
+    keys.set(saved.observation_id, key);
+  };
+  const timeline = async (extra: { where?: unknown; context?: string }, access = owner) =>
+    (await service.getTimeline(access, { subjects: ['Query fixture'], limit: 100, ...extra }))
+      .observations;
+  const selected = async (where: unknown, access = owner) =>
+    (await timeline({ where }, access)).map((item) => keys.get(item.observation_id)).sort();
+  const leaf = (field: string, op: string, value: unknown) =>
+    op === 'in' ? { field, op, values: value } : { field, op, value };
+
+  beforeAll(async () => {
+    await place('price', { workspaceId: northwind, projectId: retail });
+    await place('rule', { workspaceId: northwind, projectId: retail, scope: 'workspace' });
+    await place('memo', { workspaceId: northwind });
+    await place('lesson', { workspaceId: northwind, projectId: retail, scope: 'shared' });
+    await place('note', { workspaceId: null });
+    await place('deal', { workspaceId: northwind, projectId: deals, scope: retail });
+    await place('logistics', { workspaceId: northwind, projectId: logistics });
+    await place('cedar', { workspaceId: cedar, projectId: cedarProject });
+  });
+
+  it('selects by usability, combinations and unassigned places', async () => {
+    expect(await selected(leaf('usable_in', 'eq', retail))).toEqual(
+      ['deal', 'lesson', 'memo', 'price', 'rule'].sort(),
+    );
+    expect(await selected(leaf('usable_in', 'eq', logistics))).toEqual(
+      ['lesson', 'logistics', 'memo', 'rule'].sort(),
+    );
+    expect(
+      await selected({ or: [leaf('usable_in', 'eq', cedar), leaf('workspace_id', 'eq', null)] }),
+    ).toEqual(['lesson', 'note']);
+    expect(
+      await selected({
+        and: [leaf('workspace_id', 'eq', northwind), { not: leaf('usable_in', 'eq', logistics) }],
+      }),
+    ).toEqual(['deal', 'price']);
+    expect(await selected(leaf('project_id', 'in', [retail]))).toEqual(
+      ['deal', 'lesson', 'price', 'rule'].sort(),
+    );
+    expect(await selected(leaf('scope', 'eq', 'shared'))).toEqual(['lesson']);
+    // The same query from the Cedar connection sees only what its allowance shows.
+    expect(await selected(leaf('scope', 'in', ['shared', 'project']), cedarOnly)).toEqual([
+      'cedar',
+      'lesson',
+    ]);
+  });
+
+  it('marks usability in a context without filtering', async () => {
+    const usable = Object.fromEntries(
+      (await timeline({ context: logistics })).map((item) => [
+        keys.get(item.observation_id),
+        item.usable,
+      ]),
+    );
+    expect(usable).toEqual({
+      price: false,
+      rule: true,
+      memo: true,
+      lesson: true,
+      note: false,
+      deal: false,
+      logistics: true,
+      cedar: false,
+    });
+    const recalled = await service.recall(owner, {
+      query: 'Query fixture',
+      context: retail,
+      where: leaf('workspace_id', 'eq', null),
+    });
+    const views = recalled.items.flatMap((item) =>
+      item.type === 'event' ? [item.observation] : item.evidence,
+    );
+    // Search may also find Inbox items of other fixtures; every result must be in the Inbox.
+    expect(views.map((view) => keys.get(view.observation_id))).toContain('note');
+    expect(views.every((view) => view.workspace === null && view.scope.kind === 'inbox')).toBe(
+      true,
+    );
+    expect(views.every((view) => view.usable === false)).toBe(true);
+  });
+
+  it('refuses a place outside the allowance like an unknown one', async () => {
+    const unknown = await failure(
+      timeline({ where: leaf('workspace_id', 'eq', `wsp_${'0'.repeat(32)}`) }),
+    );
+    expect(unknown).toEqual({
+      code: 'invalid_input',
+      message: 'Unknown workspace or project in the query',
+    });
+    expect(
+      await failure(timeline({ where: leaf('workspace_id', 'eq', northwind) }, cedarOnly)),
+    ).toEqual(unknown);
+    expect(await failure(timeline({ context: retail }, cedarOnly))).toEqual(unknown);
+    expect((await failure(timeline({ where: { or: [] } }))).message).toBe(
+      'or needs at least one condition',
+    );
+  });
+
+  it('computes a topic within the query', async () => {
+    const status = (value: string): Partial<ObserveInput> => ({
+      nature: 'state',
+      subjects: ['Query topic'],
+      aspect: 'review status',
+      value,
+      summary: `Review is ${value}.`,
+    });
+    await place('status-inbox', { ...status('pending'), title: 'status-inbox', workspaceId: null });
+    await place('status-retail', {
+      ...status('approved'),
+      title: 'status-retail',
+      workspaceId: northwind,
+      projectId: retail,
+    });
+    const current = async (where?: unknown) =>
+      (
+        await service.getTimeline(owner, {
+          subjects: ['Query topic'],
+          aspect: 'review status',
+          ...(where === undefined ? {} : { where }),
+        })
+      ).topic?.current.value;
+    expect(await current()).toBe('approved');
+    expect(await current(leaf('workspace_id', 'eq', null))).toBe('pending');
+    expect(await current(leaf('usable_in', 'eq', retail))).toBe('approved');
+  });
+
+  it('lists the Inbox page by page with a cursor bound to the query and reader', async () => {
+    const inbox = leaf('workspace_id', 'eq', null);
+    const first = await service.listObservations(owner, { where: inbox, limit: 2 });
+    expect(first.observations).toHaveLength(2);
+    expect(first.observations.every((item) => item.workspace === null)).toBe(true);
+    expect(first.cursor).not.toBeNull();
+    const seen = new Set(first.observations.map((item) => item.observation_id));
+    let cursor = first.cursor;
+    while (cursor !== null) {
+      const page = await service.listObservations(owner, { where: inbox, limit: 2, cursor });
+      for (const item of page.observations) {
+        expect(item.workspace).toBeNull();
+        expect(seen.has(item.observation_id)).toBe(false);
+        seen.add(item.observation_id);
+      }
+      cursor = page.cursor;
+    }
+    expect([...seen].some((id) => keys.get(id) === 'note')).toBe(true);
+    expect(
+      (
+        await failure(
+          service.listObservations(owner, {
+            where: leaf('scope', 'eq', 'shared'),
+            cursor: first.cursor!,
+          }),
+        )
+      ).code,
+    ).toBe('resync_required');
+    expect(
+      (await failure(service.listObservations(cedarOnly, { cursor: first.cursor! }))).code,
+    ).toBe('resync_required');
+  });
+});

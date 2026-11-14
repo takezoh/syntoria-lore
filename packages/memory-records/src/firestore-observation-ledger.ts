@@ -69,6 +69,9 @@ const SUBJECT_ID = /^sub_[a-f0-9]{32}$/u;
 const MAX_TOPIC_OBSERVATIONS = 500;
 const MAX_IN = 30;
 const MAX_TERM_CANDIDATES = 200;
+/** Documents one listing call reads, and per batch. */
+const LIST_SCAN_BUDGET = 500;
+const LIST_BATCH = 100;
 /** Observations read to decide whether a reader may see a subject or a topic. */
 const MEMBER_VISIBILITY_SCAN = 50;
 
@@ -269,6 +272,9 @@ export interface ProjectView {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+/** Selects observations by their placement; applied after the allowance, never instead of it. */
+export type ObservationFilter = (observation: Observation) => boolean;
 
 /** A granted workspace with its project hierarchy. */
 export interface WorkspaceProjects {
@@ -941,7 +947,12 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     actor: VerifiedActorCapability,
     scopeId: string,
     subjectIds: readonly string[],
-    options: { readonly limit: number; readonly now: string; readonly at?: string },
+    options: {
+      readonly limit: number;
+      readonly now: string;
+      readonly at?: string;
+      readonly filter?: ObservationFilter;
+    },
   ): Promise<TopicResult[]> {
     const context = await this.readContext(actor, scopeId);
     const ids = [...new Set(subjectIds)].slice(0, MAX_IN);
@@ -968,6 +979,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
         this.topicResult(context, actor, scopeId, topic, {
           now: options.now,
           ...(options.at === undefined ? {} : { at: options.at }),
+          ...(options.filter === undefined ? {} : { filter: options.filter }),
         }),
       ),
     );
@@ -980,7 +992,12 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     scopeId: string,
     subjectId: string,
     aspect: string,
-    options: { readonly now: string; readonly at?: string; readonly course?: boolean },
+    options: {
+      readonly now: string;
+      readonly at?: string;
+      readonly course?: boolean;
+      readonly filter?: ObservationFilter;
+    },
   ): Promise<TopicResult | null> {
     const context = await this.readContext(actor, scopeId);
     const topic = await this.topicRef(actor, scopeId, topicKeyFor(subjectId, aspect)).get();
@@ -993,7 +1010,12 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     actor: VerifiedActorCapability,
     scopeId: string,
     subjectIds: readonly string[],
-    options: { readonly from?: string; readonly to?: string; readonly limit: number },
+    options: {
+      readonly from?: string;
+      readonly to?: string;
+      readonly limit: number;
+      readonly filter?: ObservationFilter;
+    },
   ): Promise<Observation[]> {
     const context = await this.readContext(actor, scopeId);
     const ids = [...new Set(subjectIds)].slice(0, MAX_IN);
@@ -1017,8 +1039,71 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     const retracted = await this.retractedAmong(actor, scopeId, unsuppressed);
     return unsuppressed
       .filter((observation) => observation.retracts === null && !retracted.has(observation.id))
-      .slice(0, options.limit)
-      .map(publicObservation);
+      .map(publicObservation)
+      .filter((observation) => options.filter === undefined || options.filter(observation))
+      .slice(0, options.limit);
+  }
+
+  /**
+   * Visible observations, newest recorded first, that the filter selects, with a signed cursor
+   * bound to this reader and listing. One call scans a bounded number of documents; when the
+   * budget ends before the page is full, `exhausted` says so and the cursor continues from there.
+   */
+  async listObservations(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    options: {
+      readonly limit: number;
+      readonly cursor?: string;
+      /** Identifies the filter, so that a cursor continues only the same listing. */
+      readonly listing: string;
+      readonly filter?: ObservationFilter;
+    },
+  ): Promise<{ observations: Observation[]; cursor: string | null; exhausted: boolean }> {
+    const context = await this.readContext(actor, scopeId);
+    const position =
+      options.cursor === undefined
+        ? null
+        : this.verifyListCursor(actor, scopeId, options.listing, options.cursor);
+    const result: Observation[] = [];
+    let after: [string, string] | null =
+      position === null ? null : [position['recordedAt'] ?? '', position['documentId'] ?? ''];
+    let scanned = 0;
+    let more = true;
+    while (result.length < options.limit && scanned < LIST_SCAN_BUDGET && more) {
+      let query = this.observationCollection(actor, scopeId)
+        .orderBy('recordedAt', 'desc')
+        .orderBy(FieldPath.documentId(), 'desc')
+        .limit(LIST_BATCH);
+      if (after !== null) query = query.startAfter(...after);
+      const snapshot = await query.get();
+      more = snapshot.size === LIST_BATCH;
+      for (const document of snapshot.docs) {
+        scanned += 1;
+        after = [String(document.get('recordedAt')), document.id];
+        const stored: unknown = document.data();
+        if (!isStoredObservation(stored) || !this.visible(context, actor, scopeId, stored))
+          continue;
+        const [kept] = await this.dropSuppressed(actor, scopeId, [stored]);
+        if (kept === undefined) continue;
+        const observation = publicObservation(kept);
+        if (options.filter !== undefined && !options.filter(observation)) continue;
+        result.push(observation);
+        if (result.length >= options.limit) break;
+      }
+    }
+    const cursor =
+      after === null || (!more && result.length < options.limit)
+        ? null
+        : this.signListCursor(actor, scopeId, options.listing, {
+            recordedAt: after[0],
+            documentId: after[1],
+          });
+    return {
+      observations: result,
+      cursor,
+      exhausted: result.length < options.limit && scanned >= LIST_SCAN_BUDGET,
+    };
   }
 
   // ---- Search -----------------------------------------------------------------------------
@@ -2185,7 +2270,13 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
     actor: VerifiedActorCapability,
     scopeId: string,
     topic: TopicDocument,
-    options: { readonly now: string; readonly at?: string; readonly course?: boolean },
+    options: {
+      readonly now: string;
+      readonly at?: string;
+      readonly course?: boolean;
+      /** When given, the view is computed from the members it selects. */
+      readonly filter?: ObservationFilter;
+    },
   ): Promise<TopicResult | null> {
     const keys = await this.linked(actor, scopeId, 'same-topic', [topic.topicKey]);
     const base = { topicKey: topic.topicKey, subjectId: topic.subjectId, aspect: topic.aspect };
@@ -2195,6 +2286,7 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       keys.length === 1 &&
       options.at === undefined &&
       options.course !== true &&
+      options.filter === undefined &&
       topic.upcoming.length === 0 &&
       labelVisible(storedLabel(topic.label, topic.compartmentIds), actor.compartmentAllowance)
     ) {
@@ -2235,10 +2327,9 @@ export class FirestoreObservationLedger extends FirestoreMemoryRecordRepository 
       .filter(isStoredObservation)
       .filter((observation) => this.visible(context, actor, scopeId, observation));
     // Linked topics are read as one course under the key that was asked for.
-    const course = (await this.dropSuppressed(actor, scopeId, members)).map((member) => ({
-      ...publicObservation(member),
-      topicKey: topic.topicKey,
-    }));
+    const course = (await this.dropSuppressed(actor, scopeId, members))
+      .map((member) => ({ ...publicObservation(member), topicKey: topic.topicKey }))
+      .filter((observation) => options.filter === undefined || options.filter(observation));
     const computed =
       options.at === undefined
         ? computeCourse(course, new Set(), options.now)

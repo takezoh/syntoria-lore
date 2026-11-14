@@ -416,6 +416,42 @@ describe('Lore API over Remote MCP', () => {
       parent: null,
     });
     expect(moved.project.path).toEqual(['Quartz deal']);
+
+    // Placement queries and context reach the domain through MCP unchanged.
+    await ok(client, 'observe', {
+      title: 'Inbox note',
+      summary: 'A note whose company is not known yet.',
+      nature: 'event',
+      subjects: ['Inbox fixture'],
+      idempotency_key: 'inbox-note',
+    });
+    await ok(client, 'observe', {
+      title: 'Retail fact',
+      summary: 'A fact of the retail business.',
+      nature: 'event',
+      subjects: ['Inbox fixture'],
+      workspace: workspace.id,
+      project: created.project.id,
+      idempotency_key: 'retail-fact',
+    });
+    const inbox = await ok(client, 'list_observations', {
+      where: { field: 'workspace_id', op: 'eq', value: null },
+    });
+    expect(inbox.observations.map((item: Item) => item.title)).toEqual(['Inbox note']);
+    const timeline = await ok(client, 'get_timeline', {
+      subjects: ['Inbox fixture'],
+      context: created.project.id,
+    });
+    expect(
+      Object.fromEntries(timeline.observations.map((item: Item) => [item.title, item.usable])),
+    ).toEqual({ 'Inbox note': false, 'Retail fact': true });
+    expect(
+      errorCode(
+        await call(client, 'list_observations', {
+          where: { field: 'workspace_id', op: 'eq', value: `wsp_${'0'.repeat(32)}` },
+        }),
+      ),
+    ).toBe('invalid_input');
   }, 60_000);
 
   it('provides concise, current server instructions in MCP initialization', async () => {
@@ -500,6 +536,7 @@ describe('Lore API over Remote MCP', () => {
       'get_observation',
       'get_timeline',
       'link',
+      'list_observations',
       'list_projects',
       'manage_project',
       'observe',

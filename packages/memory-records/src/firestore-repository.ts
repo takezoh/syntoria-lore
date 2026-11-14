@@ -4050,6 +4050,66 @@ export class FirestoreMemoryRecordRepository {
   }
 
   /**
+   * Signs a listing cursor bound to the actor's scope, principal, epoch and allowance and to
+   * the listing it continues, so it cannot be replayed by another reader or for another query.
+   */
+  protected signListCursor(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    listing: string,
+    position: Readonly<Record<string, string>>,
+  ): string {
+    const body = Buffer.from(
+      JSON.stringify({
+        kind: 'list-v1',
+        scopeId,
+        principalId: actor.principalId,
+        authorizationEpoch: actor.authorizationEpoch,
+        allowanceDigest: digest(sortedUnique(actor.compartmentAllowance)),
+        listing,
+        position,
+      }),
+    ).toString('base64url');
+    return `${body}.${createHmac('sha256', this.cursorSecret).update(`list.${body}`).digest('base64url')}`;
+  }
+
+  /** The position a listing cursor holds, if it is valid for this actor and listing. */
+  protected verifyListCursor(
+    actor: VerifiedActorCapability,
+    scopeId: string,
+    listing: string,
+    cursor: string,
+  ): Readonly<Record<string, string>> {
+    const invalid = () =>
+      new MemoryRepositoryError('resync_required', 'The listing cursor is no longer valid');
+    const [body, signature, extra] = cursor.split('.');
+    if (cursor.length > MAX_CURSOR_LENGTH || !body || !signature || extra !== undefined)
+      throw invalid();
+    const expected = createHmac('sha256', this.cursorSecret).update(`list.${body}`).digest();
+    const given = Buffer.from(signature, 'base64url');
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw invalid();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    } catch {
+      throw invalid();
+    }
+    if (
+      !isObject(payload) ||
+      payload['kind'] !== 'list-v1' ||
+      payload['scopeId'] !== scopeId ||
+      payload['principalId'] !== actor.principalId ||
+      payload['authorizationEpoch'] !== actor.authorizationEpoch ||
+      payload['allowanceDigest'] !== digest(sortedUnique(actor.compartmentAllowance)) ||
+      payload['listing'] !== listing ||
+      !isObject(payload['position']) ||
+      !Object.values(payload['position']).every((value) => typeof value === 'string')
+    )
+      throw invalid();
+    return payload['position'] as Record<string, string>;
+  }
+
+  /**
    * The label that decides who receives a change-feed entry. The record store keeps each entry's
    * compartments, with observation entries read through their label; the observation ledger
    * overrides this so that unlabeled entries read as Inbox items.

@@ -491,6 +491,18 @@ export {
 } from './access.js';
 export { createFirestoreClient, type FirestoreClientOptions } from './firestore-client.js';
 export {
+  assertKnownPlace,
+  compileQuery,
+  parseQuery,
+  placeHierarchy,
+  QUERY_LIMITS,
+  QueryError,
+  UNKNOWN_PLACE,
+  usableIn,
+  type PlaceHierarchy,
+  type QueryNode,
+} from './queries.js';
+export {
   MAX_PROJECT_DEPTH,
   normalizeProjectName,
   PROJECT_ID,

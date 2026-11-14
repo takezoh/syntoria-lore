@@ -34,6 +34,14 @@ import {
   type ObservationSource,
 } from './observations.js';
 import { PROJECT_ID } from './projects.js';
+import {
+  assertKnownPlace,
+  compileQuery,
+  parseQuery,
+  placeHierarchy,
+  QueryError,
+  usableIn,
+} from './queries.js';
 import { INBOX, labelVisible } from './labels.js';
 import {
   lookupTerms,
@@ -120,6 +128,8 @@ export interface ObservationView {
   readonly origin_hidden: boolean;
   /** How a scope wider than the narrowest was approved, if it was widened. */
   readonly scope_approval: 'policy' | null;
+  /** With a context: whether it may be used as a fact for work there. */
+  readonly usable?: boolean;
 }
 
 /** Per-request data that observation views need. */
@@ -131,6 +141,17 @@ interface ViewContext {
   >;
   /** Observations the reader may see among those that views refer to. */
   readonly visible: ReadonlySet<string>;
+  /** Whether an observation is usable in the request's context, when one was given. */
+  readonly usable?: (observation: Observation) => boolean;
+}
+
+/** A request's placement query and context, resolved against the current hierarchy. */
+interface Selection {
+  /** Identifies the query, so that a listing cursor continues only the same listing. */
+  readonly listing: string;
+  readonly workspaces?: readonly WorkspaceProjects[];
+  readonly filter?: (observation: Observation) => boolean;
+  readonly usable?: (observation: Observation) => boolean;
 }
 
 export interface ProjectRefView {
@@ -451,6 +472,10 @@ export class ObservationService {
       readonly limit?: number;
       readonly at?: string;
       readonly intent?: 'contextual' | 'entity' | 'historical';
+      /** A placement query, as JSON; see queries.ts. */
+      readonly where?: unknown;
+      /** The project or workspace of the task; results then say whether they are usable there. */
+      readonly context?: string;
     },
   ): Promise<ObservationRecallView> {
     return this.run(access, async () => {
@@ -465,6 +490,8 @@ export class ObservationService {
       const scopeId = access.scopeId;
       const notes = new Set<string>();
 
+      const selection = await this.selection(access, input.where, input.context);
+      const filter = selection.filter === undefined ? {} : { filter: selection.filter };
       const named = await this.ledger.resolveNames(actor, scopeId, nameCandidates(input.query));
       const namedIds = [...new Set([...named.values()].flat())];
       const subjectIds = await this.ledger.linkedSubjects(actor, scopeId, namedIds);
@@ -474,10 +501,12 @@ export class ObservationService {
           limit,
           now,
           ...(input.at === undefined ? {} : { at: input.at }),
+          ...filter,
         }),
         this.ledger.timeline(actor, scopeId, subjectIds, {
           limit,
           ...(input.at === undefined ? {} : { to: input.at }),
+          ...filter,
         }),
         this.ledger.searchByTerms(actor, scopeId, terms),
         this.vectorHits(access, input.query, notes),
@@ -515,7 +544,9 @@ export class ObservationService {
       // A state found by search is shown through its topic, so the reader gets its present.
       const topicByKey = new Map(topics.map((topic) => [topic.topicKey, topic]));
       const namedTopicKeys = new Set(topicByKey.keys());
-      const searched = [...found.values()].filter(withinCut);
+      const searched = [...found.values()]
+        .filter(withinCut)
+        .filter((observation) => selection.filter?.(observation) ?? true);
       for (const observation of searched) {
         const primary = observation.subjectIds[0];
         if (
@@ -528,6 +559,7 @@ export class ObservationService {
         const topic = await this.ledger.getTopic(actor, scopeId, primary, observation.aspect, {
           now,
           ...(input.at === undefined ? {} : { at: input.at }),
+          ...filter,
         });
         if (topic !== null) topicByKey.set(observation.topicKey, topic);
       }
@@ -549,8 +581,8 @@ export class ObservationService {
           .map((observation) => observation.id),
       ];
 
-      const evidenceContext = await this.viewContext(access, searched);
-      const topicViews = await this.topicViews(access, [...topicByKey.values()]);
+      const evidenceContext = await this.viewContext(access, searched, selection);
+      const topicViews = await this.topicViews(access, [...topicByKey.values()], selection);
       const topicItems: RecallItemView[] = [...topicByKey.values()].map((topic, index) => ({
         type: 'topic',
         matched: matchedOf(stateIdsOf(topic), namedTopicKeys.has(topic.topicKey)),
@@ -569,7 +601,7 @@ export class ObservationService {
           (observation) => observation.nature === 'event' && !namedEventIds.has(observation.id),
         ),
       ];
-      const eventContext = await this.viewContext(access, events);
+      const eventContext = await this.viewContext(access, events, selection);
       const eventItems: RecallItemView[] = events.map((observation) => ({
         type: 'event',
         matched: matchedOf([observation.id], namedEventIds.has(observation.id)),
@@ -701,6 +733,8 @@ export class ObservationService {
       readonly to?: string;
       readonly at?: string;
       readonly limit?: number;
+      readonly where?: unknown;
+      readonly context?: string;
     },
   ): Promise<{
     readonly subjects: readonly { readonly id: string; readonly name: string | null }[];
@@ -715,6 +749,8 @@ export class ObservationService {
         if (time !== undefined && !Number.isFinite(Date.parse(time)))
           throw new MemoryServiceError('invalid_input', 'from, to and at must be ISO times');
       const { actor, scopeId } = { actor: access.actor, scopeId: access.scopeId };
+      const selection = await this.selection(access, input.where, input.context);
+      const filter = selection.filter === undefined ? {} : { filter: selection.filter };
       const named = await this.ledger.resolveNames(actor, scopeId, input.subjects);
       const namedIds = [...new Set([...named.values()].flat())];
       if (namedIds.length === 0) return { subjects: [], topic: null, observations: [] };
@@ -726,11 +762,12 @@ export class ObservationService {
             now,
             course: true,
             ...(input.at === undefined ? {} : { at: input.at }),
+            ...filter,
           });
           if (topic !== null)
             return {
               subjects,
-              topic: (await this.topicViews(access, [topic]))[0]!,
+              topic: (await this.topicViews(access, [topic], selection))[0]!,
               observations: [],
             };
         }
@@ -741,8 +778,9 @@ export class ObservationService {
         limit,
         ...(input.from === undefined ? {} : { from: input.from }),
         ...(input.to === undefined ? {} : { to: input.to }),
+        ...filter,
       });
-      const context = await this.viewContext(access, observations);
+      const context = await this.viewContext(access, observations, selection);
       return {
         subjects,
         topic: null,
@@ -843,6 +881,46 @@ export class ObservationService {
       'invalid_input',
       'scope must be "project", "workspace", "shared" or an ancestor project ID',
     );
+  }
+
+  /**
+   * Visible observations, newest recorded first, that a placement query selects: the Inbox with
+   * `workspace_id eq null`, a workspace's unclassified items with `project_id eq null`. The
+   * cursor continues only the same query for the same connection and allowance.
+   */
+  async listObservations(
+    access: ConnectionAccess,
+    input: {
+      readonly where?: unknown;
+      readonly context?: string;
+      readonly cursor?: string;
+      readonly limit?: number;
+    },
+  ): Promise<{
+    readonly observations: readonly ObservationView[];
+    readonly cursor: string | null;
+    readonly notes: readonly string[];
+  }> {
+    return this.run(access, async () => {
+      const limit = input.limit ?? 20;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        throw new MemoryServiceError('invalid_input', 'limit must be between 1 and 100');
+      const selection = await this.selection(access, input.where, input.context);
+      const page = await this.ledger.listObservations(access.actor, access.scopeId, {
+        limit,
+        listing: selection.listing,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(selection.filter === undefined ? {} : { filter: selection.filter }),
+      });
+      const context = await this.viewContext(access, page.observations, selection);
+      return {
+        observations: page.observations.map((observation) =>
+          this.observationView(observation, context),
+        ),
+        cursor: page.cursor,
+        notes: page.exhausted ? ['scan-budget-reached'] : [],
+      };
+    });
   }
 
   /** The granted workspaces with their project hierarchies. */
@@ -1053,6 +1131,7 @@ export class ObservationService {
   private async topicViews(
     access: ConnectionAccess,
     topics: readonly TopicResult[],
+    selection?: Selection,
   ): Promise<TopicStateView[]> {
     if (topics.length === 0) return [];
     const observations = topics.flatMap((topic) => [
@@ -1062,7 +1141,7 @@ export class ObservationService {
       ...(topic.course ?? []),
     ]);
     const [context, subjects] = await Promise.all([
-      this.viewContext(access, observations),
+      this.viewContext(access, observations, selection),
       this.subjectNames(
         access,
         topics.map((topic) => topic.subjectId),
@@ -1096,6 +1175,7 @@ export class ObservationService {
   private async viewContext(
     access: ConnectionAccess,
     observations: readonly Observation[],
+    selection?: Selection,
   ): Promise<ViewContext> {
     const derived = [...new Set(observations.flatMap((item) => item.placement.derivedFrom))];
     const [reports, workspaces, visible] = await Promise.all([
@@ -1104,9 +1184,11 @@ export class ObservationService {
         access.scopeId,
         observations.map((observation) => observation.id),
       ),
-      observations.some((item) => item.placement.workspaceId !== null)
-        ? this.ledger.listProjects(access.actor, access.scopeId)
-        : Promise.resolve([]),
+      selection?.workspaces !== undefined
+        ? Promise.resolve(selection.workspaces)
+        : observations.some((item) => item.placement.workspaceId !== null)
+          ? this.ledger.listProjects(access.actor, access.scopeId)
+          : Promise.resolve([]),
       derived.length === 0
         ? Promise.resolve([])
         : this.ledger.getObservations(access.actor, access.scopeId, derived),
@@ -1123,7 +1205,45 @@ export class ObservationService {
         ]),
       ),
       visible: new Set(visible.map((item) => item.id)),
+      ...(selection?.usable === undefined ? {} : { usable: selection.usable }),
     };
+  }
+
+  /**
+   * Turns a request's placement query and context into a filter and a usability test against
+   * the current project hierarchy of the granted workspaces. Both only select within what the
+   * allowance already shows; a place outside it is refused like an unknown one.
+   */
+  private async selection(
+    access: ConnectionAccess,
+    where: unknown,
+    context: string | undefined,
+  ): Promise<Selection> {
+    const listing = sha256(stableJson(where ?? null));
+    if (where === undefined && context === undefined) return { listing };
+    const workspaces = await this.ledger.listProjects(access.actor, access.scopeId);
+    const hierarchy = placeHierarchy(workspaces);
+    try {
+      const predicate =
+        where === undefined ? undefined : compileQuery(parseQuery(where), hierarchy);
+      if (context !== undefined) assertKnownPlace(context, hierarchy);
+      return {
+        listing,
+        workspaces,
+        ...(predicate === undefined
+          ? {}
+          : { filter: (observation: Observation) => predicate(observation.placement) }),
+        ...(context === undefined
+          ? {}
+          : {
+              usable: (observation: Observation) =>
+                usableIn(context, observation.placement, hierarchy),
+            }),
+      };
+    } catch (error) {
+      if (error instanceof QueryError) throw new MemoryServiceError('invalid_input', error.message);
+      throw error;
+    }
   }
 
   private placeView(observation: Observation, context: ViewContext) {
@@ -1138,6 +1258,7 @@ export class ObservationService {
         derived_from: [],
         origin_hidden: true,
         scope_approval: scopeApproval?.provenance ?? null,
+        ...(context.usable === undefined ? {} : { usable: context.usable(observation) }),
       };
     const project = (id: string | null) => {
       const found = id === null ? undefined : place?.projects.get(id);
@@ -1154,6 +1275,7 @@ export class ObservationService {
       derived_from: derivedFrom.filter((id) => context.visible.has(id)),
       origin_hidden: false,
       scope_approval: scopeApproval?.provenance ?? null,
+      ...(context.usable === undefined ? {} : { usable: context.usable(observation) }),
     };
   }
 
