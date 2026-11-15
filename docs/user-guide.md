@@ -52,8 +52,11 @@ Record a changed state as a new observation. Retract an incorrect observation
 through the supported write path. Call forget only when I explicitly ask you
 to forget the identified material. Respect requests not to save information.
 
+Memories are kept per workspace (one per company) and per project inside it.
 Record each fact in the workspace and project it belongs to; when you cannot
-tell, leave it in the Inbox. Write a lesson that would help elsewhere as a
+tell, leave it in the Inbox. Never use one company's facts in another
+company's work, even when this connection can see both. Write a lesson that
+would help elsewhere as a
 separate, generalized observation without names or amounts, and name the facts
 it came from. Pass the project of the task as context, and use an item marked
 not usable there only as a lesson.
